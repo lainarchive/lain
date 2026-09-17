@@ -7,7 +7,10 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-DEFAULT_PROJECT_ROOTS = (Path("~/lain/projects"),)
+# The user's home directory is the default discovery root. Discovery only
+# inspects its immediate child directories and only records recognizable
+# projects, so ordinary files and unrelated folders are ignored.
+DEFAULT_PROJECT_ROOTS = (Path("~"),)
 DEFAULT_REGISTRY = Path("~/.lain/projects.json")
 
 
@@ -71,7 +74,7 @@ def _kind_for(path: Path) -> tuple[str, tuple[str, ...]]:
 
 
 def discover(roots: tuple[Path, ...] | None = None) -> list[Project]:
-    """Discover projects directly beneath the configured roots."""
+    """Discover recognizable projects directly beneath the configured roots."""
     roots = roots if roots is not None else project_roots()
     found: dict[str, Project] = {}
 
