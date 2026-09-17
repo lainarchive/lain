@@ -58,20 +58,25 @@ def ask(prompt: str) -> str:
     if not output:
         raise RuntimeError("llama.cpp returned no output")
 
-    # llama-cli emits the prompt before the generated answer. Strip the echoed
-    # prompt when it appears as the first non-empty line.
+    # llama-cli prints a startup banner followed by an interactive prompt.
+    # Anchor parsing on that prompt instead of depending on banner formatting.
+    marker = "\n> "
+    if marker in output:
+        output = output.rsplit(marker, 1)[1]
+
+    # If the prompt itself was echoed after the marker, remove that first line.
     lines = output.splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
     if lines and lines[0].strip() == prompt.strip():
         lines.pop(0)
 
-    # Remove the interactive prompt marker and llama-cli performance footer.
     output = "\n".join(lines).strip()
-    if output.startswith("> "):
-        output = output[2:].lstrip()
-    if "\n[ Prompt:" in output:
-        output = output.split("\n[ Prompt:", 1)[0].rstrip()
+
+    # Remove llama-cli performance output if present.
+    for footer in ("\n[ Prompt:", "\n[ Generation:", "\n[ Total:"):
+        if footer in output:
+            output = output.split(footer, 1)[0].rstrip()
 
     if not output:
         raise RuntimeError("llama.cpp generated an empty answer")
