@@ -116,6 +116,8 @@ def main() -> int:
     model_parser = subparsers.add_parser("model", help="show the active local model")
     model_parser.add_argument("action", nargs="?", choices=("show",), default="show")
 
+    status_parser = subparsers.add_parser("status", help="show concise lain. system status")
+
     projects_parser = subparsers.add_parser("projects", help="inspect and discover local projects")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
     scan_parser = projects_subparsers.add_parser("scan", help="discover projects and refresh the registry")
@@ -150,7 +152,7 @@ def main() -> int:
             selected = route(prompt)
             print(f"[{selected.agent}] {selected.reason}")
             print()
-            print(dispatch(prompt, on_event=_show_event, selected=selected))
+            print(dispatch(prompt, on_event=_show_event))
             return 0
         except (FileNotFoundError, RuntimeError) as exc:
             print(f"lain: {exc}", file=sys.stderr)
@@ -168,6 +170,20 @@ def main() -> int:
         print(f"name     {model_name()}")
         print(f"path     {model_path()}")
         print("backend  llama.cpp / CUDA0")
+        return 0
+
+    if args.command == "status":
+        projects = load()
+        print("lain.")
+        print()
+        print(f"version      {__version__}")
+        print(f"system       {platform.system()} {platform.release()}")
+        print(f"model        {model_name()}")
+        print("backend      llama.cpp / CUDA0")
+        print("orchestrator Yukari")
+        print("memory       Keine")
+        print("agents       8")
+        print(f"projects     {len(projects)}")
         return 0
 
     if args.command == "projects":
@@ -240,6 +256,7 @@ def main() -> int:
     print("projects     0")
     print()
     print('try: lain ask "hello"')
+    print('     lain status')
     print('     lain model')
     print('     lain route "fix my Roblox script"')
     print('     lain projects')
