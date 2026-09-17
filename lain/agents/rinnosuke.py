@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
+from ..core.tool_loop import run as run_tool_loop
 from ..models.llama import ask
 from ..tools import describe_tools
 
@@ -71,30 +72,48 @@ def execute(
         "You are not a generic chatbot. You are a careful software engineer.\n\n"
         "AVAILABLE LOCAL TOOLS:\n"
         f"{describe_tools()}\n\n"
+        "TOOL PROTOCOL:\n"
+        "When you need a tool, output exactly this marker on its own line:\n"
+        "LAIN_TOOL\n"
+        "{\"name\": \"tool_name\", \"arguments\": {}}\n"
+        "Do not wrap the tool call in Markdown. Use only the available tool names.\n"
+        "After the runtime returns a TOOL RESULT, continue reasoning from that result.\n"
+        "When the task is complete, output exactly LAIN_DONE followed by the final answer.\n"
+        "Never claim that a tool ran unless a TOOL RESULT is present.\n\n"
         "DEVELOPMENT PROTOCOL:\n"
         "1. Inspect before editing.\n"
         "2. Identify the smallest set of affected files.\n"
         "3. Read relevant code and understand its interfaces.\n"
         "4. Change only what the task requires.\n"
-        "5. Never overwrite an existing file blindly.\n"
+        "5. Existing files may only be replaced with write_file when overwrite=true is explicit.\n"
         "6. Run focused verification after changes.\n"
         "7. Inspect git diff/status before declaring success.\n"
-        "8. Never claim a tool ran unless its result was actually returned.\n"
+        "8. Never use shell syntax; run_command receives an argv list and shell execution is disabled.\n"
         "9. If a tool refuses an operation, diagnose the refusal instead of bypassing it.\n"
         "10. If evidence is insufficient, say exactly what remains unverified.\n\n"
         "WORK PLAN:\n"
         f"{plan_text}\n\n"
         "PROJECT CONTEXT:\n"
         f"{context_text}\n\n"
-        f"USER TASK:\n{task}"
+        f"USER TASK:\n{task}\n\n"
+        "Begin by inspecting what you need."
     )
 
-    if tools and "inspect" in tools:
-        inspected = tools["inspect"](task)
-        context = (*context, str(inspected))
+    tool_map = dict(tools or {})
+    inspect = tool_map.pop("inspect", None)
+    if inspect is not None:
+        inspected = inspect(task)
         prompt += f"\n\nINITIAL INSPECTION RESULT:\n{inspected}"
 
-    return ask(prompt)
+    if not tool_map:
+        return ask(prompt)
+
+    return run_tool_loop(
+        prompt,
+        ask=ask,
+        tools=tool_map,
+        max_steps=8,
+    )
 
 
 dispatch = execute
