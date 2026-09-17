@@ -12,12 +12,12 @@ from pathlib import Path
 
 DEFAULT_LLAMA = Path(r"C:\Users\User\LocalAI\llama.cpp-src\build\bin\llama-cli.exe")
 DEFAULT_MODEL = Path(
-    r"C:\Users\User\AppData\Local\hermes\models\qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+    r"C:\Users\User\.ollama\models\blobs\sha256-02992039bd35f0c89d90cef147cdcb2b9a741d8b4b585bef8331c33679de1e3a"
 )
 DEFAULT_CUDA_BIN = Path(
-    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin\x64"
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin"
 )
-DEFAULT_BACKEND = "ollama"
+DEFAULT_BACKEND = "llama.cpp"
 DEFAULT_OLLAMA_MODEL = "SparkLLM/Spark-X2.5-4B:latest"
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 
@@ -56,10 +56,10 @@ def model_name() -> str:
     """Return a concise name for the active model."""
     if backend_name() == "ollama":
         return ollama_model()
-    return model_path().stem
+    return "Spark-X2.5-4B"
 
 
-def _ask_llama(prompt: str) -> str:
+def _ask_llama(prompt: str, *, think: bool = True) -> str:
     """Send one prompt through llama.cpp."""
     llama = llama_path()
     model = model_path()
@@ -77,9 +77,10 @@ def _ask_llama(prompt: str) -> str:
         str(llama),
         "-m", str(model),
         "--device", "CUDA0",
-        "-ngl", "all",
-        "-c", os.environ.get("LAIN_CONTEXT", "4096"),
+        "--fit", "on",
+        "-c", os.environ.get("LAIN_CONTEXT", "2048"),
         "-n", os.environ.get("LAIN_MAX_TOKENS", "512"),
+        "--reasoning", "on" if think else "off",
         "-p", prompt,
         "-st",
     ]
@@ -118,6 +119,7 @@ def _ask_llama(prompt: str) -> str:
         if footer in output:
             output = output.split(footer, 1)[0].rstrip()
 
+    output = _strip_thinking(output)
     if not output:
         raise RuntimeError("llama.cpp generated an empty answer")
 
@@ -186,4 +188,4 @@ def ask(prompt: str, *, think: bool = True) -> str:
         return _ask_ollama(prompt, think=think)
     if backend_name() != "llama.cpp":
         raise ValueError(f"unsupported LAIN_BACKEND: {backend_name()}")
-    return _ask_llama(prompt)
+    return _ask_llama(prompt, think=think)
