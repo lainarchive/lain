@@ -85,6 +85,7 @@ They're specialists, not characters you have to talk to.
 - agent roster
 - basic documentation
 - local project discovery and registry
+- live project context inspection
 
 ### building
 
@@ -118,7 +119,10 @@ Project discovery scans configured roots for recognizable project markers and st
 lain projects
 lain projects scan
 lain projects scan --root C:\Users\User\Inkbound --root C:\Users\User\Splice
+lain project Inkbound
 ```
+
+`lain project <name>` resolves a registered project and inspects its live filesystem state. For Git projects it reports the current branch and whether the working tree is clean or modified, along with a bounded top-level structure view and a short README summary when available.
 
 Set `LAIN_PROJECT_ROOTS` to configure roots persistently. On Windows, separate multiple roots with `;`.
 
