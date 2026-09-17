@@ -90,6 +90,7 @@ def list_directory(path: str = ".", *, recursive: bool = False, limit: int = 300
     if not 1 <= limit <= 1000:
         raise ToolError("limit must be between 1 and 1000")
 
+    root = _workspace()
     entries: list[str] = []
     iterator = target.rglob("*") if recursive else target.iterdir()
     for entry in sorted(iterator, key=lambda item: str(item).casefold()):
@@ -97,9 +98,9 @@ def list_directory(path: str = ".", *, recursive: bool = False, limit: int = 300
             resolved = entry.resolve()
         except OSError:
             continue
-        if not _inside(resolved, _workspace()):
+        if not _inside(resolved, root):
             continue
-        rel = resolved.relative_to(_workspace())
+        rel = resolved.relative_to(root).as_posix()
         marker = "/" if entry.is_dir() else ""
         entries.append(f"{rel}{marker}")
         if len(entries) >= limit:
