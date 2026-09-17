@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 DEFAULT_LLAMA = Path(r"C:\Users\User\LocalAI\llama.cpp-src\build\bin\llama-cli.exe")
@@ -14,6 +17,7 @@ DEFAULT_CUDA_BIN = Path(
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin\x64"
 )
 DEFAULT_OLLAMA_MODEL = "SparkLLM/Spark-X2.5-4B:latest"
+DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 
 
 def _path_env(name: str, default: Path) -> Path:
@@ -39,6 +43,11 @@ def llama_path() -> Path:
 def ollama_model() -> str:
     """Return the configured Ollama model name."""
     return os.environ.get("LAIN_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip()
+
+
+def ollama_host() -> str:
+    """Return the local Ollama API endpoint."""
+    return os.environ.get("LAIN_OLLAMA_HOST", DEFAULT_OLLAMA_HOST).rstrip("/")
 
 
 def model_name() -> str:
@@ -114,26 +123,42 @@ def _ask_llama(prompt: str) -> str:
 
 
 def _ask_ollama(prompt: str, *, think: bool = True) -> str:
-    """Send one prompt through the local Ollama service."""
-    command = ["ollama", "run", ollama_model()]
-    if not think:
-        command.append("--think=false")
-    command.append(prompt)
+    """Send one prompt through Ollama's local HTTP API."""
+    payload = {
+        "model": ollama_model(),
+        "prompt": prompt,
+        "stream": False,
+        "think": think,
+        "options": {
+            "num_ctx": int(os.environ.get("LAIN_CONTEXT", "4096")),
+            "num_predict": int(os.environ.get("LAIN_MAX_TOKENS", "512")),
+        },
+    }
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+    request = urllib.request.Request(
+        f"{ollama_host()}/api/generate",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
 
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(detail or f"ollama exited with code {result.returncode}")
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"could not reach Ollama at {ollama_host()}: {exc.reason}"
+        ) from exc
 
-    output = result.stdout.strip()
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Ollama returned invalid JSON") from exc
+
+    if data.get("error"):
+        raise RuntimeError(str(data["error"]))
+
+    output = str(data.get("response", "")).strip()
     if not output:
         raise RuntimeError("Ollama returned no output")
     return output
