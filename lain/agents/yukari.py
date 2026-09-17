@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from ..memory import context as memory_context
 from ..models.llama import ask
@@ -98,6 +100,24 @@ def plan(task: str) -> Plan:
     return _heuristic_plan(task, selected)
 
 
+@contextmanager
+def _workspace(path: str | None) -> Iterator[None]:
+    """Temporarily bind local tools to one resolved project workspace."""
+    if not path:
+        yield
+        return
+
+    previous = os.environ.get("LAIN_WORKSPACE")
+    os.environ["LAIN_WORKSPACE"] = path
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("LAIN_WORKSPACE", None)
+        else:
+            os.environ["LAIN_WORKSPACE"] = previous
+
+
 def _inspect(task: str) -> str:
     """Build a small machine-evidence snapshot before Rinnosuke acts."""
     status = TOOLS["git_status"]()
@@ -158,15 +178,17 @@ def dispatch(
     memories = memory_context(task, limit=8)
 
     if selected.agent == "Rinnosuke":
-        return rinnosuke.execute(
-            task,
-            tools={**TOOLS, "inspect": _inspect},
-            context=(
-                f"Project context:\n{formatted_project}",
-                f"Relevant memory:\n{memories}",
-            ),
-            on_event=on_event,
-        )
+        workspace = project_context.project.path if project_context else None
+        with _workspace(workspace):
+            return rinnosuke.execute(
+                task,
+                tools={**TOOLS, "inspect": _inspect},
+                context=(
+                    f"Project context:\n{formatted_project}",
+                    f"Relevant memory:\n{memories}",
+                ),
+                on_event=on_event,
+            )
 
     role = AGENTS[selected.agent]
     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
