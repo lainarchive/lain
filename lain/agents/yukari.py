@@ -56,6 +56,18 @@ def route(task: str) -> Route:
         score = sum(1 for keyword in keywords if keyword in lowered)
         scored.append((agent, score))
 
+    # Concrete development work takes precedence over generic experimental
+    # language such as "try" or "alternative". This keeps file/code changes
+    # on Rinnosuke's controlled development path.
+    development_keywords = (
+        "create file", "create a file", "write file", "write a file",
+        "edit file", "edit a file", "modify file", "modify a file",
+        "change file", "change a file", "implement", "code", "script",
+        "function", "class", "run a test", "run tests", "test it",
+    )
+    if any(keyword in lowered for keyword in development_keywords):
+        return Route("Rinnosuke", "detected concrete development work", 0.96)
+
     agent, score = max(scored, key=lambda item: item[1])
     if score == 0:
         return Route("Rinnosuke", "no specialist signal; using the general development path", 0.35)
