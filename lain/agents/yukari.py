@@ -94,10 +94,9 @@ def _heuristic_plan(task: str, selected: Route) -> Plan:
     return Plan(task, steps, (selected.agent,), research)
 
 
-def plan(task: str) -> Plan:
+def plan(task: str, selected: Route | None = None) -> Plan:
     """Build a compact execution plan from the user's task."""
-    selected = route(task)
-    return _heuristic_plan(task, selected)
+    return _heuristic_plan(task, selected or route(task))
 
 
 @contextmanager
@@ -125,18 +124,21 @@ def _inspect(task: str) -> str:
     return f"GIT STATUS:\n{status.output}\n\nWORKSPACE ROOT:\n{tree.output}"
 
 
-def _project_context(task: str) -> ProjectContext | None:
+def _resolve_project(task: str) -> ProjectContext | None:
     """Resolve the most specific registered project mentioned by the task."""
     lowered = task.casefold()
-    matches: list[tuple[int, ProjectContext]] = []
+    matches = []
     for project in load():
         name = project.name.casefold()
         path = project.path.casefold()
         if name in lowered or path in lowered:
-            matches.append((max(len(name), len(path)), inspect(project)))
+            matches.append((max(len(name), len(path)), project))
+
     if not matches:
         return None
-    return max(matches, key=lambda item: item[0])[1]
+
+    project = max(matches, key=lambda item: item[0])[1]
+    return inspect(project)
 
 
 def _format_project_context(context: ProjectContext | None) -> str:
@@ -166,15 +168,15 @@ def dispatch(
     responders: dict[str, Callable[[str], str]] | None = None,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str:
-    """Plan, route, retrieve project context and memory, then execute a task."""
-    project_context = _project_context(task)
+    """Route, retrieve only the context needed, then execute the task."""
     selected = route(task)
-    execution_plan = plan(task)
-    formatted_project = _format_project_context(project_context)
+    execution_plan = plan(task, selected)
 
     if responders and selected.agent in responders:
         return responders[selected.agent](task)
 
+    project_context = _resolve_project(task)
+    formatted_project = _format_project_context(project_context)
     memories = memory_context(task, limit=8)
 
     if selected.agent == "Rinnosuke":
