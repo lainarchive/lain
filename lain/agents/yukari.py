@@ -86,16 +86,15 @@ def _is_general_conversation(selected: Route) -> bool:
 
 
 def _direct_answer(task: str) -> str:
-    """Answer ordinary conversation without invoking a specialist execution prompt."""
-    prompt = (
+    """Answer ordinary conversation with stable system/user message separation."""
+    system_prompt = (
         "You are lain., a concise local assistant.\n"
         "Answer the user's request directly.\n"
         "Do not expose internal reasoning, routing, tool protocols, or analysis.\n"
         "Do not pretend to use tools or claim actions you did not perform.\n"
-        "If the user asks for exact wording, output exactly that wording and nothing else.\n\n"
-        f"USER:\n{task}"
+        "If the user asks for exact wording, output exactly that wording and nothing else."
     )
-    return ask(prompt, think=False)
+    return ask(task, think=False, system_prompt=system_prompt)
 
 
 def _heuristic_plan(task: str, selected: Route) -> Plan:
@@ -219,7 +218,7 @@ def dispatch(
     execution_plan = plan(task, selected)
     role = AGENTS[selected.agent]
     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
-    prompt = (
+    system_prompt = (
         "You are operating inside lain., a local development environment.\n"
         "Yukari is the orchestration layer. You are the specialist she selected.\n\n"
         f"SPECIALIST: {selected.agent}\n"
@@ -239,7 +238,6 @@ def dispatch(
         "- Do not invent files, commands, APIs, test results, or facts.\n"
         "- If important information is missing, state exactly what is missing.\n"
         "- Keep the response focused unless detail is necessary.\n"
-        "- Do not mention the internal routing protocol in the final answer.\n\n"
-        f"USER TASK:\n{task}"
+        "- Do not mention the internal routing protocol in the final answer."
     )
-    return ask(prompt)
+    return ask(task, system_prompt=system_prompt)
