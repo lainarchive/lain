@@ -124,9 +124,14 @@ def _ask_llama(prompt: str) -> str:
 
 def _ask_ollama(prompt: str, *, think: bool = True) -> str:
     """Send one prompt through Ollama's local HTTP API."""
+    # Qwen3 supports an explicit /no_think soft switch in the prompt.
+    # Keep the API flag too, but the prompt-level switch makes the behavior
+    # deterministic across Ollama/model-template combinations.
+    effective_prompt = prompt if think else f"{prompt}\n/no_think"
+
     payload = {
         "model": ollama_model(),
-        "prompt": prompt,
+        "prompt": effective_prompt,
         "stream": False,
         "think": think,
         "options": {
