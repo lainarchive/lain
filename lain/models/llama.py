@@ -15,10 +15,30 @@ DEFAULT_CUDA_BIN = Path(
 )
 
 
+def _path_env(name: str, default: Path) -> Path:
+    """Resolve a configurable executable/model path."""
+    return Path(os.environ.get(name, str(default))).expanduser()
+
+
+def model_path() -> Path:
+    """Return the currently configured local model path."""
+    return _path_env("LAIN_MODEL", DEFAULT_MODEL)
+
+
+def llama_path() -> Path:
+    """Return the currently configured llama.cpp executable."""
+    return _path_env("LAIN_LLAMA", DEFAULT_LLAMA)
+
+
+def model_name() -> str:
+    """Return a concise name for the active model file."""
+    return model_path().stem
+
+
 def ask(prompt: str) -> str:
-    """Send one prompt to the local Qwen model through llama.cpp."""
-    llama = Path(os.environ.get("LAIN_LLAMA", DEFAULT_LLAMA))
-    model = Path(os.environ.get("LAIN_MODEL", DEFAULT_MODEL))
+    """Send one prompt to the configured local model through llama.cpp."""
+    llama = llama_path()
+    model = model_path()
 
     if not llama.exists():
         raise FileNotFoundError(f"llama.cpp executable not found: {llama}")
@@ -26,7 +46,7 @@ def ask(prompt: str) -> str:
         raise FileNotFoundError(f"model not found: {model}")
 
     env = os.environ.copy()
-    cuda_bin = Path(os.environ.get("LAIN_CUDA_BIN", DEFAULT_CUDA_BIN))
+    cuda_bin = _path_env("LAIN_CUDA_BIN", DEFAULT_CUDA_BIN)
     env["PATH"] = f"{cuda_bin};{env.get('PATH', '')}"
 
     command = [
@@ -34,8 +54,8 @@ def ask(prompt: str) -> str:
         "-m", str(model),
         "--device", "CUDA0",
         "-ngl", "all",
-        "-c", "4096",
-        "-n", "512",
+        "-c", os.environ.get("LAIN_CONTEXT", "4096"),
+        "-n", os.environ.get("LAIN_MAX_TOKENS", "512"),
         "-p", prompt,
         "-st",
     ]
@@ -58,13 +78,10 @@ def ask(prompt: str) -> str:
     if not output:
         raise RuntimeError("llama.cpp returned no output")
 
-    # llama-cli prints a startup banner followed by an interactive prompt.
-    # Anchor parsing on that prompt instead of depending on banner formatting.
     marker = "\n> "
     if marker in output:
         output = output.rsplit(marker, 1)[1]
 
-    # If the prompt itself was echoed after the marker, remove that first line.
     lines = output.splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -73,7 +90,6 @@ def ask(prompt: str) -> str:
 
     output = "\n".join(lines).strip()
 
-    # Remove llama-cli performance output if present.
     for footer in ("\n[ Prompt:", "\n[ Generation:", "\n[ Total:"):
         if footer in output:
             output = output.split(footer, 1)[0].rstrip()
