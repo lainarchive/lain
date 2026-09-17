@@ -132,8 +132,6 @@ def _format_project_context(context: ProjectContext | None) -> str:
         f"GIT BRANCH: {context.git_branch or 'unavailable'}",
         f"GIT STATUS: {context.git_status or 'unavailable'}",
     ]
-    if context.markers if hasattr(context, "markers") else False:
-        pass
     if project.markers:
         lines.append(f"MARKERS: {', '.join(project.markers)}")
     if context.top_level:
