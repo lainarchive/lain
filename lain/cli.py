@@ -160,8 +160,13 @@ def main() -> int:
         prompt = " ".join(args.prompt)
         try:
             selected = route(prompt)
-            print(f"[{selected.agent}] {selected.reason}")
-            print()
+            is_general = (
+                selected.agent == "Rinnosuke"
+                and selected.reason == "no specialist signal; using the general development path"
+            )
+            if not is_general:
+                print(f"[{selected.agent}] {selected.reason}")
+                print()
             print(dispatch(prompt, on_event=_show_event, selected=selected))
             return 0
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
