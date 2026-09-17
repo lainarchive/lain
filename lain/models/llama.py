@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -16,6 +17,7 @@ DEFAULT_MODEL = Path(
 DEFAULT_CUDA_BIN = Path(
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin\x64"
 )
+DEFAULT_BACKEND = "ollama"
 DEFAULT_OLLAMA_MODEL = "SparkLLM/Spark-X2.5-4B:latest"
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 
@@ -27,7 +29,7 @@ def _path_env(name: str, default: Path) -> Path:
 
 def backend_name() -> str:
     """Return the configured local model backend."""
-    return os.environ.get("LAIN_BACKEND", "llama.cpp").strip().lower()
+    return os.environ.get("LAIN_BACKEND", DEFAULT_BACKEND).strip().lower()
 
 
 def model_path() -> Path:
@@ -122,16 +124,19 @@ def _ask_llama(prompt: str) -> str:
     return output
 
 
+def _strip_thinking(output: str) -> str:
+    """Remove visible reasoning blocks if a backend returns them anyway."""
+    output = re.sub(r"<think>.*?</think>\s*", "", output, flags=re.DOTALL | re.IGNORECASE)
+    output = re.sub(r"^\s*Thinking\.\.\.\s*", "", output, flags=re.IGNORECASE)
+    output = re.sub(r"^\s*\.\.\.done thinking\.\s*", "", output, flags=re.IGNORECASE)
+    return output.strip()
+
+
 def _ask_ollama(prompt: str, *, think: bool = True) -> str:
     """Send one prompt through Ollama's local HTTP API."""
-    # Qwen3 supports an explicit /no_think soft switch in the prompt.
-    # Keep the API flag too, but the prompt-level switch makes the behavior
-    # deterministic across Ollama/model-template combinations.
-    effective_prompt = prompt if think else f"{prompt}\n/no_think"
-
     payload = {
         "model": ollama_model(),
-        "prompt": effective_prompt,
+        "prompt": prompt,
         "stream": False,
         "think": think,
         "options": {
@@ -166,6 +171,12 @@ def _ask_ollama(prompt: str, *, think: bool = True) -> str:
     output = str(data.get("response", "")).strip()
     if not output:
         raise RuntimeError("Ollama returned no output")
+
+    if not think:
+        output = _strip_thinking(output)
+        if not output:
+            raise RuntimeError("Ollama returned only hidden reasoning with no answer")
+
     return output
 
 
