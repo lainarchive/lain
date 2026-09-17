@@ -160,7 +160,10 @@ def run(
             f"TOOL CALL (step {step}): {json.dumps({'name': action.name, 'arguments': action.arguments}, ensure_ascii=False)}\n"
             f"TOOL RESULT (step {step}):\n{result}\n\n"
             "Continue the task. Use another tool if needed. When finished, output "
-            "LAIN_DONE followed by the final user-facing answer."
+            "LAIN_DONE followed by the final user-facing answer.\n"
+            "FINAL REPORT RULE: your final answer must agree with the actual tool results above. "
+            "Never claim that a file was unchanged when a write_file tool succeeded, never claim "
+            "a test passed when it failed, and never claim a tool ran when it did not."
         )[-MAX_TRANSCRIPT_CHARS:]
         last_answer = result
 
