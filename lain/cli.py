@@ -2,13 +2,48 @@
 
 from __future__ import annotations
 
-import argparse
 import platform
 import sys
+
+import argparse
 
 from . import __version__
 from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
+
+
+def _show_event(event: str, data: dict) -> None:
+    """Render concise execution events without exposing model internals."""
+    if event == "tool_call":
+        name = data.get("name", "unknown")
+        arguments = data.get("arguments", {})
+        if name == "write_file":
+            print(f"[tool] write_file → {arguments.get('path', '?')}")
+        elif name == "read_file":
+            print(f"[tool] read_file → {arguments.get('path', '?')}")
+        elif name == "run_command":
+            argv = arguments.get("argv", [])
+            print(f"[tool] run_command → {' '.join(str(part) for part in argv)}")
+        elif name == "list_directory":
+            print(f"[tool] list_directory → {arguments.get('path', '.')}")
+        elif name == "git_status":
+            print("[tool] git_status")
+        elif name == "git_diff":
+            print("[tool] git_diff")
+        else:
+            print(f"[tool] {name}")
+    elif event == "tool_result":
+        output = str(data.get("output", "")).strip()
+        status = "ok" if data.get("ok", False) else "failed"
+        if output:
+            first_line = output.splitlines()[0]
+            print(f"      ↳ {status}: {first_line}")
+        else:
+            print(f"      ↳ {status}")
+    elif event == "invalid":
+        print(f"[tool] protocol error: {data.get('error', 'invalid action')}")
+    elif event == "max_steps":
+        print(f"[tool] stopped: maximum of {data.get('step', '?')} steps reached")
 
 
 def main() -> int:
@@ -50,7 +85,7 @@ def main() -> int:
             selected = route(prompt)
             print(f"[{selected.agent}] {selected.reason}")
             print()
-            print(dispatch(prompt))
+            print(dispatch(prompt, on_event=_show_event))
             return 0
         except (FileNotFoundError, RuntimeError) as exc:
             print(f"lain: {exc}", file=sys.stderr)
