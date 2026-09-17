@@ -1,73 +1,139 @@
 # lain.
 
-> a local-first development environment for projects, models, agents, memory, and tools.
+```text
+quiet software for loud problems.
+```
 
-`lain.` is meant to live quietly on the machine and make development easier. It is not trying to be another chat window. The goal is a single local layer that can understand the machine, work with projects, run specialist agents, use local models, and keep useful context over time.
+`lain.` is a local development environment that sits between you, your projects, your tools, and your models.
 
-## status
+No giant dashboard. No unnecessary ceremony. Just a small system that knows what is going on and can do something about it.
 
-**Early development — v0.1.0**
+---
 
-The repository currently contains the core Python package, CLI entry point, configuration, agent definitions, project structure, and documentation. Local model integration and the runtime are next.
+## what it is
 
-## architecture
+`lain.` is being built around a simple idea:
+
+> keep the useful parts of a development machine in one place.
+
+Projects. Local models. Agents. Memory. Tools. System information. Automation.
+
+Instead of opening six different things and manually moving context between them, `lain.` should handle the boring parts and stay out of the way when it doesn't need to be involved.
+
+It is local-first by design. Cloud services can be used when they make sense, but they aren't the foundation.
+
+---
+
+## the shape
 
 ```text
 lain.
-├── core/       runtime and orchestration
-├── agents/     specialist agents
-├── models/     local model integrations
-├── memory/     persistent context and decisions
-├── projects/   project discovery and state
-├── tools/      external and local capabilities
-└── system/     machine and runtime information
+│
+├── core/       the runtime
+├── agents/     specialists
+├── models/     local intelligence
+├── memory/     things worth remembering
+├── projects/   places where work happens
+├── tools/      things lain. can use
+└── system/     the machine underneath it all
 ```
 
-Supporting configuration and documentation live outside the package:
+Around that:
 
 ```text
-config/         default configuration
-docs/           vision and agent documentation
-scripts/        setup and utility scripts
-tests/          automated tests
+config/         defaults
+ docs/          notes + documentation
+scripts/        utilities
+tests/          checks
 ```
+
+Simple enough to understand. Open enough to grow.
+
+---
 
 ## agents
 
-`lain.` uses quiet specialist agents rather than a collection of personalities.
+There are eight of them for now.
 
-| agent | responsibility |
+They aren't supposed to feel like a group of chatbots with personalities. They're just names attached to jobs.
+
+| | job |
 |---|---|
-| **Yukari** | orchestration and delegation |
-| **Rinnosuke** | development and implementation |
-| **Patchouli** | research and technical knowledge |
-| **Nitori** | systems, hardware, and performance |
-| **Keine** | memory and project history |
-| **Eirin** | diagnostics and root-cause analysis |
-| **Aya** | discovery and web research |
-| **Marisa** | experiments and sandbox work |
+| **Yukari** | orchestration |
+| **Rinnosuke** | development |
+| **Patchouli** | research |
+| **Nitori** | systems |
+| **Keine** | memory |
+| **Eirin** | diagnostics |
+| **Aya** | discovery |
+| **Marisa** | experiments |
 
-See [`docs/agents.md`](docs/agents.md) for the full roster and design notes.
+`lain.` decides who should handle something, gives them the context they actually need, and keeps the result.
 
-## design principles
+More agents can exist later. They don't get added just because eight looks small.
 
-- **local first** — prefer local models, data, and tools
-- **simple on the surface** — complexity belongs underneath
-- **useful before impressive** — every subsystem should earn its place
-- **reversible changes** — automation should be safe to undo
-- **visible state** — know what `lain.` is doing
-- **persistent memory** — useful context should survive sessions
-- **minimal cloud dependency** — use remote services when they provide a real benefit
-- **automation saves time** — the system should reduce work, not create more
+→ [`docs/agents.md`](docs/agents.md)
 
-## development
+---
 
-Requirements:
+## what we're building
 
-- Python 3.11+
-- Git
+### foundation
 
-Install the project locally:
+- [x] repository structure
+- [x] Python package
+- [x] CLI entry point
+- [x] configuration
+- [x] agent definitions
+- [x] documentation
+
+### runtime
+
+- [ ] persistent runtime state
+- [ ] system inspection
+- [ ] project discovery
+- [ ] tool execution
+- [ ] proper configuration loading
+
+### intelligence
+
+- [ ] llama.cpp integration
+- [ ] local model discovery
+- [ ] inference interface
+- [ ] model routing
+- [ ] context management
+
+### memory
+
+- [ ] Keine memory store
+- [ ] project history
+- [ ] decisions
+- [ ] task history
+- [ ] useful long-term context
+
+### development
+
+- [ ] Git integration
+- [ ] project-aware workflows
+- [ ] diagnostics
+- [ ] sandbox execution
+- [ ] Roblox Studio tooling
+
+### eventually
+
+- desktop interface
+- system telemetry
+- automatic model selection
+- deeper project indexing
+- more automation
+
+The order matters. `lain.` should become useful before it becomes complicated.
+
+---
+
+## running it
+
+You need Python 3.11+ and Git.
 
 ```powershell
 git clone https://github.com/lainarchive/lain.git
@@ -77,66 +143,47 @@ python -m venv .venv
 pip install -e .
 ```
 
-Run it:
+Then:
 
 ```powershell
 lain
 ```
 
-The current bootstrap output is intentionally small. As the runtime is built, this command will become the main entry point into `lain.`.
+Right now it is intentionally boring.
 
-## roadmap
+That will change.
 
-### 0.1 — foundation
+---
 
-- [x] repository structure
-- [x] Python package
-- [x] CLI entry point
-- [x] default configuration
-- [x] agent roster
-- [x] project documentation
+## philosophy
 
-### 0.2 — local runtime
+**local first.**
 
-- [ ] runtime state
-- [ ] system inspection
-- [ ] project discovery
-- [ ] structured configuration loading
-- [ ] command/tool execution layer
+**quiet by default.**
 
-### 0.3 — local intelligence
+**useful before impressive.**
 
-- [ ] llama.cpp integration
-- [ ] model discovery
-- [ ] model routing
-- [ ] inference interface
-- [ ] context management
+**visible state.**
 
-### 0.4 — agents and memory
+**reversible automation.**
 
-- [ ] Yukari orchestration
-- [ ] specialist agent runtime
-- [ ] Keine memory store
-- [ ] task history
-- [ ] decision log
+**keep the context.**
 
-### 0.5 — development environment
+**don't build a feature just because it sounds cool.**
 
-- [ ] project-aware workflows
-- [ ] Git integration
-- [ ] diagnostics
-- [ ] sandbox execution
-- [ ] Roblox Studio tooling
+`lain.` should feel less like an app and more like something that has always been sitting on the machine.
 
-### later
+---
 
-- desktop dashboard
-- performance telemetry
-- automatic model selection
-- deeper project indexing
-- richer automation
+## status
 
-The roadmap is deliberately incremental. `lain.` should become useful one layer at a time instead of trying to build the entire system in one pass.
+Early development — `0.1.0`.
+
+Nothing here is pretending to be finished yet.
+
+That's kind of the point.
+
+---
 
 ## license
 
