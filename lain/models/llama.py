@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_LLAMA = Path(r"C:\Users\User\LocalAI\llama.cpp-src\build\bin\llama-cli.exe")
+DEFAULT_LLAMA = Path(r"C:\Users\User\LocalAI\llama.cpp-src\build\bin\Release\llama-cli.exe")
 DEFAULT_MODEL = Path(
     r"C:\Users\User\.ollama\models\blobs\sha256-02992039bd35f0c89d90cef147cdcb2b9a741d8b4b585bef8331c33679de1e3a"
 )
@@ -59,8 +59,13 @@ def model_name() -> str:
     return "Spark-X2.5-4B"
 
 
-def _ask_llama(prompt: str, *, think: bool = True) -> str:
-    """Send one prompt through llama.cpp."""
+def _ask_llama(
+    prompt: str,
+    *,
+    think: bool = True,
+    system_prompt: str | None = None,
+) -> str:
+    """Send one prompt through llama.cpp with an optional system message."""
     llama = llama_path()
     model = model_path()
 
@@ -76,14 +81,16 @@ def _ask_llama(prompt: str, *, think: bool = True) -> str:
     command = [
         str(llama),
         "-m", str(model),
-        "--device", "CUDA0",
+        "--device", os.environ.get("LAIN_DEVICE", "CUDA0"),
         "--fit", "on",
         "-c", os.environ.get("LAIN_CONTEXT", "2048"),
         "-n", os.environ.get("LAIN_MAX_TOKENS", "512"),
         "--reasoning", "on" if think else "off",
-        "-p", prompt,
-        "-st",
+        "--no-display-prompt",
     ]
+    if system_prompt:
+        command.extend(["--system-prompt", system_prompt])
+    command.extend(["-p", prompt, "-st"])
 
     result = subprocess.run(
         command,
@@ -134,7 +141,12 @@ def _strip_thinking(output: str) -> str:
     return output.strip()
 
 
-def _ask_ollama(prompt: str, *, think: bool = True) -> str:
+def _ask_ollama(
+    prompt: str,
+    *,
+    think: bool = True,
+    system_prompt: str | None = None,
+) -> str:
     """Send one prompt through Ollama's local HTTP API."""
     payload = {
         "model": ollama_model(),
@@ -146,6 +158,8 @@ def _ask_ollama(prompt: str, *, think: bool = True) -> str:
             "num_predict": int(os.environ.get("LAIN_MAX_TOKENS", "512")),
         },
     }
+    if system_prompt:
+        payload["system"] = system_prompt
 
     request = urllib.request.Request(
         f"{ollama_host()}/api/generate",
@@ -182,10 +196,15 @@ def _ask_ollama(prompt: str, *, think: bool = True) -> str:
     return output
 
 
-def ask(prompt: str, *, think: bool = True) -> str:
+def ask(
+    prompt: str,
+    *,
+    think: bool = True,
+    system_prompt: str | None = None,
+) -> str:
     """Send one prompt through the configured local model backend."""
     if backend_name() == "ollama":
-        return _ask_ollama(prompt, think=think)
+        return _ask_ollama(prompt, think=think, system_prompt=system_prompt)
     if backend_name() != "llama.cpp":
         raise ValueError(f"unsupported LAIN_BACKEND: {backend_name()}")
-    return _ask_llama(prompt, think=think)
+    return _ask_llama(prompt, think=think, system_prompt=system_prompt)
