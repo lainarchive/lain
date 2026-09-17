@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from ..memory import context as memory_context
 from ..models.llama import ask
+from ..projects import ProjectContext, inspect, load
 from ..tools import TOOLS
 from . import rinnosuke
 
@@ -104,14 +105,54 @@ def _inspect(task: str) -> str:
     return f"GIT STATUS:\n{status.output}\n\nWORKSPACE ROOT:\n{tree.output}"
 
 
+def _project_context(task: str) -> ProjectContext | None:
+    """Resolve the most specific registered project mentioned by the task."""
+    lowered = task.casefold()
+    matches: list[tuple[int, ProjectContext]] = []
+    for project in load():
+        name = project.name.casefold()
+        path = project.path.casefold()
+        if name in lowered or path in lowered:
+            matches.append((max(len(name), len(path)), inspect(project)))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[0])[1]
+
+
+def _format_project_context(context: ProjectContext | None) -> str:
+    """Render bounded project facts for specialist prompts."""
+    if context is None:
+        return "No registered project was identified in the task."
+
+    project = context.project
+    lines = [
+        f"PROJECT: {project.name}",
+        f"PATH: {project.path}",
+        f"TYPE: {project.kind}",
+        f"GIT BRANCH: {context.git_branch or 'unavailable'}",
+        f"GIT STATUS: {context.git_status or 'unavailable'}",
+    ]
+    if context.markers if hasattr(context, "markers") else False:
+        pass
+    if project.markers:
+        lines.append(f"MARKERS: {', '.join(project.markers)}")
+    if context.top_level:
+        lines.append(f"TOP-LEVEL: {', '.join(context.top_level)}")
+    if context.readme:
+        lines.append(f"README: {context.readme}")
+    return "\n".join(lines)
+
+
 def dispatch(
     task: str,
     responders: dict[str, Callable[[str], str]] | None = None,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str:
-    """Plan, route, retrieve memory, and execute a task."""
+    """Plan, route, retrieve project context and memory, then execute a task."""
+    project_context = _project_context(task)
     selected = route(task)
     execution_plan = plan(task)
+    formatted_project = _format_project_context(project_context)
 
     if responders and selected.agent in responders:
         return responders[selected.agent](task)
@@ -122,7 +163,10 @@ def dispatch(
         return rinnosuke.execute(
             task,
             tools={**TOOLS, "inspect": _inspect},
-            context=(f"Relevant memory:\n{memories}",),
+            context=(
+                f"Project context:\n{formatted_project}",
+                f"Relevant memory:\n{memories}",
+            ),
             on_event=on_event,
         )
 
@@ -136,10 +180,13 @@ def dispatch(
         f"ROUTING CONFIDENCE: {selected.confidence:.2f}\n\n"
         "EXECUTION PLAN:\n"
         f"{steps}\n\n"
+        "PROJECT CONTEXT:\n"
+        f"{formatted_project}\n\n"
         "RELEVANT MEMORY:\n"
         f"{memories}\n\n"
         "OPERATING RULES:\n"
         "- Treat memory as context, not unquestionable truth.\n"
+        "- Treat project context as live factual state, not a substitute for inspecting source files.\n"
         "- Solve the user's actual problem, not a generic version of it.\n"
         "- Prefer concrete, actionable answers over filler.\n"
         "- Do not invent files, commands, APIs, test results, or facts.\n"
