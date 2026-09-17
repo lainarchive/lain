@@ -1,0 +1,14 @@
+[lain]
+name = "lain."
+version = "0.1.0"
+
+[models]
+backend = "llama.cpp"
+
+[agents]
+count = 8
+
+[paths]
+projects = "~/lain/projects"
+memory = "~/lain/memory"
+sandbox = "~/lain/sandbox"
