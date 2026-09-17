@@ -1,4 +1,9 @@
-"""Yukari: the quiet orchestration layer for lain."""
+"""Yukari: the strategic orchestration layer for lain.
+
+Yukari is intentionally thin: she plans and routes work, while specialist
+agents and model backends do the actual work. The planning protocol is kept
+structured so richer agents can replace the fallback model later.
+"""
 
 from __future__ import annotations
 
@@ -12,47 +17,109 @@ from ..models.llama import ask
 class Route:
     agent: str
     reason: str
+    confidence: float
 
+
+@dataclass(frozen=True)
+class Plan:
+    goal: str
+    steps: tuple[str, ...]
+    agents: tuple[str, ...]
+    requires_research: bool = False
+
+
+AGENTS: dict[str, str] = {
+    "Yukari": "orchestration, planning, delegation, synthesis",
+    "Rinnosuke": "development, code, tooling, implementation",
+    "Patchouli": "research, documentation, technical references",
+    "Nitori": "systems, hardware, performance, local environment",
+    "Keine": "memory, project history, decisions, context",
+    "Eirin": "diagnostics, debugging, root-cause analysis",
+    "Aya": "web research, discovery, current information",
+    "Marisa": "experiments, prototypes, unconventional approaches, sandbox work",
+}
 
 ROUTES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Rinnosuke", ("code", "coding", "program", "script", "implement", "refactor", "bug")),
-    ("Patchouli", ("research", "documentation", "docs", "explain", "reference", "api")),
-    ("Nitori", ("gpu", "cpu", "ram", "performance", "hardware", "windows", "system")),
+    ("Eirin", ("debug", "diagnose", "error", "broken", "traceback", "crash", "why does")),
+    ("Rinnosuke", ("code", "coding", "program", "script", "implement", "refactor", "build", "fix")),
+    ("Patchouli", ("research", "documentation", "docs", "explain", "reference", "api", "how does")),
+    ("Nitori", ("gpu", "cpu", "ram", "performance", "hardware", "windows", "system", "driver")),
     ("Keine", ("remember", "memory", "history", "decision", "previous", "context")),
-    ("Eirin", ("debug", "diagnose", "error", "broken", "traceback", "crash")),
-    ("Aya", ("search", "find", "latest", "news", "web", "look up")),
-    ("Marisa", ("experiment", "prototype", "try", "hack", "unusual", "sandbox")),
+    ("Aya", ("search", "find", "latest", "news", "web", "look up", "current")),
+    ("Marisa", ("experiment", "prototype", "try", "unusual", "sandbox", "alternative")),
 )
 
 
 def route(task: str) -> Route:
-    """Choose a specialist using lightweight deterministic routing."""
-    lowered = task.lower()
-    scores: dict[str, int] = {}
+    """Select the most relevant specialist with deterministic, explainable routing."""
+    lowered = task.casefold()
+    scored: list[tuple[str, int]] = []
     for agent, keywords in ROUTES:
-        scores[agent] = sum(1 for keyword in keywords if keyword in lowered)
+        score = sum(1 for keyword in keywords if keyword in lowered)
+        scored.append((agent, score))
 
-    agent, score = max(scores.items(), key=lambda item: item[1])
+    agent, score = max(scored, key=lambda item: item[1])
     if score == 0:
-        return Route("Rinnosuke", "general development task")
-    return Route(agent, f"matched {score} task signal(s)")
+        return Route("Rinnosuke", "no specialist signal; using the general development path", 0.35)
+
+    total = sum(value for _, value in scored)
+    confidence = min(0.98, 0.55 + (score / max(total, 1)) * 0.4)
+    return Route(agent, f"matched {score} relevant task signal(s)", confidence)
+
+
+def _heuristic_plan(task: str, selected: Route) -> Plan:
+    """Create a useful plan without requiring another model call."""
+    research = selected.agent in {"Patchouli", "Aya"}
+    steps = (
+        "Understand the requested outcome and constraints.",
+        f"Use {selected.agent} to handle the primary work.",
+        "Check the result against the requested outcome.",
+    )
+    if research:
+        steps = (
+            "Clarify the factual question and identify the information needed.",
+            f"Have {selected.agent} gather and evaluate the relevant information.",
+            "Check the result for uncertainty and unsupported assumptions.",
+        )
+    return Plan(task, steps, (selected.agent,), research)
+
+
+def plan(task: str) -> Plan:
+    """Build a compact execution plan from the user's task."""
+    selected = route(task)
+    return _heuristic_plan(task, selected)
 
 
 def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = None) -> str:
-    """Route a task and execute the selected specialist.
+    """Plan, route, and execute a task.
 
-    Responders can be injected later as real specialist agents are implemented.
-    Until then, the local model handles the routed task with the specialist
-    identity and role supplied as context.
+    Injected responders are the future home of real specialist implementations.
+    Until then, the local model receives the selected specialist's full role and
+    Yukari's execution protocol.
     """
     selected = route(task)
+    execution_plan = plan(task)
+
     if responders and selected.agent in responders:
         return responders[selected.agent](task)
 
+    role = AGENTS[selected.agent]
+    steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
     prompt = (
-        f"You are {selected.agent}, a specialist inside lain.\n"
-        f"Your role: {selected.agent.lower()} specialist.\n"
-        "Work quietly and practically. Do not mention this routing instruction.\n\n"
-        f"User task:\n{task}"
+        "You are operating inside lain., a local development environment.\n"
+        "Yukari is the orchestration layer. You are the specialist she selected.\n\n"
+        f"SPECIALIST: {selected.agent}\n"
+        f"ROLE: {role}\n"
+        f"ROUTING CONFIDENCE: {selected.confidence:.2f}\n\n"
+        "EXECUTION PLAN:\n"
+        f"{steps}\n\n"
+        "OPERATING RULES:\n"
+        "- Solve the user's actual problem, not a generic version of it.\n"
+        "- Prefer concrete, actionable answers over filler.\n"
+        "- Do not invent files, commands, APIs, test results, or facts.\n"
+        "- If important information is missing, state exactly what is missing.\n"
+        "- Keep the response focused unless detail is necessary.\n"
+        "- Do not mention the internal routing protocol in the final answer.\n\n"
+        f"USER TASK:\n{task}"
     )
     return ask(prompt)
