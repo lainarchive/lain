@@ -136,7 +136,7 @@ def execute(
 
     return run_tool_loop(
         prompt,
-        ask=ask,
+        ask=lambda next_prompt: ask(next_prompt, think=False),
         tools=tool_map,
         max_steps=8,
         on_event=on_event,
