@@ -10,9 +10,6 @@
 
 A personal system for running models, agents, tools, and projects from one place.
 
-Still early.
-Still changing.
-
 ---
 
 ## idea
