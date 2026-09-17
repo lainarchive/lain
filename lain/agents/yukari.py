@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from ..memory import context as memory_context
 from ..models.llama import ask
@@ -56,9 +56,6 @@ def route(task: str) -> Route:
         score = sum(1 for keyword in keywords if keyword in lowered)
         scored.append((agent, score))
 
-    # Concrete development work takes precedence over generic experimental
-    # language such as "try" or "alternative". This keeps file/code changes
-    # on Rinnosuke's controlled development path.
     development_keywords = (
         "create file", "create a file", "write file", "write a file",
         "edit file", "edit a file", "modify file", "modify a file",
@@ -107,7 +104,11 @@ def _inspect(task: str) -> str:
     return f"GIT STATUS:\n{status.output}\n\nWORKSPACE ROOT:\n{tree.output}"
 
 
-def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = None) -> str:
+def dispatch(
+    task: str,
+    responders: dict[str, Callable[[str], str]] | None = None,
+    on_event: Callable[[str, dict[str, Any]], None] | None = None,
+) -> str:
     """Plan, route, retrieve memory, and execute a task."""
     selected = route(task)
     execution_plan = plan(task)
@@ -122,6 +123,7 @@ def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = Non
             task,
             tools={**TOOLS, "inspect": _inspect},
             context=(f"Relevant memory:\n{memories}",),
+            on_event=on_event,
         )
 
     role = AGENTS[selected.agent]
