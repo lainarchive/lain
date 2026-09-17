@@ -58,11 +58,22 @@ def ask(prompt: str) -> str:
     if not output:
         raise RuntimeError("llama.cpp returned no output")
 
-    # llama-cli can include its banner and prompt in stdout. Keep the model's
-    # answer readable for the lain. CLI.
-    if "\n> " in output:
-        output = output.split("\n> ", 1)[1]
-    if "\n[ Prompt:" in output:
-        output = output.split("\n[ Prompt:", 1)[0]
+    # llama-cli emits the prompt before the generated answer. Strip the echoed
+    # prompt when it appears as the first non-empty line.
+    lines = output.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines and lines[0].strip() == prompt.strip():
+        lines.pop(0)
 
-    return output.strip()
+    # Remove the interactive prompt marker and llama-cli performance footer.
+    output = "\n".join(lines).strip()
+    if output.startswith("> "):
+        output = output[2:].lstrip()
+    if "\n[ Prompt:" in output:
+        output = output.split("\n[ Prompt:", 1)[0].rstrip()
+
+    if not output:
+        raise RuntimeError("llama.cpp generated an empty answer")
+
+    return output
