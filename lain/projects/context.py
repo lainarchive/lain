@@ -40,8 +40,7 @@ def _git(path: Path, *args: str) -> str | None:
 
     if result.returncode != 0:
         return None
-    value = result.stdout.strip()
-    return value or None
+    return result.stdout.strip()
 
 
 def _git_state(path: Path) -> tuple[str | None, str | None]:
