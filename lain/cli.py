@@ -10,7 +10,7 @@ from pathlib import Path
 from . import __version__
 from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
-from .projects import discover, load, project_roots, registry_path, save
+from .projects import discover, find_project, inspect, load, project_roots, registry_path, save
 
 
 def _show_event(event: str, data: dict) -> None:
@@ -67,6 +67,38 @@ def _print_projects(projects: list, *, roots: tuple[Path, ...] | None = None) ->
     print(f"{len(projects)} project{'s' if len(projects) != 1 else ''} found")
 
 
+def _print_project_context(context) -> None:
+    project = context.project
+    print("lain. project")
+    print()
+    print(project.name.upper())
+    print("─" * 40)
+    print()
+    print(f"path       {project.path}")
+    print(f"type       {project.kind}")
+    if context.git_branch is not None:
+        print(f"git        {context.git_branch}")
+        print(f"status     {context.git_status or 'unavailable'}")
+    else:
+        print("git        no")
+
+    if project.markers:
+        print()
+        print("markers")
+        for marker in project.markers:
+            print(f"  {marker}")
+
+    if context.top_level:
+        print()
+        print("structure")
+        for entry in context.top_level:
+            print(f"  {entry}")
+
+    if context.readme:
+        print()
+        print(f"readme     {context.readme}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="lain",
@@ -84,6 +116,9 @@ def main() -> int:
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
     scan_parser = projects_subparsers.add_parser("scan", help="discover projects and refresh the registry")
     scan_parser.add_argument("--root", action="append", type=Path, help="project root to scan; repeatable")
+
+    project_parser = subparsers.add_parser("project", help="inspect one registered project")
+    project_parser.add_argument("name", help="project name or exact registered path")
 
     memory_parser = subparsers.add_parser("memory", help="inspect and store Keine's memory")
     memory_subparsers = memory_parser.add_subparsers(dest="memory_command")
@@ -144,6 +179,14 @@ def main() -> int:
         projects_parser.print_help()
         return 0
 
+    if args.command == "project":
+        project = find_project(args.name)
+        if project is None:
+            print(f"lain: project not found: {args.name}", file=sys.stderr)
+            return 1
+        _print_project_context(inspect(project))
+        return 0
+
     if args.command == "memory":
         if args.memory_command == "add":
             memory = remember(
@@ -188,6 +231,7 @@ def main() -> int:
     print('     lain route "fix my Roblox script"')
     print('     lain projects')
     print('     lain projects scan')
+    print('     lain project Inkbound')
     print('     lain memory add "Use reversible changes" --kind decision')
     return 0
 
