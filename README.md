@@ -1,122 +1,131 @@
 # lain.
 
 ```text
-local.
-quiet.
-already running.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              lain.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+      local development environment
 ```
 
-`lain.` is the layer between the machine and the work.
+A personal system for running models, agents, tools, and projects from one place.
 
-It keeps projects, models, agents, memory, tools, and system state in the same place. The idea is pretty simple: stop rebuilding the same context every time you sit down to make something.
-
-No SaaS dashboard. No fake productivity language. No twenty-window workflow pretending to be a system.
-
-Just a local environment that gets smarter as it gets used.
+Still early.
+Still changing.
 
 ---
 
-## underneath
+## idea
+
+Your machine already has everything scattered across it.
+
+Code in one place. Models somewhere else. Notes somewhere else. Git, terminals, Studio, scripts, random folders, half-finished experiments.
+
+`lain.` is the layer that connects them.
+
+It keeps track of the environment, knows which projects exist, gives work to specialist agents, talks to local models, remembers useful context, and eventually handles the repetitive parts of development.
+
+The interface can stay small. The system underneath doesn't have to.
+
+---
+
+## structure
 
 ```text
-lain.
+lain/
 │
 ├── core/       runtime
-├── agents/     specialists
-├── models/     local inference
+├── agents/     specialist workers
+├── models/     local models
 ├── memory/     persistent context
-├── projects/   workspaces
-├── tools/      capabilities
+├── projects/   project state
+├── tools/      things lain. can use
 └── system/     machine state
 ```
 
-The repo stays boring on purpose. Most of the interesting stuff belongs in the runtime, not in a giant pile of framework code.
+```text
+config/         configuration
+docs/           documentation
+scripts/        utilities
+tests/          tests
+```
+
+Nothing here is meant to hide what the system is doing.
 
 ---
 
 ## agents
 
-Eight specialists live here right now.
+Eight names. Eight jobs.
 
-| agent | does |
+| agent | role |
 |---|---|
-| **Yukari** | coordinates things |
-| **Rinnosuke** | writes and changes code |
-| **Patchouli** | finds and understands information |
-| **Nitori** | watches the machine |
-| **Keine** | remembers what happened |
-| **Eirin** | finds what's broken |
-| **Aya** | goes looking for things |
-| **Marisa** | tries weird ideas |
+| **Yukari** | orchestration |
+| **Rinnosuke** | development |
+| **Patchouli** | research |
+| **Nitori** | systems |
+| **Keine** | memory |
+| **Eirin** | diagnostics |
+| **Aya** | discovery |
+| **Marisa** | experiments |
 
-They're not meant to sit around talking to each other. `lain.` gives a task to the right one, gets the useful part back, and moves on.
+They're specialists, not characters you have to talk to.
+
+`lain.` routes the task, passes the relevant context, and gets out of the way.
 
 → [`docs/agents.md`](docs/agents.md)
 
 ---
 
-## what it's becoming
+## current state
 
-### now
+### done
 
-- [x] project skeleton
-- [x] Python package
-- [x] CLI entry point
-- [x] configuration
-- [x] agent roster
-- [x] docs
+- repository skeleton
+- Python package
+- CLI entry point
+- configuration
+- agent roster
+- basic documentation
 
-### next
+### building
 
-- [ ] runtime state
-- [ ] system inspection
-- [ ] project discovery
-- [ ] tool execution
-- [ ] proper config loading
+- runtime
+- system inspection
+- project discovery
+- tool execution
+- local model support
+- memory
+- Git integration
+- project-aware agents
+- Roblox Studio integration
 
-### then
+### later
 
-- [ ] llama.cpp
-- [ ] local model discovery
-- [ ] inference API
-- [ ] model routing
-- [ ] context handling
-- [ ] Keine memory
-
-### after that
-
-- [ ] Git awareness
-- [ ] project-aware agents
-- [ ] diagnostics
-- [ ] sandboxing
-- [ ] Roblox Studio integration
-
-### eventually
-
-- desktop UI
-- telemetry
+- model routing
 - automatic model selection
-- deeper project indexing
-- more automation
+- sandboxing
+- project indexing
+- telemetry
+- desktop interface
 
-Nothing is being built just to make the README look finished.
-
----
-
-## layout
-
-```text
-config/         defaults
-docs/           notes
-scripts/        utilities
-tests/          tests
-```
-
-The Python package is under `lain/`.
+The order isn't sacred. Things move when they're ready.
 
 ---
 
-## running it
+## local
+
+`lain.` is local-first.
+
+The machine is the default source of truth. Local models, local files, local memory, local tools.
+
+Remote services can be plugged in when they're actually useful.
+
+They just don't get to define the system.
+
+---
+
+## setup
 
 Python 3.11+.
 
@@ -129,23 +138,9 @@ pip install -e .
 lain
 ```
 
-Current output is basically a heartbeat:
+For now, running it gives you a small status screen.
 
-```text
-lain.
-
-good evening.
-
-version      0.1.0
-system       Windows ...
-models       0
-agents       8
-projects     0
-
-lain is alive. local intelligence comes next.
-```
-
-That part is temporary.
+Eventually, `lain` becomes the place you start.
 
 ---
 
@@ -154,21 +149,28 @@ That part is temporary.
 ```text
 local first
 keep it small
-keep the context
-show your work
+keep context
 make changes reversible
-useful > impressive
+show what's happening
+build the useful thing
 ```
 
-If something can be simpler, it probably should be.
+No feature exists just because it looks good in a screenshot.
 
 ---
 
 ## status
 
-`0.1.0` · early development
+```text
+version    0.1.0
+state      building
+models     coming
+agents     8
+```
 
-This is the beginning of it.
+`lain.` isn't finished.
+
+That's all.
 
 ---
 
