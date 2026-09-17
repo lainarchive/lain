@@ -1,15 +1,11 @@
-"""Yukari: the strategic orchestration layer for lain.
-
-Yukari is intentionally thin: she plans and routes work, while specialist
-agents and model backends do the actual work. The planning protocol is kept
-structured so richer agents can replace the fallback model later.
-"""
+"""Yukari: the strategic orchestration layer for lain."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
 
+from ..memory import context as memory_context
 from ..models.llama import ask
 
 
@@ -91,12 +87,7 @@ def plan(task: str) -> Plan:
 
 
 def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = None) -> str:
-    """Plan, route, and execute a task.
-
-    Injected responders are the future home of real specialist implementations.
-    Until then, the local model receives the selected specialist's full role and
-    Yukari's execution protocol.
-    """
+    """Plan, route, retrieve relevant memory, and execute a task."""
     selected = route(task)
     execution_plan = plan(task)
 
@@ -105,6 +96,7 @@ def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = Non
 
     role = AGENTS[selected.agent]
     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
+    memories = memory_context(task, limit=8)
     prompt = (
         "You are operating inside lain., a local development environment.\n"
         "Yukari is the orchestration layer. You are the specialist she selected.\n\n"
@@ -113,7 +105,10 @@ def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = Non
         f"ROUTING CONFIDENCE: {selected.confidence:.2f}\n\n"
         "EXECUTION PLAN:\n"
         f"{steps}\n\n"
+        "RELEVANT MEMORY:\n"
+        f"{memories}\n\n"
         "OPERATING RULES:\n"
+        "- Treat memory as context, not unquestionable truth.\n"
         "- Solve the user's actual problem, not a generic version of it.\n"
         "- Prefer concrete, actionable answers over filler.\n"
         "- Do not invent files, commands, APIs, test results, or facts.\n"
