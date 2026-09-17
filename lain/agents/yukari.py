@@ -95,7 +95,7 @@ def _direct_answer(task: str) -> str:
         "If the user asks for exact wording, output exactly that wording and nothing else.\n\n"
         f"USER:\n{task}"
     )
-    return ask(prompt)
+    return ask(prompt, think=False)
 
 
 def _heuristic_plan(task: str, selected: Route) -> Plan:
