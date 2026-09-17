@@ -1,4 +1,4 @@
-"""Local llama.cpp backend for lain."""
+"""Local model backends for lain."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ DEFAULT_MODEL = Path(
 DEFAULT_CUDA_BIN = Path(
     r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin\x64"
 )
+DEFAULT_OLLAMA_MODEL = "SparkLLM/Spark-X2.5-4B:latest"
 
 
 def _path_env(name: str, default: Path) -> Path:
@@ -20,23 +21,35 @@ def _path_env(name: str, default: Path) -> Path:
     return Path(os.environ.get(name, str(default))).expanduser()
 
 
+def backend_name() -> str:
+    """Return the configured local model backend."""
+    return os.environ.get("LAIN_BACKEND", "llama.cpp").strip().lower()
+
+
 def model_path() -> Path:
-    """Return the currently configured local model path."""
+    """Return the configured llama.cpp model path."""
     return _path_env("LAIN_MODEL", DEFAULT_MODEL)
 
 
 def llama_path() -> Path:
-    """Return the currently configured llama.cpp executable."""
+    """Return the configured llama.cpp executable."""
     return _path_env("LAIN_LLAMA", DEFAULT_LLAMA)
 
 
+def ollama_model() -> str:
+    """Return the configured Ollama model name."""
+    return os.environ.get("LAIN_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip()
+
+
 def model_name() -> str:
-    """Return a concise name for the active model file."""
+    """Return a concise name for the active model."""
+    if backend_name() == "ollama":
+        return ollama_model()
     return model_path().stem
 
 
-def ask(prompt: str) -> str:
-    """Send one prompt to the configured local model through llama.cpp."""
+def _ask_llama(prompt: str) -> str:
+    """Send one prompt through llama.cpp."""
     llama = llama_path()
     model = model_path()
 
@@ -98,3 +111,34 @@ def ask(prompt: str) -> str:
         raise RuntimeError("llama.cpp generated an empty answer")
 
     return output
+
+
+def _ask_ollama(prompt: str) -> str:
+    """Send one prompt through the local Ollama service."""
+    command = ["ollama", "run", ollama_model(), prompt]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(detail or f"ollama exited with code {result.returncode}")
+
+    output = result.stdout.strip()
+    if not output:
+        raise RuntimeError("Ollama returned no output")
+    return output
+
+
+def ask(prompt: str) -> str:
+    """Send one prompt through the configured local model backend."""
+    if backend_name() == "ollama":
+        return _ask_ollama(prompt)
+    if backend_name() != "llama.cpp":
+        raise ValueError(f"unsupported LAIN_BACKEND: {backend_name()}")
+    return _ask_llama(prompt)
