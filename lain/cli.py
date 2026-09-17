@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import platform
 import sys
-
-import argparse
 
 from . import __version__
 from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
+from .projects import discover, project_roots, registry_path, save
 
 
 def _show_event(event: str, data: dict) -> None:
@@ -46,6 +46,25 @@ def _show_event(event: str, data: dict) -> None:
         print(f"[tool] stopped: maximum of {data.get('step', '?')} steps reached")
 
 
+def _print_projects(projects: list) -> None:
+    print("lain. projects")
+    print()
+    if not projects:
+        print("no projects found")
+        print()
+        print("roots")
+        for root in project_roots():
+            print(f"  {root}")
+        return
+
+    print("PROJECTS")
+    print()
+    for project in projects:
+        print(f"{project.name:<16} {project.kind:<10} {project.path}")
+    print()
+    print(f"{len(projects)} project{'s' if len(projects) != 1 else ''} found")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="lain",
@@ -58,6 +77,10 @@ def main() -> int:
 
     route_parser = subparsers.add_parser("route", help="show which specialist Yukari selects")
     route_parser.add_argument("prompt", nargs="+", help="task to classify")
+
+    projects_parser = subparsers.add_parser("projects", help="discover and inspect local projects")
+    projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
+    projects_subparsers.add_parser("scan", help="discover projects and refresh the registry")
 
     memory_parser = subparsers.add_parser("memory", help="inspect and store Keine's memory")
     memory_subparsers = memory_parser.add_subparsers(dest="memory_command")
@@ -95,6 +118,18 @@ def main() -> int:
         prompt = " ".join(args.prompt)
         selected = route(prompt)
         print(f"{selected.agent} — {selected.reason}")
+        return 0
+
+    if args.command == "projects":
+        if args.projects_command in (None, "scan"):
+            projects = discover()
+            target = save(projects)
+            _print_projects(projects)
+            print()
+            print(f"registry     {target}")
+            return 0
+
+        projects_parser.print_help()
         return 0
 
     if args.command == "memory":
@@ -139,6 +174,7 @@ def main() -> int:
     print()
     print('try: lain ask "hello"')
     print('     lain route "fix my Roblox script"')
+    print('     lain projects scan')
     print('     lain memory add "Use reversible changes" --kind decision')
     return 0
 
