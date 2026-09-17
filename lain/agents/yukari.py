@@ -1,4 +1,8 @@
-"""Yukari: the strategic orchestration layer for lain."""
+"""Yukari: the strategic orchestration layer for lain.
+
+Yukari plans and routes work. Specialist modules own domain-specific behavior;
+the local model remains a fallback until each specialist gains real tools.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ from typing import Callable
 
 from ..memory import context as memory_context
 from ..models.llama import ask
+from . import rinnosuke
 
 
 @dataclass(frozen=True)
@@ -87,16 +92,20 @@ def plan(task: str) -> Plan:
 
 
 def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = None) -> str:
-    """Plan, route, retrieve relevant memory, and execute a task."""
+    """Plan, route, retrieve memory, and execute a task."""
     selected = route(task)
     execution_plan = plan(task)
 
     if responders and selected.agent in responders:
         return responders[selected.agent](task)
 
+    memories = memory_context(task, limit=8)
+
+    if selected.agent == "Rinnosuke":
+        return rinnosuke.execute(task, context=(f"Relevant memory:\n{memories}",))
+
     role = AGENTS[selected.agent]
     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
-    memories = memory_context(task, limit=8)
     prompt = (
         "You are operating inside lain., a local development environment.\n"
         "Yukari is the orchestration layer. You are the specialist she selected.\n\n"
