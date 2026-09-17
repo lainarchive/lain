@@ -86,21 +86,23 @@ They're specialists, not characters you have to talk to.
 - basic documentation
 - local project discovery and registry
 - live project context inspection
+- configurable local llama.cpp model backend
+- deterministic Yukari routing
+- project-aware Rinnosuke workspace binding
+- controlled tool execution
+- authoritative tool execution facts
 
 ### building
 
-- runtime
+- runtime polish
 - system inspection
-- tool execution
-- local model support
-- memory
-- Git integration
-- project-aware agents
+- broader local model support
+- memory integration
+- Git workflows
 - Roblox Studio integration
 
 ### later
 
-- model routing
 - automatic model selection
 - sandboxing
 - project indexing
@@ -124,9 +126,51 @@ lain project Inkbound
 
 `lain project <name>` resolves a registered project and inspects its live filesystem state. For Git projects it reports the current branch and whether the working tree is clean or modified, along with a bounded top-level structure view and a short README summary when available.
 
+When a task names a registered project, Yukari passes a bounded live snapshot to the specialist and binds Rinnosuke's local tools to that project's workspace.
+
 Set `LAIN_PROJECT_ROOTS` to configure roots persistently. On Windows, separate multiple roots with `;`.
 
 The registry is stored at `~/.lain/projects.json`, or at the path specified by `LAIN_PROJECT_REGISTRY`.
+
+---
+
+## models
+
+The local backend uses llama.cpp and reads the active model from `LAIN_MODEL`.
+
+```powershell
+lain model
+```
+
+The default remains the existing Qwen 2.5 Coder GGUF. A different compatible GGUF can be tested without changing the orchestration layer by setting `LAIN_MODEL` to its path.
+
+Generation settings can also be bounded through `LAIN_CONTEXT` and `LAIN_MAX_TOKENS`.
+
+The model is a replaceable component. Yukari, the agents, tools, and project layer do not depend on one specific model.
+
+---
+
+## workflow
+
+A development request is intended to follow one compact path:
+
+```text
+user task
+   ↓
+ Yukari
+   ↓
+deterministic route
+   ↓
+Rinnosuke
+   ↓
+relevant project workspace
+   ↓
+inspect → change → verify
+   ↓
+factual result
+```
+
+The tool loop records actual tool results separately from model-written summaries so execution evidence remains visible.
 
 ---
 
@@ -155,9 +199,15 @@ pip install -e .
 lain
 ```
 
-For now, running it gives you a small status screen.
+Useful commands:
 
-Eventually, `lain` becomes the place you start.
+```powershell
+lain status
+lain model
+lain projects
+lain project Inkbound
+lain ask "fix the bug in Inkbound"
+```
 
 ---
 
@@ -181,7 +231,7 @@ No feature exists just because it looks good in a screenshot.
 ```text
 version    0.1.0
 state      building
-models     coming
+model      configurable local GGUF
 agents     8
 ```
 
