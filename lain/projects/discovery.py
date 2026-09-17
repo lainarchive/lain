@@ -7,11 +7,30 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-# The user's home directory is the default discovery root. Discovery only
-# inspects its immediate child directories and only records recognizable
-# projects, so ordinary files and unrelated folders are ignored.
 DEFAULT_PROJECT_ROOTS = (Path("~"),)
 DEFAULT_REGISTRY = Path("~/.lain/projects.json")
+
+# Common home-directory folders are not project roots. This keeps broad home
+# discovery useful without treating folders such as Documents or Downloads as
+# projects just because they contain project files.
+DEFAULT_IGNORED_DIRECTORIES = frozenset(
+    {
+        "AppData",
+        "Contacts",
+        "Cookies",
+        "Desktop",
+        "Documents",
+        "Downloads",
+        "Favorites",
+        "Links",
+        "Music",
+        "OneDrive",
+        "Pictures",
+        "Saved Games",
+        "Searches",
+        "Videos",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -44,29 +63,42 @@ def registry_path() -> Path:
 def _kind_for(path: Path) -> tuple[str, tuple[str, ...]]:
     markers: list[str] = []
 
-    if (path / ".git").exists():
+    if (path / ".git").is_dir():
         markers.append(".git")
-    if (path / "pyproject.toml").exists() or (path / "setup.py").exists():
-        markers.append("pyproject.toml" if (path / "pyproject.toml").exists() else "setup.py")
+
+    if (path / "pyproject.toml").is_file() or (path / "setup.py").is_file():
+        markers.append("pyproject.toml" if (path / "pyproject.toml").is_file() else "setup.py")
         return "Python", tuple(markers)
-    if (path / "package.json").exists():
+
+    if (path / "package.json").is_file():
         markers.append("package.json")
         return "Node", tuple(markers)
-    if (path / "Cargo.toml").exists():
+
+    if (path / "Cargo.toml").is_file():
         markers.append("Cargo.toml")
         return "Rust", tuple(markers)
-    if (path / "default.project.json").exists() or any(path.glob("*.rbxl")) or any(path.glob("*.rbxlx")):
-        if (path / "default.project.json").exists():
-            markers.append("default.project.json")
-        if any(path.glob("*.rbxl")):
+
+    # Roblox projects need a project descriptor or a place file directly in
+    # the project root. Do not search recursively: arbitrary .rbxl files in
+    # folders such as Documents/Downloads must not make the parent a project.
+    if (path / "default.project.json").is_file():
+        markers.append("default.project.json")
+        return "Roblox", tuple(markers)
+
+    rbxl = sorted(path.glob("*.rbxl"))
+    rbxlx = sorted(path.glob("*.rbxlx"))
+    if rbxl or rbxlx:
+        if rbxl:
             markers.append("*.rbxl")
-        if any(path.glob("*.rbxlx")):
+        if rbxlx:
             markers.append("*.rbxlx")
         return "Roblox", tuple(markers)
-    if (path / "go.mod").exists():
+
+    if (path / "go.mod").is_file():
         markers.append("go.mod")
         return "Go", tuple(markers)
-    if (path / "CMakeLists.txt").exists():
+
+    if (path / "CMakeLists.txt").is_file():
         markers.append("CMakeLists.txt")
         return "CMake", tuple(markers)
 
@@ -84,9 +116,13 @@ def discover(roots: tuple[Path, ...] | None = None) -> list[Project]:
         for path in sorted(root.iterdir(), key=lambda item: item.name.casefold()):
             if not path.is_dir() or path.name.startswith("."):
                 continue
+            if path.name in DEFAULT_IGNORED_DIRECTORIES:
+                continue
+
             kind, markers = _kind_for(path)
             if kind == "Unknown":
                 continue
+
             resolved = str(path.resolve())
             found[resolved.casefold()] = Project(path.name, resolved, kind, markers)
 
