@@ -9,6 +9,9 @@ backend = "llama.cpp"
 count = 8
 
 [paths]
-projects = "~/lain/projects"
+# Discovery roots are configurable through LAIN_PROJECT_ROOTS.
+# The default is the user's home directory; only recognizable projects
+# directly inside the root are recorded.
+projects = "~"
 memory = "~/lain/memory"
 sandbox = "~/lain/sandbox"
