@@ -1,4 +1,4 @@
-"""Tests for project discovery."""
+"""Tests for project discovery and context inspection."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lain.projects import Project, discover, load, save
+from lain.projects import Project, discover, find_project, inspect, load, save
 
 
 class ProjectDiscoveryTests(unittest.TestCase):
@@ -102,5 +102,34 @@ class ProjectDiscoveryTests(unittest.TestCase):
         self.assertEqual(json.loads(target.read_text(encoding="utf-8"))[0]["name"], "demo")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ProjectContextTests(unittest.TestCase):
+    def test_finds_project_by_name_or_exact_path(self) -> None:
+        project = Project("Inkbound", r"C:\Users\User\Inkbound", "Git", (".git",))
+
+        self.assertEqual(find_project("inkbound", [project]), project)
+        self.assertEqual(find_project(project.path, [project]), project)
+        self.assertIsNone(find_project("missing", [project]))
+
+    def test_inspects_git_and_project_structure(self) -> None:
+        project_path = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(project_path))
+        (project_path / ".git").mkdir()
+        (project_path / "src").mkdir()
+        (project_path / "README.md").write_text("# Inkbound\n\nRoblox project\n", encoding="utf-8")
+        project = Project("Inkbound", str(project_path), "Git", (".git",))
+
+        def fake_git(_path: Path, *args: str) -> str | None:
+            if args == ("branch", "--show-current"):
+                return "main"
+            if args == ("status", "--porcelain"):
+                return ""
+            return None
+
+        with patch("lain.projects.context._git", side_effect=fake_git):
+            context = inspect(project)
+
+        self.assertEqual(context.git_branch, "main")
+        self.assertEqual(context.git_status, "clean")
+        self.assertIn("src/", context.top_level)
+        self.assertIn("README.md", context.top_level)
+        self.assertEqual(context.readme, "# Inkbound / Roblox project")
