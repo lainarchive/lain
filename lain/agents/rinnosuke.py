@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..core.tool_loop import run as run_tool_loop
 from ..models.llama import ask
@@ -58,6 +58,7 @@ def execute(
     *,
     tools: Mapping[str, Callable[..., object]] | None = None,
     context: Sequence[str] = (),
+    on_event: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str:
     """Work on a development task with controlled local capabilities."""
     execution_plan = plan(task)
@@ -128,6 +129,7 @@ def execute(
         ask=ask,
         tools=tool_map,
         max_steps=8,
+        on_event=on_event,
     )
 
 
