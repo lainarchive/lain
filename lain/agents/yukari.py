@@ -1,8 +1,4 @@
-"""Yukari: the strategic orchestration layer for lain.
-
-Yukari plans and routes work. Specialist modules own domain-specific behavior;
-the local model remains a fallback until each specialist gains real tools.
-"""
+"""Yukari: the strategic orchestration layer for lain."""
 
 from __future__ import annotations
 
@@ -11,6 +7,7 @@ from typing import Callable
 
 from ..memory import context as memory_context
 from ..models.llama import ask
+from ..tools import TOOLS
 from . import rinnosuke
 
 
@@ -91,6 +88,13 @@ def plan(task: str) -> Plan:
     return _heuristic_plan(task, selected)
 
 
+def _inspect(task: str) -> str:
+    """Build a small machine-evidence snapshot before Rinnosuke acts."""
+    status = TOOLS["git_status"]()
+    tree = TOOLS["list_directory"](".", recursive=False, limit=200)
+    return f"GIT STATUS:\n{status.output}\n\nWORKSPACE ROOT:\n{tree.output}"
+
+
 def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = None) -> str:
     """Plan, route, retrieve memory, and execute a task."""
     selected = route(task)
@@ -102,7 +106,11 @@ def dispatch(task: str, responders: dict[str, Callable[[str], str]] | None = Non
     memories = memory_context(task, limit=8)
 
     if selected.agent == "Rinnosuke":
-        return rinnosuke.execute(task, context=(f"Relevant memory:\n{memories}",))
+        return rinnosuke.execute(
+            task,
+            tools={**TOOLS, "inspect": _inspect},
+            context=(f"Relevant memory:\n{memories}",),
+        )
 
     role = AGENTS[selected.agent]
     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
