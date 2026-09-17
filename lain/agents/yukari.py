@@ -77,6 +77,27 @@ def route(task: str) -> Route:
     return Route(agent, f"matched {score} relevant task signal(s)", confidence)
 
 
+def _is_general_conversation(selected: Route) -> bool:
+    """Identify tasks that have no specialist/development signal."""
+    return (
+        selected.agent == "Rinnosuke"
+        and selected.reason == "no specialist signal; using the general development path"
+    )
+
+
+def _direct_answer(task: str) -> str:
+    """Answer ordinary conversation without invoking a specialist execution prompt."""
+    prompt = (
+        "You are lain., a concise local assistant.\n"
+        "Answer the user's request directly.\n"
+        "Do not expose internal reasoning, routing, tool protocols, or analysis.\n"
+        "Do not pretend to use tools or claim actions you did not perform.\n"
+        "If the user asks for exact wording, output exactly that wording and nothing else.\n\n"
+        f"USER:\n{task}"
+    )
+    return ask(prompt)
+
+
 def _heuristic_plan(task: str, selected: Route) -> Plan:
     """Create a useful plan without requiring another model call."""
     research = selected.agent in {"Patchouli", "Aya"}
@@ -174,6 +195,9 @@ def dispatch(
 
     if responders and selected.agent in responders:
         return responders[selected.agent](task)
+
+    if _is_general_conversation(selected):
+        return _direct_answer(task)
 
     project_context = _resolve_project(task)
     formatted_project = _format_project_context(project_context)
