@@ -59,6 +59,30 @@ class ProjectDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(projects), 1)
         self.assertEqual(projects[0].kind, "Node")
 
+    def test_ignores_common_home_directories(self) -> None:
+        documents = self.root / "Documents"
+        documents.mkdir()
+        (documents / "game.rbxl").write_text("placeholder", encoding="utf-8")
+
+        downloads = self.root / "Downloads"
+        downloads.mkdir()
+        (downloads / "default.project.json").write_text("{}", encoding="utf-8")
+
+        projects = discover((self.root,))
+
+        self.assertEqual(projects, [])
+
+    def test_does_not_use_nested_roblox_place_files_as_markers(self) -> None:
+        project = self.root / "notes"
+        project.mkdir()
+        nested = project / "old"
+        nested.mkdir()
+        (nested / "place.rbxl").write_text("placeholder", encoding="utf-8")
+
+        projects = discover((self.root,))
+
+        self.assertEqual(projects, [])
+
     def test_environment_can_override_project_roots(self) -> None:
         project = self.root / "override"
         project.mkdir()
