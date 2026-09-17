@@ -10,7 +10,7 @@ from pathlib import Path
 from . import __version__
 from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
-from .models.llama import model_name, model_path
+from .models.llama import backend_name, model_name, model_path, ollama_model
 from .projects import discover, find_project, inspect, load, project_roots, registry_path, save
 
 
@@ -100,6 +100,16 @@ def _print_project_context(context) -> None:
         print(f"readme     {context.readme}")
 
 
+def _backend_display() -> str:
+    """Return a concise display name for the active model backend."""
+    backend = backend_name()
+    if backend == "ollama":
+        return f"Ollama / {ollama_model()}"
+    if backend == "llama.cpp":
+        return "llama.cpp / CUDA0"
+    return backend
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="lain",
@@ -116,7 +126,7 @@ def main() -> int:
     model_parser = subparsers.add_parser("model", help="show the active local model")
     model_parser.add_argument("action", nargs="?", choices=("show",), default="show")
 
-    status_parser = subparsers.add_parser("status", help="show concise lain. system status")
+    subparsers.add_parser("status", help="show concise lain. system status")
 
     projects_parser = subparsers.add_parser("projects", help="inspect and discover local projects")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
@@ -152,9 +162,9 @@ def main() -> int:
             selected = route(prompt)
             print(f"[{selected.agent}] {selected.reason}")
             print()
-            print(dispatch(prompt, on_event=_show_event))
+            print(dispatch(prompt, on_event=_show_event, selected=selected))
             return 0
-        except (FileNotFoundError, RuntimeError) as exc:
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"lain: {exc}", file=sys.stderr)
             return 1
 
@@ -168,8 +178,11 @@ def main() -> int:
         print("lain. model")
         print()
         print(f"name     {model_name()}")
-        print(f"path     {model_path()}")
-        print("backend  llama.cpp / CUDA0")
+        print(f"backend  {_backend_display()}")
+        if backend_name() == "ollama":
+            print("path     managed by Ollama")
+        else:
+            print(f"path     {model_path()}")
         return 0
 
     if args.command == "status":
@@ -179,7 +192,7 @@ def main() -> int:
         print(f"version      {__version__}")
         print(f"system       {platform.system()} {platform.release()}")
         print(f"model        {model_name()}")
-        print("backend      llama.cpp / CUDA0")
+        print(f"backend      {_backend_display()}")
         print("orchestrator Yukari")
         print("memory       Keine")
         print("agents       8")
@@ -249,7 +262,7 @@ def main() -> int:
     print(f"version      {__version__}")
     print(f"system       {platform.system()} {platform.release()}")
     print(f"model        {model_name()}")
-    print("backend      llama.cpp / CUDA0")
+    print(f"backend      {_backend_display()}")
     print("orchestrator Yukari")
     print("memory       Keine")
     print("agents       8")
