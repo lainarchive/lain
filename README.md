@@ -84,12 +84,12 @@ They're specialists, not characters you have to talk to.
 - configuration
 - agent roster
 - basic documentation
+- local project discovery and registry
 
 ### building
 
 - runtime
 - system inspection
-- project discovery
 - tool execution
 - local model support
 - memory
@@ -107,6 +107,22 @@ They're specialists, not characters you have to talk to.
 - desktop interface
 
 The order isn't sacred. Things move when they're ready.
+
+---
+
+## projects
+
+Project discovery scans configured roots for recognizable project markers and stores a small local registry.
+
+```powershell
+lain projects
+lain projects scan
+lain projects scan --root C:\Users\User\Inkbound --root C:\Users\User\Splice
+```
+
+Set `LAIN_PROJECT_ROOTS` to configure roots persistently. On Windows, separate multiple roots with `;`.
+
+The registry is stored at `~/.lain/projects.json`, or at the path specified by `LAIN_PROJECT_REGISTRY`.
 
 ---
 
