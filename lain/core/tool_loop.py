@@ -65,6 +65,7 @@ def run(
     ask: Callable[[str], str],
     tools: Mapping[str, Callable[..., Any]],
     max_steps: int = DEFAULT_MAX_STEPS,
+    on_event: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> str:
     """Let a model request tools, receive results, and continue until done."""
     if not 1 <= max_steps <= 16:
@@ -73,19 +74,24 @@ def run(
     transcript = initial_prompt.strip()
     last_answer = ""
 
+    def emit(event: str, **data: Any) -> None:
+        if on_event is not None:
+            on_event(event, data)
+
     for step in range(1, max_steps + 1):
         response = ask(transcript)
         action = parse_action(response)
 
         if action.kind == "done":
+            emit("done", step=step)
             return action.answer or last_answer or "The agent finished without a final answer."
 
         if action.kind == "answer":
-            # Plain text is accepted as a final fallback so the model remains useful
-            # if it ignores the protocol. It does not get another turn automatically.
+            emit("plain_answer", step=step)
             return action.answer
 
         if action.kind == "invalid":
+            emit("invalid", step=step, error=action.answer)
             transcript = (
                 f"{transcript}\n\n"
                 f"SYSTEM TOOL ERROR (step {step}): {action.answer}\n"
@@ -97,6 +103,7 @@ def run(
 
         assert action.name is not None
         assert action.arguments is not None
+        emit("tool_call", step=step, name=action.name, arguments=action.arguments)
         tool = tools.get(action.name)
         if tool is None:
             result = f"Unknown tool '{action.name}'. Available tools: {', '.join(sorted(tools))}"
@@ -104,10 +111,11 @@ def run(
             try:
                 value = tool(**action.arguments)
                 result = getattr(value, "output", str(value))
-            except Exception as exc:  # tool failures become model-visible results
+            except Exception as exc:
                 result = f"Tool '{action.name}' failed: {type(exc).__name__}: {exc}"
 
         result = _clip(str(result))
+        emit("tool_result", step=step, name=action.name, ok=not result.startswith("Tool '") , output=result)
         transcript = (
             f"{transcript}\n\n"
             f"TOOL CALL (step {step}): {json.dumps({'name': action.name, 'arguments': action.arguments}, ensure_ascii=False)}\n"
@@ -117,4 +125,5 @@ def run(
         )[-MAX_TRANSCRIPT_CHARS:]
         last_answer = result
 
+    emit("max_steps", step=max_steps)
     return "The agent reached the maximum tool steps without producing a final answer."
