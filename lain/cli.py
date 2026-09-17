@@ -10,6 +10,7 @@ from pathlib import Path
 from . import __version__
 from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
+from .models.llama import model_name, model_path
 from .projects import discover, find_project, inspect, load, project_roots, registry_path, save
 
 
@@ -112,6 +113,9 @@ def main() -> int:
     route_parser = subparsers.add_parser("route", help="show which specialist Yukari selects")
     route_parser.add_argument("prompt", nargs="+", help="task to classify")
 
+    model_parser = subparsers.add_parser("model", help="show the active local model")
+    model_parser.add_argument("action", nargs="?", choices=("show",), default="show")
+
     projects_parser = subparsers.add_parser("projects", help="inspect and discover local projects")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
     scan_parser = projects_subparsers.add_parser("scan", help="discover projects and refresh the registry")
@@ -134,7 +138,7 @@ def main() -> int:
     search_parser.add_argument("--scope", default=None)
     search_parser.add_argument("--limit", type=int, default=8)
 
-    recent_parser = memory_subparsers.add_parser("recent", help="show recent memory")
+    recent_parser = subparsers.add_parser("recent", help="show recent memory")
     recent_parser.add_argument("--scope", default=None)
     recent_parser.add_argument("--limit", type=int, default=8)
 
@@ -146,7 +150,7 @@ def main() -> int:
             selected = route(prompt)
             print(f"[{selected.agent}] {selected.reason}")
             print()
-            print(dispatch(prompt, on_event=_show_event))
+            print(dispatch(prompt, on_event=_show_event, selected=selected))
             return 0
         except (FileNotFoundError, RuntimeError) as exc:
             print(f"lain: {exc}", file=sys.stderr)
@@ -156,6 +160,14 @@ def main() -> int:
         prompt = " ".join(args.prompt)
         selected = route(prompt)
         print(f"{selected.agent} — {selected.reason}")
+        return 0
+
+    if args.command == "model":
+        print("lain. model")
+        print()
+        print(f"name     {model_name()}")
+        print(f"path     {model_path()}")
+        print("backend  llama.cpp / CUDA0")
         return 0
 
     if args.command == "projects":
@@ -220,7 +232,7 @@ def main() -> int:
     print()
     print(f"version      {__version__}")
     print(f"system       {platform.system()} {platform.release()}")
-    print("model        Qwen2.5-Coder 7B")
+    print(f"model        {model_name()}")
     print("backend      llama.cpp / CUDA0")
     print("orchestrator Yukari")
     print("memory       Keine")
@@ -228,6 +240,7 @@ def main() -> int:
     print("projects     0")
     print()
     print('try: lain ask "hello"')
+    print('     lain model')
     print('     lain route "fix my Roblox script"')
     print('     lain projects')
     print('     lain projects scan')
