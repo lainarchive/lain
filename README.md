@@ -1,139 +1,124 @@
 # lain.
 
 ```text
-quiet software for loud problems.
+local.
+quiet.
+already running.
 ```
 
-`lain.` is a local development environment that sits between you, your projects, your tools, and your models.
+`lain.` is the layer between the machine and the work.
 
-No giant dashboard. No unnecessary ceremony. Just a small system that knows what is going on and can do something about it.
+It keeps projects, models, agents, memory, tools, and system state in the same place. The idea is pretty simple: stop rebuilding the same context every time you sit down to make something.
 
----
+No SaaS dashboard. No fake productivity language. No twenty-window workflow pretending to be a system.
 
-## what it is
-
-`lain.` is being built around a simple idea:
-
-> keep the useful parts of a development machine in one place.
-
-Projects. Local models. Agents. Memory. Tools. System information. Automation.
-
-Instead of opening six different things and manually moving context between them, `lain.` should handle the boring parts and stay out of the way when it doesn't need to be involved.
-
-It is local-first by design. Cloud services can be used when they make sense, but they aren't the foundation.
+Just a local environment that gets smarter as it gets used.
 
 ---
 
-## the shape
+## underneath
 
 ```text
 lain.
 │
-├── core/       the runtime
+├── core/       runtime
 ├── agents/     specialists
-├── models/     local intelligence
-├── memory/     things worth remembering
-├── projects/   places where work happens
-├── tools/      things lain. can use
-└── system/     the machine underneath it all
+├── models/     local inference
+├── memory/     persistent context
+├── projects/   workspaces
+├── tools/      capabilities
+└── system/     machine state
 ```
 
-Around that:
-
-```text
-config/         defaults
- docs/          notes + documentation
-scripts/        utilities
-tests/          checks
-```
-
-Simple enough to understand. Open enough to grow.
+The repo stays boring on purpose. Most of the interesting stuff belongs in the runtime, not in a giant pile of framework code.
 
 ---
 
 ## agents
 
-There are eight of them for now.
+Eight specialists live here right now.
 
-They aren't supposed to feel like a group of chatbots with personalities. They're just names attached to jobs.
-
-| | job |
+| agent | does |
 |---|---|
-| **Yukari** | orchestration |
-| **Rinnosuke** | development |
-| **Patchouli** | research |
-| **Nitori** | systems |
-| **Keine** | memory |
-| **Eirin** | diagnostics |
-| **Aya** | discovery |
-| **Marisa** | experiments |
+| **Yukari** | coordinates things |
+| **Rinnosuke** | writes and changes code |
+| **Patchouli** | finds and understands information |
+| **Nitori** | watches the machine |
+| **Keine** | remembers what happened |
+| **Eirin** | finds what's broken |
+| **Aya** | goes looking for things |
+| **Marisa** | tries weird ideas |
 
-`lain.` decides who should handle something, gives them the context they actually need, and keeps the result.
-
-More agents can exist later. They don't get added just because eight looks small.
+They're not meant to sit around talking to each other. `lain.` gives a task to the right one, gets the useful part back, and moves on.
 
 → [`docs/agents.md`](docs/agents.md)
 
 ---
 
-## what we're building
+## what it's becoming
 
-### foundation
+### now
 
-- [x] repository structure
+- [x] project skeleton
 - [x] Python package
 - [x] CLI entry point
 - [x] configuration
-- [x] agent definitions
-- [x] documentation
+- [x] agent roster
+- [x] docs
 
-### runtime
+### next
 
-- [ ] persistent runtime state
+- [ ] runtime state
 - [ ] system inspection
 - [ ] project discovery
 - [ ] tool execution
-- [ ] proper configuration loading
+- [ ] proper config loading
 
-### intelligence
+### then
 
-- [ ] llama.cpp integration
+- [ ] llama.cpp
 - [ ] local model discovery
-- [ ] inference interface
+- [ ] inference API
 - [ ] model routing
-- [ ] context management
+- [ ] context handling
+- [ ] Keine memory
 
-### memory
+### after that
 
-- [ ] Keine memory store
-- [ ] project history
-- [ ] decisions
-- [ ] task history
-- [ ] useful long-term context
-
-### development
-
-- [ ] Git integration
-- [ ] project-aware workflows
+- [ ] Git awareness
+- [ ] project-aware agents
 - [ ] diagnostics
-- [ ] sandbox execution
-- [ ] Roblox Studio tooling
+- [ ] sandboxing
+- [ ] Roblox Studio integration
 
 ### eventually
 
-- desktop interface
-- system telemetry
+- desktop UI
+- telemetry
 - automatic model selection
 - deeper project indexing
 - more automation
 
-The order matters. `lain.` should become useful before it becomes complicated.
+Nothing is being built just to make the README look finished.
+
+---
+
+## layout
+
+```text
+config/         defaults
+docs/           notes
+scripts/        utilities
+tests/          tests
+```
+
+The Python package is under `lain/`.
 
 ---
 
 ## running it
 
-You need Python 3.11+ and Git.
+Python 3.11+.
 
 ```powershell
 git clone https://github.com/lainarchive/lain.git
@@ -141,47 +126,49 @@ cd lain
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e .
-```
-
-Then:
-
-```powershell
 lain
 ```
 
-Right now it is intentionally boring.
+Current output is basically a heartbeat:
 
-That will change.
+```text
+lain.
+
+good evening.
+
+version      0.1.0
+system       Windows ...
+models       0
+agents       8
+projects     0
+
+lain is alive. local intelligence comes next.
+```
+
+That part is temporary.
 
 ---
 
-## philosophy
+## rules
 
-**local first.**
+```text
+local first
+keep it small
+keep the context
+show your work
+make changes reversible
+useful > impressive
+```
 
-**quiet by default.**
-
-**useful before impressive.**
-
-**visible state.**
-
-**reversible automation.**
-
-**keep the context.**
-
-**don't build a feature just because it sounds cool.**
-
-`lain.` should feel less like an app and more like something that has always been sitting on the machine.
+If something can be simpler, it probably should be.
 
 ---
 
 ## status
 
-Early development — `0.1.0`.
+`0.1.0` · early development
 
-Nothing here is pretending to be finished yet.
-
-That's kind of the point.
+This is the beginning of it.
 
 ---
 
