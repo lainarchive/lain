@@ -167,10 +167,10 @@ def dispatch(
     task: str,
     responders: dict[str, Callable[[str], str]] | None = None,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    selected: Route | None = None,
 ) -> str:
     """Route, retrieve only the context needed, then execute the task."""
-    selected = route(task)
-    execution_plan = plan(task, selected)
+    selected = selected or route(task)
 
     if responders and selected.agent in responders:
         return responders[selected.agent](task)
@@ -192,6 +192,7 @@ def dispatch(
                 on_event=on_event,
             )
 
+    execution_plan = plan(task, selected)
     role = AGENTS[selected.agent]
     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(execution_plan.steps, 1))
     prompt = (
