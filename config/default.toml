@@ -3,8 +3,8 @@ name = "lain."
 version = "0.1.0"
 
 [models]
-backend = "ollama"
-model = "SparkLLM/Spark-X2.5-4B:latest"
+backend = "llama.cpp"
+model = "C:\\Users\\User\\.ollama\\models\\blobs\\sha256-02992039bd35f0c89d90cef147cdcb2b9a741d8b4b585bef8331c33679de1e3a"
 
 [agents]
 count = 8
