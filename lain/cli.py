@@ -138,7 +138,7 @@ def main() -> int:
     search_parser.add_argument("--scope", default=None)
     search_parser.add_argument("--limit", type=int, default=8)
 
-    recent_parser = subparsers.add_parser("recent", help="show recent memory")
+    recent_parser = memory_subparsers.add_parser("recent", help="show recent memory")
     recent_parser.add_argument("--scope", default=None)
     recent_parser.add_argument("--limit", type=int, default=8)
 
