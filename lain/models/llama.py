@@ -113,9 +113,13 @@ def _ask_llama(prompt: str) -> str:
     return output
 
 
-def _ask_ollama(prompt: str) -> str:
+def _ask_ollama(prompt: str, *, think: bool = True) -> str:
     """Send one prompt through the local Ollama service."""
-    command = ["ollama", "run", ollama_model(), prompt]
+    command = ["ollama", "run", ollama_model()]
+    if not think:
+        command.append("--think=false")
+    command.append(prompt)
+
     result = subprocess.run(
         command,
         capture_output=True,
@@ -135,10 +139,10 @@ def _ask_ollama(prompt: str) -> str:
     return output
 
 
-def ask(prompt: str) -> str:
+def ask(prompt: str, *, think: bool = True) -> str:
     """Send one prompt through the configured local model backend."""
     if backend_name() == "ollama":
-        return _ask_ollama(prompt)
+        return _ask_ollama(prompt, think=think)
     if backend_name() != "llama.cpp":
         raise ValueError(f"unsupported LAIN_BACKEND: {backend_name()}")
     return _ask_llama(prompt)
