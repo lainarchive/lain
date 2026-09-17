@@ -36,9 +36,14 @@ def parse_action(text: str) -> ParsedAction:
     payload = stripped[match.end():].strip()
     decoder = json.JSONDecoder()
     try:
-        value, _ = decoder.raw_decode(payload)
+        value, end = decoder.raw_decode(payload)
     except json.JSONDecodeError as exc:
         return ParsedAction("invalid", answer=f"Invalid tool-call JSON: {exc.msg}")
+
+    # Tool calls are a two-line wire protocol. Reject trailing model prose or
+    # a second JSON object instead of silently accepting only the first object.
+    if payload[end:].strip():
+        return ParsedAction("invalid", answer="Invalid tool-call JSON: unexpected text after JSON object.")
 
     if not isinstance(value, dict):
         return ParsedAction("invalid", answer="Invalid tool call: payload must be a JSON object.")
@@ -59,6 +64,32 @@ def _clip(value: str) -> str:
     return value[:MAX_TOOL_OUTPUT_CHARS] + "\n...[tool output truncated]"
 
 
+def _execution_facts(events: list[dict[str, Any]]) -> str:
+    """Build a factual execution record from tool results, not model claims."""
+    successful: list[str] = []
+    failed: list[str] = []
+    for event in events:
+        if event.get("event") != "tool_result":
+            continue
+        name = str(event.get("name", "unknown"))
+        output = str(event.get("output", "")).strip()
+        if event.get("ok"):
+            successful.append(f"{name}: {output or 'completed successfully'}")
+        else:
+            failed.append(f"{name}: {output or 'failed'}")
+
+    lines = ["ACTUAL TOOL EXECUTION (authoritative):"]
+    if successful:
+        lines.append("Successful:")
+        lines.extend(f"- {item}" for item in successful)
+    if failed:
+        lines.append("Failed:")
+        lines.extend(f"- {item}" for item in failed)
+    if not successful and not failed:
+        lines.append("- No tools completed successfully.")
+    return "\n".join(lines)
+
+
 def run(
     initial_prompt: str,
     *,
@@ -73,8 +104,11 @@ def run(
 
     transcript = initial_prompt.strip()
     last_answer = ""
+    events: list[dict[str, Any]] = []
 
     def emit(event: str, **data: Any) -> None:
+        record = {"event": event, **data}
+        events.append(record)
         if on_event is not None:
             on_event(event, data)
 
@@ -84,19 +118,21 @@ def run(
 
         if action.kind == "done":
             emit("done", step=step)
-            return action.answer or last_answer or "The agent finished without a final answer."
+            answer = action.answer or last_answer or "The agent finished without a final answer."
+            return f"{answer}\n\n{_execution_facts(events)}"
 
         if action.kind == "answer":
             emit("plain_answer", step=step)
-            return action.answer
+            return f"{action.answer}\n\n{_execution_facts(events)}"
 
         if action.kind == "invalid":
             emit("invalid", step=step, error=action.answer)
             transcript = (
                 f"{transcript}\n\n"
                 f"SYSTEM TOOL ERROR (step {step}): {action.answer}\n"
-                "Output either LAIN_DONE followed by your final answer, or LAIN_TOOL "
-                "followed by a valid JSON object with name and arguments."
+                "Your previous tool call was malformed. Retry the SAME intended action now.\n"
+                "Output exactly two lines: LAIN_TOOL, then one complete JSON object. "
+                "No markdown, no prose, no trailing text."
             )[-MAX_TRANSCRIPT_CHARS:]
             last_answer = action.answer
             continue
@@ -107,15 +143,18 @@ def run(
         tool = tools.get(action.name)
         if tool is None:
             result = f"Unknown tool '{action.name}'. Available tools: {', '.join(sorted(tools))}"
+            ok = False
         else:
             try:
                 value = tool(**action.arguments)
                 result = getattr(value, "output", str(value))
+                ok = bool(getattr(value, "ok", True))
             except Exception as exc:
                 result = f"Tool '{action.name}' failed: {type(exc).__name__}: {exc}"
+                ok = False
 
         result = _clip(str(result))
-        emit("tool_result", step=step, name=action.name, ok=not result.startswith("Tool '") , output=result)
+        emit("tool_result", step=step, name=action.name, ok=ok, output=result)
         transcript = (
             f"{transcript}\n\n"
             f"TOOL CALL (step {step}): {json.dumps({'name': action.name, 'arguments': action.arguments}, ensure_ascii=False)}\n"
@@ -126,4 +165,4 @@ def run(
         last_answer = result
 
     emit("max_steps", step=max_steps)
-    return "The agent reached the maximum tool steps without producing a final answer."
+    return f"The agent reached the maximum tool steps without producing a final answer.\n\n{_execution_facts(events)}"
