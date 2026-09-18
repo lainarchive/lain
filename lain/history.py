@@ -82,3 +82,20 @@ def recent_history(limit: int = 20, *, project: str | None = None, record_type: 
             continue
         records.append(item)
     return records[-max(0, limit):]
+
+def context(query: str = "", *, project: str | None = None, limit: int = 8) -> str:
+    """Format recent history for an agent, optionally scoped to one project."""
+    records = recent_history(limit, project=project)
+    if not records:
+        return "No relevant project history."
+    lines = []
+    for item in records:
+        if item.get("type") == "decision":
+            lines.append(
+                f"- [decision] {item.get('decision', '')}"
+                f" — reason: {item.get('reason', '')}"
+            )
+        else:
+            lines.append(f"- [event:{item.get('kind', 'event')}] {item.get('summary', '')}")
+    return "\n".join(lines)
+
