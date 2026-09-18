@@ -70,7 +70,9 @@ They're specialists, not characters you have to talk to.
 
 `lain.` routes the task, passes the relevant context, and gets out of the way.
 
-→ [`docs/agents.md`](docs/agents.md)
+→ [`docs/agents.md`](docs/agents.md)  
+→ [`docs/architecture.md`](docs/architecture.md)  
+→ [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
 
@@ -97,7 +99,9 @@ They're specialists, not characters you have to talk to.
 - runtime polish
 - system inspection
 - broader local model support
-- memory integration
+- structured memory integration
+- decision and event history
+- explicit project state and authority modes
 - Git workflows
 - Roblox Studio integration
 
