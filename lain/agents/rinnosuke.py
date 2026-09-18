@@ -92,17 +92,17 @@ def execute(
     context_text = "\n\n".join(context) if context else "No additional project context was supplied."
     workspace_root = None
     for item in context:
-        if item.startswith("Project context:\\nPATH:"):
-            workspace_root = item.split("PATH:", 1)[1].split("\\n", 1)[0].strip()
+        if item.startswith("Project context:\nPATH:"):
+            workspace_root = item.split("PATH:", 1)[1].split("\n", 1)[0].strip()
             break
     constitution_text = "No project constitution found."
     if workspace_root:
         constitution = load_constitution(workspace_root)
         constitution_text = (
-            f"Project constitution: {constitution.project}\\n"
-            f"LOCKED: {', '.join(constitution.locked) or 'none'}\\n"
-            f"ALLOWED: {', '.join(constitution.allowed) or 'not specified'}\\n"
-            f"VERIFICATION: {', '.join(constitution.verification) or 'not specified'}\\n"
+            f"Project constitution: {constitution.project}\n"
+            f"LOCKED: {', '.join(constitution.locked) or 'none'}\n"
+            f"ALLOWED: {', '.join(constitution.allowed) or 'not specified'}\n"
+            f"VERIFICATION: {', '.join(constitution.verification) or 'not specified'}\n"
             f"CONSTRAINTS: {', '.join(constitution.constraints) or 'none'}"
         )
 
