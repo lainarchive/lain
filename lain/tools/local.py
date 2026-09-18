@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from ..constitution import can_modify, load_constitution
+
 DEFAULT_WORKSPACE = Path.cwd()
 MAX_READ_BYTES = 512_000
 MAX_WRITE_BYTES = 512_000
@@ -115,6 +117,11 @@ def write_file(path: str, content: str, *, overwrite: bool = False) -> ToolResul
         raise ToolError(f"content exceeds the write limit ({MAX_WRITE_BYTES} bytes)")
 
     target = _resolve(path)
+    constitution = load_constitution(_workspace())
+    relative = target.relative_to(_workspace()).as_posix()
+    allowed, reason = can_modify(constitution, [relative])
+    if not allowed:
+        raise ToolError(reason)
     if target.exists() and not overwrite:
         raise ToolError(f"refusing to overwrite existing file without overwrite=True: {path}")
     if target.exists() and not target.is_file():
