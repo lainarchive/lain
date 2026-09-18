@@ -215,6 +215,14 @@ def dispatch(
     if selected.agent == "Rinnosuke":
         state = load_state()
         workspace = project_context.project.path if project_context else None
+        if state.mode == "EXECUTE":
+            if project_context is None:
+                return "Lain is in EXECUTE mode, but no registered project is active. Select a project first."
+            lifecycle = state.project_states.get(project_context.project.name, "active")
+            if lifecycle == "archived":
+                return f"Project {project_context.project.name} is archived; execution is blocked."
+            if lifecycle == "paused":
+                return f"Project {project_context.project.name} is paused; execution is blocked."
         scoped_tools = dict(TOOLS)
         if state.mode in {"OBSERVE", "ASSIST"}:
             scoped_tools = {
