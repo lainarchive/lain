@@ -12,6 +12,7 @@ from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
 from .models.llama import backend_name, model_name, model_path, ollama_model
 from .projects import discover, find_project, inspect, load, project_roots, registry_path, save
+from .state import MODES, PROJECT_STATES, clear_mission, load_state, operating_picture, save_state, set_active_project, set_mode, set_project_state, start_mission
 
 
 def _show_event(event: str, data: dict) -> None:
@@ -128,6 +129,22 @@ def main() -> int:
 
     subparsers.add_parser("status", help="show concise lain. system status")
 
+    state_parser = subparsers.add_parser("state", help="show and manage Lain operating state")
+    state_subparsers = state_parser.add_subparsers(dest="state_command")
+    state_subparsers.add_parser("show", help="show the current operating picture")
+    mode_parser = state_subparsers.add_parser("mode", help="set authority mode")
+    mode_parser.add_argument("mode", choices=MODES)
+    use_parser = state_subparsers.add_parser("use", help="set the active project")
+    use_parser.add_argument("project")
+    project_state_parser = state_subparsers.add_parser("project-state", help="set a project lifecycle state")
+    project_state_parser.add_argument("project")
+    project_state_parser.add_argument("state", choices=PROJECT_STATES)
+    mission_parser = state_subparsers.add_parser("mission", help="start or clear the current mission")
+    mission_parser.add_argument("objective", nargs="*", help="mission objective; omit with --clear")
+    mission_parser.add_argument("--project", default=None)
+    mission_parser.add_argument("--phase", default="planning")
+    mission_parser.add_argument("--clear", action="store_true")
+
     projects_parser = subparsers.add_parser("projects", help="inspect and discover local projects")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
     scan_parser = projects_subparsers.add_parser("scan", help="discover projects and refresh the registry")
@@ -188,6 +205,56 @@ def main() -> int:
             print("path     managed by Ollama")
         else:
             print(f"path     {model_path()}")
+        return 0
+
+    if args.command == "state":
+        if args.state_command in (None, "show"):
+            picture = operating_picture()
+            print("lain. operating picture")
+            print()
+            print(f"active project  {picture["active_project"] or "-"}")
+            print(f"mode            {picture["mode"]}")
+            mission = picture["mission"]
+            if mission:
+                print(f"mission         {mission["objective"]}")
+                print(f"phase           {mission["phase"]}")
+                print(f"verification    {mission["verification"]}")
+            else:
+                print("mission         -")
+            print(f"state file      {__import__("lain.state", fromlist=["state_path"]).state_path()}")
+            if picture["project_states"]:
+                print()
+                print("projects")
+                for name, project_state in sorted(picture["project_states"].items()):
+                    print(f"  {name:<16} {project_state}")
+            return 0
+        if args.state_command == "mode":
+            state = set_mode(args.mode)
+            print(f"mode → {state.mode}")
+            return 0
+        if args.state_command == "use":
+            if find_project(args.project) is None:
+                print(f"lain: project not found: {args.project}", file=sys.stderr)
+                return 1
+            state = set_active_project(args.project)
+            print(f"active project → {state.active_project}")
+            return 0
+        if args.state_command == "project-state":
+            state = set_project_state(args.project, args.state)
+            print(f"{args.project} → {state.project_states[args.project]}")
+            return 0
+        if args.state_command == "mission":
+            if args.clear:
+                clear_mission()
+                print("mission cleared")
+                return 0
+            if not args.objective:
+                print("lain: mission objective required (or use --clear)", file=sys.stderr)
+                return 1
+            state = start_mission(" ".join(args.objective), project=args.project, phase=args.phase)
+            print(f"mission → {state.mission.objective}")
+            return 0
+        state_parser.print_help()
         return 0
 
     if args.command == "status":
