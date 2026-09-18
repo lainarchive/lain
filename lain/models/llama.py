@@ -83,7 +83,7 @@ def _ask_llama(
         "-m", str(model),
         "--device", os.environ.get("LAIN_DEVICE", "CUDA0"),
         "--fit", "on",
-        "-c", os.environ.get("LAIN_CONTEXT", "2048"),
+        "-c", os.environ.get("LAIN_CONTEXT", "4096"),
         "-n", os.environ.get("LAIN_MAX_TOKENS", "512"),
         "--reasoning", "on" if think else "off",
         "--no-display-prompt",
