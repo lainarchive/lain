@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+from ..constitution import load_constitution
 from ..core.tool_loop import run as run_tool_loop
 from ..models.llama import ask
 from ..tools import describe_tools
@@ -89,6 +90,21 @@ def execute(
         for index, item in enumerate(execution_plan.items, 1)
     )
     context_text = "\n\n".join(context) if context else "No additional project context was supplied."
+    workspace_root = None
+    for item in context:
+        if item.startswith("Project context:\\nPATH:"):
+            workspace_root = item.split("PATH:", 1)[1].split("\\n", 1)[0].strip()
+            break
+    constitution_text = "No project constitution found."
+    if workspace_root:
+        constitution = load_constitution(workspace_root)
+        constitution_text = (
+            f"Project constitution: {constitution.project}\\n"
+            f"LOCKED: {', '.join(constitution.locked) or 'none'}\\n"
+            f"ALLOWED: {', '.join(constitution.allowed) or 'not specified'}\\n"
+            f"VERIFICATION: {', '.join(constitution.verification) or 'not specified'}\\n"
+            f"CONSTRAINTS: {', '.join(constitution.constraints) or 'none'}"
+        )
 
     prompt = (
         "You are Rinnosuke, lain's development specialist. ACT on the user's task "
@@ -119,6 +135,8 @@ def execute(
         f"{plan_text}\n\n"
         "PROJECT CONTEXT:\n"
         f"{context_text}\n\n"
+        "CONSTITUTION:\n"
+        f"{constitution_text}\n\n"
         "USER TASK:\n"
         f"{task}\n\n"
         "START NOW: if local work is required, your first response must be a LAIN_TOOL action."
