@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .agents.yukari import dispatch, route
+from .history import history_path, recent_history, record_decision, record_event
 from .memory import recent, remember, search
 from .models.llama import backend_name, model_name, model_path, ollama_model
 from .projects import discover, find_project, inspect, load, project_roots, registry_path, save
@@ -152,6 +153,22 @@ def main() -> int:
 
     project_parser = subparsers.add_parser("project", help="inspect one registered project")
     project_parser.add_argument("name", help="project name or exact registered path")
+
+    history_parser = subparsers.add_parser("history", help="inspect and record decisions and events")
+    history_subparsers = history_parser.add_subparsers(dest="history_command")
+    decision_parser = history_subparsers.add_parser("decision", help="record a durable decision")
+    decision_parser.add_argument("project")
+    decision_parser.add_argument("decision", nargs="+")
+    decision_parser.add_argument("--reason", required=True)
+    decision_parser.add_argument("--affected", action="append", default=[])
+    event_parser = history_subparsers.add_parser("event", help="record something that happened")
+    event_parser.add_argument("kind")
+    event_parser.add_argument("summary", nargs="+")
+    event_parser.add_argument("--project", default=None)
+    recent_history_parser = history_subparsers.add_parser("recent", help="show recent history")
+    recent_history_parser.add_argument("--project", default=None)
+    recent_history_parser.add_argument("--type", choices=("decision", "event"), default=None)
+    recent_history_parser.add_argument("--limit", type=int, default=20)
 
     memory_parser = subparsers.add_parser("memory", help="inspect and store Keine's memory")
     memory_subparsers = memory_parser.add_subparsers(dest="memory_command")
@@ -298,6 +315,27 @@ def main() -> int:
             print(f"lain: project not found: {args.name}", file=sys.stderr)
             return 1
         _print_project_context(inspect(project))
+        return 0
+
+    if args.command == "history":
+        if args.history_command == "decision":
+            item = record_decision(args.project, " ".join(args.decision), args.reason, args.affected)
+            print(f"decision recorded {item.id[:12]}")
+            return 0
+        if args.history_command == "event":
+            item = record_event(args.kind, " ".join(args.summary), args.project)
+            print(f"event recorded {item.id[:12]}")
+            return 0
+        if args.history_command == "recent":
+            for item in recent_history(args.limit, project=args.project, record_type=args.type):
+                print(f"[{item['type']}] {item.get('created_at', '?')} — {item.get('summary') or item.get('decision')}")
+                if item.get("project"):
+                    print(f"  project: {item['project']}")
+                if item.get("reason"):
+                    print(f"  reason: {item['reason']}")
+            print(f"history file  {history_path()}")
+            return 0
+        history_parser.print_help()
         return 0
 
     if args.command == "memory":
