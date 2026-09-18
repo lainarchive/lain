@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 
+from ..history import context as history_context
 from ..memory import context as memory_context
 from ..models.llama import ask
 from ..projects import ProjectContext, inspect, load
@@ -210,7 +211,9 @@ def dispatch(
 
     project_context = _resolve_project(task)
     formatted_project = _format_project_context(project_context)
-    memories = memory_context(task, limit=8)
+    project_name = project_context.project.name if project_context else None
+    memories = memory_context(task, scope=project_name, limit=8)
+    history = history_context(task, project=project_name, limit=8)
 
     if selected.agent == "Rinnosuke":
         state = load_state()
@@ -269,6 +272,8 @@ def dispatch(
         f"{formatted_project}\n\n"
         "RELEVANT MEMORY:\n"
         f"{memories}\n\n"
+        "RECENT PROJECT HISTORY:\n"
+        f"{history}\n\n"
         "OPERATING RULES:\n"
         "- Treat memory as context, not unquestionable truth.\n"
         "- Treat project context as live factual state, not a substitute for inspecting source files.\n"
