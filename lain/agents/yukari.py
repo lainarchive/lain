@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterator
 from ..memory import context as memory_context
 from ..models.llama import ask
 from ..projects import ProjectContext, inspect, load
+from ..state import load_state
 from ..tools import TOOLS
 from . import rinnosuke
 
@@ -145,8 +146,17 @@ def _inspect(task: str) -> str:
 
 
 def _resolve_project(task: str) -> ProjectContext | None:
-    """Resolve the most specific registered project mentioned by the task."""
+    """Resolve an explicitly mentioned project, otherwise the active project."""
     lowered = task.casefold()
+    state = load_state()
+    active_context = None
+    if state.active_project:
+        active = next(
+            (project for project in load() if project.name.casefold() == state.active_project.casefold()),
+            None,
+        )
+        if active is not None:
+            active_context = inspect(active)
     matches = []
     for project in load():
         name = project.name.casefold()
@@ -155,7 +165,7 @@ def _resolve_project(task: str) -> ProjectContext | None:
             matches.append((max(len(name), len(path)), project))
 
     if not matches:
-        return None
+        return active_context
 
     project = max(matches, key=lambda item: item[0])[1]
     return inspect(project)
@@ -203,15 +213,36 @@ def dispatch(
     memories = memory_context(task, limit=8)
 
     if selected.agent == "Rinnosuke":
+        state = load_state()
         workspace = project_context.project.path if project_context else None
+        scoped_tools = dict(TOOLS)
+        if state.mode in {"OBSERVE", "ASSIST"}:
+            scoped_tools = {
+                name: tool
+                for name, tool in scoped_tools.items()
+                if name in {"read_file", "list_directory", "git_status", "git_diff"}
+            }
+        authority = {
+            "OBSERVE": "Observe only. Report evidence and findings; do not claim changes.",
+            "ASSIST": "Assist only. Inspect and propose the smallest change; do not modify files or run commands/tests.",
+            "EXECUTE": "Execute authorized work within the selected project workspace and verify it.",
+        }[state.mode]
+        context_items = (
+            f"Authority mode: {state.mode}\n{authority}",
+            f"Active project: {state.active_project or 'none'}",
+            f"Project context:\n{formatted_project}",
+            f"Relevant memory:\n{memories}",
+        )
+        if state.mission:
+            context_items += (
+                f"Current mission: {state.mission.objective} "
+                f"(phase={state.mission.phase}, verification={state.mission.verification})",
+            )
         with _workspace(workspace):
             return rinnosuke.execute(
                 task,
-                tools={**TOOLS, "inspect": _inspect},
-                context=(
-                    f"Project context:\n{formatted_project}",
-                    f"Relevant memory:\n{memories}",
-                ),
+                tools={**scoped_tools, "inspect": _inspect},
+                context=context_items,
                 on_event=on_event,
             )
 
