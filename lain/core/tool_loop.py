@@ -34,16 +34,15 @@ def parse_action(text: str) -> ParsedAction:
         return ParsedAction("answer", answer=stripped)
 
     payload = stripped[match.end():].strip()
+    # Small local models sometimes append a sentence or markdown fence after
+    # an otherwise valid JSON tool call. The first complete JSON object is the
+    # authoritative action; trailing model prose is not a second tool call.
+    payload = re.sub(r"^\s*\`\`\`(?:json)?\s*", "", payload, flags=re.IGNORECASE)
     decoder = json.JSONDecoder()
     try:
-        value, end = decoder.raw_decode(payload)
+        value, _end = decoder.raw_decode(payload)
     except json.JSONDecodeError as exc:
         return ParsedAction("invalid", answer=f"Invalid tool-call JSON: {exc.msg}")
-
-    # Tool calls are a two-line wire protocol. Reject trailing model prose or
-    # a second JSON object instead of silently accepting only the first object.
-    if payload[end:].strip():
-        return ParsedAction("invalid", answer="Invalid tool-call JSON: unexpected text after JSON object.")
 
     if not isinstance(value, dict):
         return ParsedAction("invalid", answer="Invalid tool call: payload must be a JSON object.")
