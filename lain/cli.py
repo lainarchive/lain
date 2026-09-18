@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .agents.yukari import dispatch, route
+from .checkpoints import checkpoint_root, create_checkpoint, list_checkpoints
 from .history import history_path, recent_history, record_decision, record_event
 from .memory import recent, remember, search
 from .models.llama import backend_name, model_name, model_path, ollama_model
@@ -153,6 +154,14 @@ def main() -> int:
 
     project_parser = subparsers.add_parser("project", help="inspect one registered project")
     project_parser.add_argument("name", help="project name or exact registered path")
+
+    checkpoint_parser = subparsers.add_parser("checkpoint", help="create and inspect known-good Git checkpoints")
+    checkpoint_subparsers = checkpoint_parser.add_subparsers(dest="checkpoint_command")
+    create_checkpoint_parser = checkpoint_subparsers.add_parser("create", help="record the current clean Git commit")
+    create_checkpoint_parser.add_argument("project")
+    list_checkpoint_parser = checkpoint_subparsers.add_parser("list", help="show saved checkpoints")
+    list_checkpoint_parser.add_argument("--project", default=None)
+    list_checkpoint_parser.add_argument("--limit", type=int, default=20)
 
     history_parser = subparsers.add_parser("history", help="inspect and record decisions and events")
     history_subparsers = history_parser.add_subparsers(dest="history_command")
@@ -315,6 +324,29 @@ def main() -> int:
             print(f"lain: project not found: {args.name}", file=sys.stderr)
             return 1
         _print_project_context(inspect(project))
+        return 0
+
+    if args.command == "checkpoint":
+        if args.checkpoint_command == "create":
+            project = find_project(args.project)
+            if project is None:
+                print(f"lain: project not found: {args.project}", file=sys.stderr)
+                return 1
+            try:
+                item = create_checkpoint(project.name, project.path)
+            except RuntimeError as exc:
+                print(f"lain: {exc}", file=sys.stderr)
+                return 1
+            print(f"checkpoint → {item.id[:12]}")
+            print(f"commit     {item.commit}")
+            print(f"path       {item.path}")
+            return 0
+        if args.checkpoint_command == "list":
+            for item in list_checkpoints(project=args.project, limit=args.limit):
+                print(f"{item.id[:12]}  {item.project:<16} {item.commit[:12]}  {item.created_at}")
+            print(f"checkpoint dir  {checkpoint_root()}")
+            return 0
+        checkpoint_parser.print_help()
         return 0
 
     if args.command == "history":
