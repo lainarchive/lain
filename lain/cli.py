@@ -146,6 +146,14 @@ def main() -> int:
     mission_parser.add_argument("--project", default=None)
     mission_parser.add_argument("--phase", default="planning")
     mission_parser.add_argument("--clear", action="store_true")
+    mission_phase_parser = state_subparsers.add_parser("mission-phase", help="set the current mission phase")
+    mission_phase_parser.add_argument("phase")
+    mission_complete_parser = state_subparsers.add_parser("mission-complete", help="record an explicit completed mission item")
+    mission_complete_parser.add_argument("item", nargs="+")
+    mission_pending_parser = state_subparsers.add_parser("mission-pending", help="replace the current pending mission items")
+    mission_pending_parser.add_argument("items", nargs="*")
+    mission_verify_parser = state_subparsers.add_parser("mission-verify", help="set mission verification state")
+    mission_verify_parser.add_argument("verification", choices=("pending", "verified", "failed"))
 
     projects_parser = subparsers.add_parser("projects", help="inspect and discover local projects")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
@@ -268,6 +276,43 @@ def main() -> int:
         if args.state_command == "project-state":
             state = set_project_state(args.project, args.state)
             print(f"{args.project} → {state.project_states[args.project]}")
+            return 0
+        if args.state_command == "mission-phase":
+            try:
+                state = update_mission(phase=args.phase)
+            except ValueError as exc:
+                print(f"lain: {exc}", file=sys.stderr)
+                return 1
+            print(f"mission phase → {state.mission.phase}")
+            return 0
+        if args.state_command == "mission-complete":
+            try:
+                state = load_state()
+                items = list(state.mission.completed) if state.mission else []
+                item = " ".join(args.item)
+                if item not in items:
+                    items.append(item)
+                state = update_mission(completed=items, phase="verification")
+            except ValueError as exc:
+                print(f"lain: {exc}", file=sys.stderr)
+                return 1
+            print(f"mission completed → {item}")
+            return 0
+        if args.state_command == "mission-pending":
+            try:
+                state = update_mission(pending=list(args.items))
+            except ValueError as exc:
+                print(f"lain: {exc}", file=sys.stderr)
+                return 1
+            print(f"mission pending → {len(state.mission.pending)} item(s)")
+            return 0
+        if args.state_command == "mission-verify":
+            try:
+                state = update_mission(verification=args.verification)
+            except ValueError as exc:
+                print(f"lain: {exc}", file=sys.stderr)
+                return 1
+            print(f"mission verification → {state.mission.verification}")
             return 0
         if args.state_command == "mission":
             if args.clear:
