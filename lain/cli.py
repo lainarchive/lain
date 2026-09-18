@@ -12,7 +12,7 @@ from .agents.yukari import dispatch, route
 from .memory import recent, remember, search
 from .models.llama import backend_name, model_name, model_path, ollama_model
 from .projects import discover, find_project, inspect, load, project_roots, registry_path, save
-from .state import MODES, PROJECT_STATES, clear_mission, load_state, operating_picture, save_state, set_active_project, set_mode, set_project_state, start_mission
+from .state import MODES, PROJECT_STATES, clear_mission, operating_picture, set_active_project, set_mode, set_project_state, start_mission, state_path
 
 
 def _show_event(event: str, data: dict) -> None:
@@ -212,16 +212,16 @@ def main() -> int:
             picture = operating_picture()
             print("lain. operating picture")
             print()
-            print(f"active project  {picture["active_project"] or "-"}")
-            print(f"mode            {picture["mode"]}")
+            print(f"active project  {picture['active_project'] or '-'}")
+            print(f"mode            {picture['mode']}")
             mission = picture["mission"]
             if mission:
-                print(f"mission         {mission["objective"]}")
-                print(f"phase           {mission["phase"]}")
-                print(f"verification    {mission["verification"]}")
+                print(f"mission         {mission['objective']}")
+                print(f"phase           {mission['phase']}")
+                print(f"verification    {mission['verification']}")
             else:
                 print("mission         -")
-            print(f"state file      {__import__("lain.state", fromlist=["state_path"]).state_path()}")
+            print(f"state file      {state_path()}")
             if picture["project_states"]:
                 print()
                 print("projects")
