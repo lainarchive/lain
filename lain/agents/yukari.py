@@ -250,11 +250,28 @@ def dispatch(
                 f"(phase={state.mission.phase}, verification={state.mission.verification})",
             )
         with _workspace(workspace):
+            def record_history_event(event: str, data: dict[str, Any]) -> None:
+                if event not in {"tool_result", "done", "max_steps"}:
+                    return
+                project = project_context.project.name if project_context else state.active_project
+                if event == "tool_result":
+                    kind = "tool_success" if data.get("ok") else "tool_failure"
+                    name = str(data.get("name", "unknown"))
+                    summary = f"{name}: {str(data.get('output', '')).strip().splitlines()[0][:300]}"
+                    from ..history import record_event
+                    record_event(kind, summary, project, {"step": data.get("step")})
+                elif event == "done":
+                    from ..history import record_event
+                    record_event("mission_step_completed", "Rinnosuke completed the task", project, {"step": data.get("step")})
+                else:
+                    from ..history import record_event
+                    record_event("execution_limit", "Rinnosuke reached the maximum tool steps", project, {"step": data.get("step")})
+
             return rinnosuke.execute(
                 task,
                 tools={**scoped_tools, "inspect": _inspect},
                 context=context_items,
-                on_event=on_event,
+                on_event=record_history_event,
             )
 
     execution_plan = plan(task, selected)
