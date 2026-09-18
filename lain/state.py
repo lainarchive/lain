@@ -141,6 +141,33 @@ def start_mission(
     return state
 
 
+def update_mission(
+    *,
+    phase: str | None = None,
+    completed: list[str] | None = None,
+    pending: list[str] | None = None,
+    verification: str | None = None,
+    summary: str | None = None,
+) -> OperatingState:
+    """Update explicit mission progress without guessing what has been done."""
+    state = load_state()
+    if state.mission is None:
+        raise ValueError("no active mission")
+    if phase is not None:
+        state.mission.phase = phase
+    if completed is not None:
+        state.mission.completed = completed
+    if pending is not None:
+        state.mission.pending = pending
+    if verification is not None:
+        state.mission.verification = verification
+    if summary is not None:
+        state.last_summary = summary
+    state.mission.updated_at = _now()
+    save_state(state)
+    return state
+
+
 def clear_mission() -> OperatingState:
     state = load_state()
     state.mission = None
