@@ -21,6 +21,15 @@ class ToolLoopTests(unittest.TestCase):
         self.assertEqual(action.name, "read_file")
         self.assertEqual(action.arguments, {"path": "README.md"})
 
+    def test_parse_tool_call_with_trailing_model_prose(self) -> None:
+        action = parse_action(
+            'LAIN_TOOL\n{"name":"read_file","arguments":{"path":"README.md"}}\n'
+            "I will inspect the file now."
+        )
+        self.assertEqual(action.kind, "tool")
+        self.assertEqual(action.name, "read_file")
+        self.assertEqual(action.arguments, {"path": "README.md"})
+
     def test_loop_executes_tool_then_returns_final_answer(self) -> None:
         responses = iter(
             [
