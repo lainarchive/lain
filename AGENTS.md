@@ -24,7 +24,7 @@ Do not treat an old assistant response or handoff as authoritative when it confl
 At the beginning of each session:
 
 - Read the applicable repository instructions.
-- Read `.lain/CURRENT_STATE.md` if present.
+- Read `docs/memory/README.md` and `docs/memory/CURRENT_STATE.md` if present.
 - Read relevant approved decisions and task-specific documentation.
 - Inspect the current Git branch and working-tree status before making changes.
 - Identify the active milestone, unfinished work, and blockers from project records.
