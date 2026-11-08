@@ -381,6 +381,15 @@ test('the ceiling table states the truth about every ceiling', () => {
   assert.match(processes.mechanism, /1816/);
   assert.ok(unenforcedCeilings().includes('max_processes'));
 
+  // The tool-call ceiling is a real counter now, and the row has to keep saying
+  // how far it reaches: 0 refuses, a positive value is never spent up to.
+  const calls = CEILINGS.find((c) => c.name === 'tool_calls');
+  assert.equal(calls.enforced_by, 'counter');
+  assert.match(calls.mechanism, /task-runner\.mjs/);
+  assert.match(calls.mechanism, /one invocation/);
+  assert.match(calls.measured, /BUDGET_EXCEEDED/);
+  assert.deepEqual(unenforcedCeilings(), ['max_processes']);
+
   // "We configured it and never checked" must not render like "enforced".
   assert.equal(renderCeiling({ name: 'x', enforced_by: 'timer', measured: null }),
     'x: enforced_by=timer - configured, not measured');
