@@ -27,9 +27,14 @@ bug in the canonical document — report it rather than quietly fixing one side.
 | Core primitives (ids, canonical JSON, validation, errors) | implemented with unit tests |
 | Event store | implemented (`e01dbb2`), 37 store tests, 37 pass — see `event-store.md` |
 | Host probe and resource admission | implemented, 35 tests, 35 pass — see `host-and-budget.md` |
-| Policy decision contract | not implemented |
-| Task records | not implemented |
-| Model integration, agent loop | not implemented, and out of scope for M-1 |
+| Policy decision contract | implemented — ten arms, default deny, `decide()` total — see `task-execution.md` |
+| Task records | implemented — own SQLite file, refusal rows recorded, `completed` needs evidence — see `task-execution.md` |
+| One authorized tool call end to end | implemented — `lain task run` on `examples/hello-task.json` reaches `completed` with real evidence |
+| Model integration, agent loop | not implemented, and out of scope for V-1 |
+
+Test count at the time of writing: `npm test` → **153 tests, 153 pass, 0 fail**.
+`node tools/verify.mjs` → `checks=8 pass=7 fail=0 skipped_or_untestable=1`, the
+skip being the advisory `secrets` check with gitleaks unavailable.
 
 Nothing in this directory is a claim about a capability. A capability is claimed
 only after a command has been run and the output recorded under
