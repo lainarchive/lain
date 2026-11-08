@@ -143,3 +143,59 @@ claim that the log can be trusted against a hostile local actor.
 **What it needs.** The hash-chain decision (`08-open-decisions.md`
 OQ-M1.6/OQ-M1.21). If it is wanted later, it should be noted that adding it only
 for new batches weakens it — the cost of delaying is real, not zero.
+
+## Issue 10 — The approval ledger exists but nothing prompts through it
+
+**What is true.** `src/policy/approvals.mjs` implements the approval contract: a
+binding over `{action, tool_id, target, effect_class, task_id}`, a window with a
+default of 60 s, `request`/`answer`/`statusFor`, and a timeout that becomes
+`timed_out` with `decided_by: 'timeout'`. It has tests. It is **not wired to any
+human surface**: the only approval a running task can receive is
+`lain task run --allow <tool_id>`, which is a command-line flag, not an answer to
+a question, and it is not bound to a specific request digest.
+
+**Why it matters.** A2 (`APPROVAL_TIMED_OUT`) can therefore be reached in a test
+but not in a real run, and the difference between "the user allowed *this*" and
+"the user allowed this tool at some point" is exactly the property the binding
+was built for. Until the prompt exists, V-1's approval story is narrower than the
+ledger's design suggests.
+
+**What it needs.** The CLI approval prompt (D-P7) and the decision about where an
+unattended run's timeout lands — it is already decided to be `DenyIndeterminate`
+and never retried (OD-7); what is missing is the surface that produces it.
+
+## Issue 11 — Reads are unrestricted and the network is policy-only
+
+**What is true.** Inside its workspace a task process can read any file the
+running user can read, and it can reach the network. Neither is restricted by any
+mechanism; both are stated as limitations in `SECURITY_MODEL.md` §10 and in
+`task-execution.md`.
+
+**Why it matters.** The containment claim is about *writes* and about a process
+tree a controller can terminate. A task that reads a credential file and writes
+its contents into the workspace is not prevented by anything, and the redaction
+layer protects the log rather than the process. This is the largest gap between
+what Lain's design intends and what it currently enforces.
+
+**What it needs.** A measured mechanism, not a policy statement: closing reads
+needs a tool that does not exist yet, and closing the network needs either an
+AppContainer/LPAC experiment (Tier 2, unmeasured) or a documented acceptance that
+v0.1 cannot do it. Recorded as D-P3's declared out-of-scope items.
+
+## Issue 12 — Nothing enforces the resource ceilings yet
+
+**What is true.** Every task carries a budget with `max_processes`, `max_wall_ms`,
+`max_output_bytes` and `max_model_calls` ceilings, and the runner passes the
+wall-clock and output limits down to `workspace.run`. There is **no Job Object**:
+process count, process memory and total job time are recorded ceilings with no
+mechanism behind them. A script that spawns children is bounded only by the
+timeout and by whatever its parent process does when the timeout fires.
+
+**Why it matters.** `RESOURCE_BUDGET.md` describes three profiles and the
+admission layer refuses on them, so the numbers look enforced. The honest
+statement is: two of the five ceilings are enforced by a timer and a buffer, and
+three are recorded intent.
+
+**What it needs.** The Job Object work (Tier 1 containment), which is M-2 scope
+and is not authorized yet.
+
