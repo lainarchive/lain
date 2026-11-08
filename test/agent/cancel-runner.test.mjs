@@ -321,3 +321,76 @@ test('the runner exposes the cascade, and asking twice is still one request', { 
     assert.equal(ctx.log.read({ task_id: taskId, event_type: 'task.cancel.requested' }).length, 1);
   });
 });
+
+test('a spent tool-call ceiling refuses the run before a workspace exists', { timeout: 15_000 }, async () => {
+  await harness(async (ctx) => {
+    let built = 0;
+    const g = gate();
+    g.release();
+    const runner = makeRunner(ctx, {
+      makeTool: (workspace) => {
+        built += 1;
+        return parkedTool(workspace, g);
+      },
+      jobControl: () => jobs([]).control,
+    });
+
+    // A ceiling of zero is the only one that can be met on a runner that makes
+    // one call per task. That is the point of the test: the ceiling used to be
+    // read by the tool runner and never advanced, so this contract was allowed
+    // through and the tool ran. Now the runner spends the budget where it is
+    // spent, and the admission decision sees it already exhausted.
+    const outcome = await runner.run({
+      contract: contractOf({ budget: { max_tool_calls: 0, max_wall_ms: 30_000 } }),
+      tool_id: 'run_script',
+      tool_arguments: {},
+    });
+
+    assert.equal(outcome.state, 'failed');
+    assert.equal(outcome.admission.outcome, 'deny_budget');
+    assert.equal(outcome.admission.arm_id, 'A4');
+    assert.equal(outcome.admission.reason_code, 'BUDGET_EXCEEDED');
+    assert.equal(outcome.invocation, null);
+    assert.equal(built, 0, 'the tool must not even be built for a refused run');
+    assert.equal(existsSync(join(ctx.workspaceRoot, outcome.task_id)), false, 'and no workspace is left behind');
+
+    const states = ctx.store.history(outcome.task_id).map((row) => row.to);
+    assert.deepEqual(states, ['submitted', 'failed']);
+  });
+});
+
+test('a tool-call ceiling of one is spent, not reset, when the call is made', { timeout: 15_000 }, async () => {
+  await harness(async (ctx) => {
+    const g = gate();
+    g.release();
+    /** @type {Array<{remaining_tool_calls: number}>} */
+    const seen = [];
+    const runner = makeRunner(ctx, {
+      makeTool: (workspace) => ({
+        tool_id: 'run_script',
+        summary: 'records the budget it was handed',
+        requires: ['workspace.write', 'process.spawn'],
+        effect_class: 'local_reversible',
+        spawns_processes: true,
+        run: (args, toolCtx) => {
+          seen.push(/** @type {{remaining_tool_calls: number}} */ (toolCtx.budget));
+          return parkedTool(workspace, g).run(args, toolCtx);
+        },
+      }),
+      jobControl: () => jobs([]).control,
+    });
+
+    const outcome = await runner.run({
+      contract: contractOf({ budget: { max_tool_calls: 1, max_wall_ms: 30_000 } }),
+      tool_id: 'run_script',
+      tool_arguments: {},
+    });
+
+    assert.equal(outcome.state, 'completed');
+    assert.equal(seen.length, 1);
+    // Handed the one call it was allowed, rather than the ceiling reset to its
+    // original value on every invocation — the second of which is how a ceiling
+    // of N silently becomes N calls per call site.
+    assert.equal(seen[0].remaining_tool_calls, 1);
+  });
+});
