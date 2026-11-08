@@ -60,10 +60,16 @@ reading of "active process limit: 1" is exactly the thing that does not work.
 `MemoryError`**; 128 MiB against the same limit survived. The death is the evidence; the
 earlier quota error only proved registration.
 
-**The job time limit ends a process that is still working.** `job_seconds: 1` with an 8 s
-busy loop ended the child at **2.75 s** with exit `3221225540` (`0xC0000044`,
-`STATUS_QUOTA_EXCEEDED`). The overshoot past 1 s is the accounting interval, and it is a
-real cost to state rather than round away.
+**The job time limit ends a process that is still working, but when is load-dependent.**
+`job_seconds: 1` with an 8 s busy loop ended the child at **2.75 s** on the first run, and
+the same case re-measured later gave **8.13 / 6.98 / 6.94 s** through the raw probe and
+**7.01 / 7.05 / 7.04 s** through `job_host.py`. Both are correct: `JOB_TIME` is charged in
+user-mode CPU time, so the wall-clock delay is a function of how much CPU the tool gets,
+not a fixed accounting interval. The earlier 2.07–2.17 s figure was taken on an idle
+machine and is the best case, not the number. `limits.mjs` records the range and says
+load-dependent; `AT-V2-JOB-02` asserts only that the run is stopped and that
+`duration_ms > job_ms`, because asserting a specific duration would be asserting the
+machine's spare capacity.
 
 **`KILL_ON_JOB_CLOSE` was set in every enforced case.** Closing the handle is therefore
 available as the kill switch, which is what makes the supervisor design below work.
@@ -153,9 +159,11 @@ Three corrections to the intuitive reading, all measured with `tools/experiments
   inferred from an exit code. A tool that exits `0xC0000044` for its own reasons is not the
   same event as the job killing it, and the log must not conflate the two. Measured
   notification order: `[NEW_PROCESS, PROCESS_MEMORY_LIMIT, EXIT_PROCESS, ACTIVE_PROCESS_ZERO]`.
-- **Overshoot is real and is reported, not rounded.** A 1000 ms job ceiling ended a busy
-  8 s loop at **2.07–2.17 s** (an earlier probe measured 2.75 s). That spread is the
-  accounting interval, and it belongs in the ceiling's description.
+- **Overshoot is real, load-dependent, and reported as a range.** A 1000 ms job ceiling
+  ended a busy 8 s loop anywhere between **2.07 s** on an idle machine and **8.13 s**
+  under load. User-mode CPU accounting, not a fixed interval — see the measurement note
+  above. The ceiling's description carries the range and the word "load-dependent",
+  because a single number here would be a claim about the machine rather than the code.
 
 **The helper is a soft target, stated plainly.** Anything holding the supervisor's PID can
 kill it, and anything that can write the helper file can change what it enforces. Neither
@@ -235,6 +243,24 @@ lifecycle. Frozen bits:
   to a human.
 - Survivors are **enumerated and recorded**. `cancelled` requires zero survivors; otherwise
   the task settles as `cancel_failed` with the survivor count in the evidence.
+- **`cancelling` is reachable from every non-terminal state, including `submitted` and
+  `indeterminate`.** A task nobody can stop is not safe to start, and refusing the request
+  would leave it unstoppable until a runner happened to admit it — the exact window a user
+  who changed their mind is standing in. The record does not pretend a kill happened:
+  `submitted` settles with `cancelled_before_effect: true` and
+  `survivors_verified_by: 'never_started'`, so a task that never ran is distinguishable in
+  the log from one that ran and was killed. **The escalation rule above is about stopping an
+  effect, so it does not bite when there is no effect to stop**: a `submitted` task with an
+  unknown or `external` class is cancelled without escalating, because settling
+  `cancel_failed` for a task that provably cannot have run anything would drain that state
+  of its meaning ("something may still be running"). The class is still recorded.
+- **A missing job handle is not evidence that nothing is running.** It is often the reason
+  the state is unknown. An `indeterminate` task with no handle records survivors as `null`,
+  escalates with `SURVIVORS_UNVERIFIABLE`, and settles `cancel_failed` — never `cancelled`,
+  and never a zero it did not verify. With a handle that enumerates empty it does reach
+  `cancelled`, because a verified zero is a verified zero whatever the state was; and a
+  handle outranks the inference, so a `submitted` task holding a live job is acted on by its
+  class rather than assumed harmless.
 
 ### 4. Approval (`src/cli/commands/approve.mjs`, `src/policy/approvals.mjs`)
 
