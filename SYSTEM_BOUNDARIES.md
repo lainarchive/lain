@@ -5,9 +5,10 @@
 ## 1. Canonical ownership
 Each canonical record has one owner. Other systems consume it through contracts or maintain explicitly derived projections.
 
-**Single-writer rule (added 2026-11-08, with implementation evidence).** The event log has exactly one writer process at a time. Ownership is enforced by the store
-itself, not by convention and not by a lock file: a writer holds the database's write lock for the life of its session, and a second process is refused rather
-than queued. The rule exists because the audit measured what its absence costs — with commits per document, 963 of 1,766 observations showed torn reads; with one
+**Single-writer rule (added 2026-11-08, with implementation evidence; scope corrected 2026-11-08 by measurement).** The event log has exactly one write transaction at a time. Serialization is enforced by the store
+itself through the database's own write lock, not by convention and not by a lock file: a writer takes the write lock for the duration of each transaction and re-takes it immediately after committing, and a second process is refused rather
+than queued. This is transaction serialization, not continuous process ownership: between committing a batch and re-taking the lock there is a real window, and a process that loses that race is refused with `STORE_LOCK_LOST` and must not write again. Measured 2026-11-08 over repeated runs, a competing process acquired the lock in that window while the first writer was mid-session and still committing batches.
+The rule exists because the audit measured what its absence costs — with commits per document, 963 of 1,766 observations showed torn reads; with one
 transaction per batch, 0 of 1,212 did. The Event Store owns persistence and ordering only. It does not own authorization, which remains the Policy Engine's alone.
 
 | Domain | Canonical owner |

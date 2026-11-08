@@ -18,12 +18,25 @@ executions. Its purpose is not logging. It is the system of record that makes
 
 ## Guarantees this implementation provides
 
-**Single writer, decided by SQLite.** Ownership is a long-lived
-`BEGIN IMMEDIATE` held for the life of the session and re-taken immediately after
-every commit. A second process is refused with `STORE_LOCKED`, not queued:
+**Single writer per transaction, decided by SQLite.** The store takes the database's
+`BEGIN IMMEDIATE` write lock for the duration of each transaction and re-takes it
+immediately after every commit, synchronously, with no `await` in between. A second
+process is refused with `STORE_LOCKED`, not queued:
 `busy_timeout` is deliberately `0`, because waiting converts a refusal into a
 silent delay and the caller cannot tell the difference between "my turn came" and
 "the writer died".
+
+**What this does not guarantee (measured 2026-11-08).** Serialization is not
+continuous process ownership. The re-acquisition after `COMMIT` is a real window
+across processes: in a repeated measurement, four competing writers each acquired
+the lock while the first writer was still mid-session and still committing batches
+(hundreds of committed batches before the loss), after which the first writer
+received `STORE_LOCK_LOST`, set `holds_write_lock` to false, and could not append
+again. That is the designed response — the batch that was committed stays durable,
+and the loser is refused rather than allowed to continue as a writer without
+ownership — but it means "this process is the writer" holds only between commits,
+not for the session. A caller that must not lose the writer role has to model that
+possibility; the store will not hide it.
 
 **The lock is not a file.** `<db>.writer.json` and `<db>.writer.lock` are written
 for diagnosis only and are never consulted to grant or refuse ownership. This is
@@ -59,21 +72,30 @@ is silently rebuilt.
    releases the lock for the duration of the copy and re-takes it immediately,
    throwing `STORE_LOCK_LOST` if another writer appeared in that window. The gap
    is real; it exists only while an explicit backup runs.
-2. **No retention and no compaction.** The store grows without bound. The
+2. **The post-commit re-acquisition window is real too.** Every `append()`
+   releases the write lock at `COMMIT` and takes it again synchronously. A
+   competing process can win that race; measured 2026-11-08, four of four
+   competing writers did, after the first writer had already committed hundreds of
+   batches. The losing writer is refused with `STORE_LOCK_LOST` and must close and
+   reopen before writing again. There is no continuous-ownership guarantee, and
+   nothing in this implementation makes the window zero-width.
+3. **No retention and no compaction.** The store grows without bound. The
    documented warning threshold is 2 GiB, about 14.7 million events at the
    measured 146 bytes per event.
-3. **No tamper-evidence chain.** `payload_hash` detects an edited payload because
+4. **No tamper-evidence chain.** `payload_hash` detects an edited payload because
    verification recomputes it; a deleted row is detected as a sequence gap. An
    attacker who rewrites both the payload and its stored hash is not detected.
    The hash-chain decision is open (`docs/research/m1-foundation-readiness/08-open-decisions.md`,
    OQ-M1.6/OQ-M1.21).
-4. **No encryption at rest.** Redaction protects against secrets being written;
+5. **No encryption at rest.** Redaction protects against secrets being written;
    it does not protect the file from being read.
-5. **Ownership of the store is a recommendation, not a decision.**
-   `SYSTEM_BOUNDARIES.md` has no row for events, and the ownership model in
+6. **Ownership of the store is a recommendation, not a decision.**
+   `SYSTEM_BOUNDARIES.md` now names the Event Store as the owner of the event log
+   and states the transaction-serialization rule, but that row records an
+   implemented guarantee, not an accepted architecture: the ownership *model* in
    `docs/research/m1-foundation-readiness/02-security-and-containment.md` is
-   labelled a recommendation. The implementation does not depend on the answer,
-   because it only stores and orders records.
+   labelled a recommendation and has not been accepted. The implementation does
+   not depend on the answer, because it only stores and orders records.
 
 ## The boundary that matters most
 

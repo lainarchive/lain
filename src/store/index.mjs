@@ -228,9 +228,13 @@ export function open(options) {
         insertRow(toRow(item, { seq: first + index, recorded_at: recordedAt }));
       });
       db.exec('COMMIT');
-      // The lock is re-taken immediately after the commit. A gap between COMMIT
-      // and the next BEGIN IMMEDIATE would be a window in which a second process
-      // could legitimately become the writer.
+      // The lock is re-taken immediately after the commit, synchronously, with no
+      // await in between. That is NOT a continuous-ownership guarantee: across
+      // processes the gap between COMMIT and the next BEGIN IMMEDIATE is real and
+      // a competing writer can win it (measured 2026-11-08 — four of four
+      // competitors did, while this writer was mid-session). The response is
+      // fail-closed: the batch that committed stays durable, and this handle stops
+      // being a writer rather than continuing without ownership.
       if (!options.skipLock) {
         const reacquisition = claimWriteLock(db, dbPath);
         if (!reacquisition.acquired) {
