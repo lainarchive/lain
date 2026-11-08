@@ -35,17 +35,18 @@ export function requireRecord(value, what) {
  *
  * @param {unknown} value
  * @param {string} what
- * @param {{ maxLength?: number, pattern?: RegExp }} [opts]
+ * @param {{ min?: number, max?: number, pattern?: RegExp }} [opts]
  * @returns {string}
  */
 export function requireString(value, what, opts = {}) {
   if (typeof value !== 'string') {
     throw new StoreError('INVALID_SHAPE', `${what} must be a string`, { what, actual: typeName(value) });
   }
-  if (value.length === 0) {
-    throw new StoreError('INVALID_SHAPE', `${what} must not be empty`, { what });
+  const min = opts.min ?? 1;
+  if (value.length < min) {
+    throw new StoreError('INVALID_SHAPE', `${what} must be at least ${min} characters`, { what, length: value.length });
   }
-  const max = opts.maxLength ?? 4096;
+  const max = opts.max ?? 4096;
   if (value.length > max) {
     throw new StoreError('INVALID_SHAPE', `${what} exceeds ${max} characters`, { what, length: value.length });
   }
