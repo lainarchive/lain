@@ -158,25 +158,28 @@ claim that the log can be trusted against a hostile local actor.
 OQ-M1.6/OQ-M1.21). If it is wanted later, it should be noted that adding it only
 for new batches weakens it — the cost of delaying is real, not zero.
 
-## Issue 10 — The approval ledger exists but nothing prompts through it
+## Issue 10 — CLOSED: `lain approve` prompts through the ledger
 
-**What is true.** `src/policy/approvals.mjs` implements the approval contract: a
-binding over `{action, tool_id, target, effect_class, task_id}`, a window with a
-default of 60 s, `request`/`answer`/`statusFor`, and a timeout that becomes
-`timed_out` with `decided_by: 'timeout'`. It has tests. It is **not wired to any
-human surface**: the only approval a running task can receive is
-`lain task run --allow <tool_id>`, which is a command-line flag, not an answer to
-a question, and it is not bound to a specific request digest.
+**What was true.** `src/policy/approvals.mjs` implemented the approval contract — a
+binding over `{action, tool_id, target, effect_class, task_id}`, a 60 s window,
+`request`/`answer`/`statusFor`, and a timeout becoming `timed_out` — but nothing
+prompted through it. The only approval a running task could receive was
+`lain task run --allow <tool_id>`, a command-line flag rather than an answer to a
+question, and not bound to any request digest.
 
-**Why it matters.** A2 (`APPROVAL_TIMED_OUT`) can therefore be reached in a test
-but not in a real run, and the difference between "the user allowed *this*" and
-"the user allowed this tool at some point" is exactly the property the binding
-was built for. Until the prompt exists, V-1's approval story is narrower than the
-ledger's design suggests.
+**What closed it (V-2, commit `d2f152a`).** `src/cli/commands/approve.mjs` presents the
+bound question and answers it, with `--list` for what is outstanding. An answer must
+carry the digest of the question it answers; a digest belonging to a different question
+is refused rather than reused. A2 is reachable in a real run now: a closed window is
+`timed_out`, arm `APPROVAL_TIMED_OUT`, `deny_indeterminate`, `retryable: false`, and
+there is no `--retry`, because "wait forever" is not an answer either.
 
-**What it needs.** The CLI approval prompt (D-P7) and the decision about where an
-unattended run's timeout lands — it is already decided to be `DenyIndeterminate`
-and never retried (OD-7); what is missing is the surface that produces it.
+**What it deliberately did not do.** `--allow` still exists for non-interactive use, and
+it is recorded as flag-shaped: `decided_by: 'flag:<cli>'` with `decided_source: 'flag'`
+stored on the record, so a reader of `approvals.json` need not know that the prefix
+encodes "no person answered". A prompted answer reads `human:<name>`. That distinction
+was a finding from the same stream: the runner had been synthesizing a granted status
+for `--allow`, which made a flag indistinguishable from a person in the log.
 
 ## Issue 11 — Reads are unrestricted and the network is policy-only
 
@@ -194,15 +197,45 @@ what Lain's design intends and what it currently enforces.
 **What it needs.** A measured mechanism, not a policy statement: closing reads
 needs a tool that does not exist yet, and closing the network needs either an
 AppContainer/LPAC experiment (Tier 2, unmeasured) or a documented acceptance that
-v0.1 cannot do it. Recorded as D-P3's declared out-of-scope items.
+v0.1 cannot do it. Recorded as D-P3's declared out-of-scope items. V-2 did not
+change this: its ceilings are about process lifetime and memory, not about what a
+process may read or reach.
 
-## Issue 12 — Nothing enforces the resource ceilings yet
+## Issue 12 — CLOSED for what a job object can actually enforce
 
-**What is true.** Every task carries a budget with `max_processes`, `max_wall_ms`,
-`max_output_bytes` and `max_model_calls` ceilings, and the runner passes the
-wall-clock and output limits down to `workspace.run`. There is **no Job Object**:
-process count, process memory and total job time are recorded ceilings with no
-mechanism behind them. A script that spawns children is bounded only by the
+**What was true.** Every task carried a budget with `max_processes`, `max_wall_ms`,
+`max_output_bytes` and `max_model_calls` ceilings, and the runner passed the
+wall-clock and output limits down to `workspace.run`. There was **no Job Object**, so
+process count, process memory and total job time were recorded ceilings with no
+mechanism behind them.
+
+**What closed it (V-2, commits `d2f152a` and `a6911bf`).** `tools/win32/job_host.py`
+supervises the tool through a job object: the tool is created suspended, assigned, then
+resumed, so it cannot run or spawn anything outside the job; the supervisor holds the
+handle with `KILL_ON_JOB_CLOSE`, so killing the supervisor reaps the tree. Process memory
+and job time are enforced. The approval gate above and the cancellation cascade close the
+other two V-1 gaps.
+
+**What remains unenforced, and is now said by the code rather than implied.** `CEILINGS`
+in `src/exec/limits.mjs` carries one row per ceiling with an `enforced_by` value, and
+three rows are `none` with the measurement that put them there:
+
+- **`max_processes`** — `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` counts the process doing the
+  spawning, so a limit of 1 fails its first `CreateProcess` with `WinError 1816
+  ERROR_NOT_ENOUGH_QUOTA` and breaks every tool that legitimately spawns. Bounded instead
+  by the number of tool runs.
+- **The per-process time ceiling** — `JOB_OBJECT_LIMIT_PROCESS_TIME` never fires. An 8.04 s
+  burn under a 1000 ms ceiling ran to completion, exit 0. Total job time is used instead,
+  and it is user-mode CPU time, so it does not bound a sleeping tool.
+- **The tool-call ceiling at the tool layer** — read by `src/tools/invoke.mjs` and never
+  advanced, so a positive ceiling could not be reached. The task runner now spends one
+  counter per invocation at admission, where a refusal happens before a workspace exists.
+
+Two limitations belong here too rather than in a footnote: job-time overshoot is
+load-dependent (measured 2.07 s to 8.13 s for a 1000 ms ceiling over an 8 s burn), and
+the supervisor is a soft target — anything holding its PID can kill it and anything that
+can write the helper can change what it enforces. The helper hash and the settle record
+make tampering visible, not impossible.
 timeout and by whatever its parent process does when the timeout fires.
 
 **Why it matters.** `RESOURCE_BUDGET.md` describes three profiles and the
