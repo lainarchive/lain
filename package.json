@@ -1,0 +1,32 @@
+{
+  "name": "lain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lain — a local-first, general-purpose autonomous AI operating environment. M-1 foundation: event store, policy contract, resource admission.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "^24.0.0"
+  },
+  "scripts": {
+    "check": "node tools/verify.mjs",
+    "check:self": "node tools/verify.mjs --self-test",
+    "check:runtime": "node tools/check/runtime.mjs",
+    "check:layout": "node tools/check/layout.mjs",
+    "check:format": "node tools/check/format.mjs",
+    "check:types": "node tools/check/types.mjs",
+    "check:tests": "node tools/check/tests.mjs",
+    "check:store-boundary": "node tools/check/store-boundary.mjs",
+    "check:repo": "node tools/check/repo-hygiene.mjs",
+    "check:secrets": "node tools/check/secrets.mjs",
+    "check:format-strict": "node tools/check/format.mjs --strict",
+    "verify": "node tools/verify.mjs --require-security",
+    "probe": "node tools/probe-host.mjs",
+    "test": "node --test --test-reporter=spec \"test/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {}
+}

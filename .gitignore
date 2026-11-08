@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Lain — .gitignore
+#
+# Design rule: every pattern below is narrow and named. Nothing here can hide
+# source code, specifications, or project documentation. Where a category could
+# plausibly collide with real content, the specific filename is listed instead
+# of a wildcard directory.
+#
+# Created during the P0 preparation task. NOT staged and NOT committed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Audit staging ────────────────────────────────────────────────────────────
+# The 2026-11-05 architecture audit staged 142 files (~149 MB) here, including
+# ~148 MB of SQLite benchmark databases. It is evidence, not project content,
+# and is scheduled for relocation outside the repository. Ignoring it prevents
+# a `git add -A` from committing 149 MB of throwaway data into project history.
+# This is the single most likely way to damage the repository today.
+.lain-audit/
+
+# ── Local runtime state ──────────────────────────────────────────────────────
+# Agent/session state is per-machine and per-run. AGENTS.md's session-init
+# protocol reads some of this; none of it is shared or reviewable.
+.lain/
+
+# ── Databases (runtime data, regenerable) ────────────────────────────────────
+# Lain's event log and knowledge store are local SQLite. WAL and shared-memory
+# sidecars are produced at runtime and are never meaningful in a commit.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ── Secrets and local environment ────────────────────────────────────────────
+# Owner rule: no secrets in git. `.env.example` is explicitly re-included
+# because it is the documented, secret-free template that lists required vars.
+.env
+.env.*
+!.env.example
+
+# ── Model files ──────────────────────────────────────────────────────────────
+# Weights are multi-gigabyte binaries owned by Ollama's store, not by this
+# repository. These extensions are unambiguous — no source or doc uses them.
+*.gguf
+*.safetensors
+*.onnx
+
+# ── Generated output ─────────────────────────────────────────────────────────
+# Build outputs only. Deliberately NOT ignoring `build/`, `out/`, `lib/`,
+# or `bin/`: those names are ambiguous and a wildcard could hide real source.
+dist/
+target/
+coverage/
+
+# ── Node ─────────────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Python (audit and tooling scripts) ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ── Logs and temporary files ─────────────────────────────────────────────────
+*.log
+*.tmp
+*.temp
+*~
+
+# ── Editor and OS noise ──────────────────────────────────────────────────────
+# Scoped to the directories themselves; if a shared editor config is ever
+# wanted, add a negation for that exact path rather than removing the rule.
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
