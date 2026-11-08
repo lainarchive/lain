@@ -1,7 +1,7 @@
 # Current Project State
 
-**Record status:** Initial repository baseline, verified 2026-11-05.
-**Repository revision inspected:** `7074c0dbad9ade15bc2a1017087386bbb058c760` (`main`).
+**Record status:** Planning baseline and recovered-source update, verified 2026-11-05.
+**Repository revision inspected:** `0e7fdeeb28bbc26623765c88ba8816316c2c5fd5` (`main`; working-tree documentation changes are uncommitted).
 
 ## Verified facts
 
@@ -17,6 +17,13 @@
 
 No active implementation milestone or completed code work is recorded in the inspected repository. The planning documents identify repository foundation as the first milestone; no completion evidence for that milestone is present in this checkout.
 
+## Recovered conversation and usage guidance (2026-11-05)
+
+- Archived the user-provided recovered conversation byte-for-byte at [`docs/research/sources/recovered-lain-conversation.txt`](../research/sources/recovered-lain-conversation.txt); the source and archived SHA-256 values match.
+- Added source notes at [`docs/research/RECOVERED_CONVERSATION_NOTES.md`](../research/RECOVERED_CONVERSATION_NOTES.md). The transcript adds design topics not made explicit in the current architecture, especially Mods, shared ChatGPT/DeepSeek workflows, and bounded overnight tasks. These remain historical proposals; no decision was promoted.
+- Added targeted reading, context reuse, adaptive reasoning effort, and evidence-based usage reporting to `AGENTS.md`.
+- No code, dependencies, tests, or schedules were added. Current local resource check found the GPU at 0% utilization with 571 MiB in use, and `ollama ps` listed no loaded model. The DeepSeek Harness screen showed a completed run plus a “5 subagents / 1 background job” indicator; the indicator alone does not establish active work.
+
 ## Constraints to preserve
 
 - Keep Lain independent; DSH and prior projects are research inputs, not source to import.
@@ -26,7 +33,7 @@ No active implementation milestone or completed code work is recorded in the ins
 
 ## Next action
 
-Continue with the repository-foundation milestone in `IMPLEMENTATION_ROADMAP.md` and `INITIAL_BACKLOG.md`. Establish conventions, validate the leading toolchain candidate with a bounded proof of concept, and create a reproducible build/check baseline before beginning Core implementation. Record evidence and update this state file as work is completed.
+Continue with the repository-foundation milestone in `IMPLEMENTATION_ROADMAP.md` and `INITIAL_BACKLOG.md`. Separately, define a specific bounded task and schedule before configuring unattended work. Establish conventions, validate the leading toolchain candidate with a bounded proof of concept, and create a reproducible build/check baseline before beginning Core implementation. Record evidence and update this state file as work is completed.
 
 ## Evidence
 
@@ -35,3 +42,4 @@ Continue with the repository-foundation milestone in `IMPLEMENTATION_ROADMAP.md`
 - Architecture status and boundaries: [`ARCHITECTURE.md`](../../ARCHITECTURE.md), [`SYSTEM_BOUNDARIES.md`](../../SYSTEM_BOUNDARIES.md), [`SECURITY_MODEL.md`](../../SECURITY_MODEL.md)
 - Sequencing and initial work: [`IMPLEMENTATION_ROADMAP.md`](../../IMPLEMENTATION_ROADMAP.md), [`INITIAL_BACKLOG.md`](../../INITIAL_BACKLOG.md)
 - Acceptance targets and their status: [`ACCEPTANCE_TESTS.md`](../../ACCEPTANCE_TESTS.md)
+- Recovered conversation source and review: [`docs/research/RECOVERED_CONVERSATION_NOTES.md`](../research/RECOVERED_CONVERSATION_NOTES.md)

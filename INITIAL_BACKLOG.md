@@ -37,3 +37,11 @@ Each issue produces one reviewable outcome and states scope, non-goals, tests, a
 
 ## First milestone
 Complete L0-001 through L0-003, then L1-001 through L1-004. Do not start advanced orchestration or desktop work before the foundation is reproducible.
+
+## Reconciliation: future backlog candidates
+
+These future candidates do not displace the existing first milestone:
+- Collaboration records, task discussions, independent review, and dispute escalation.
+- Bounded blocked-task checkpointing, dependency tracking, and safe continuation of unrelated authorized work.
+- Mod contracts, compatibility, isolation, lifecycle, and permission integration.
+- Capability effectiveness measurement and artifact-quality verification.

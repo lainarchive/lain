@@ -71,3 +71,7 @@ Statuses: **Accepted** = approved direction; **Proposed** = recommended but unpr
 
 ## Open decisions
 Exact language/workspace structure; async runtime; event persistence/projections; execution isolation; plugin isolation; embeddings; remote access; desktop framework; whether a graph database is ever needed. Resolve through user direction, proof of concept, threat model, or benchmark. Do not silently promote candidates to accepted decisions.
+
+## Reconciliation: low-risk extension activation
+
+Clarification to the extension lifecycle decision: low-risk, validated declarative extensions limited to permissions already authorized by the user may be installed and activated automatically. Extensions that request new permissions, executable behavior, sensitive access, or broader authority require independent policy evaluation and applicable explicit approval. Creation, installation, authorization, and activation remain distinct. This clarification does not authorize an extension to approve itself.

@@ -49,3 +49,7 @@ Record authorization, approvals, tool invocations, routing, execution start/stop
 
 ## 13. Security gates
 Before broad execution, test that unauthorized calls are denied; path/network restrictions cannot be bypassed; prompt injection grants no capability; unknown pricing cannot enter free-only routing; no unauthorized paid fallback occurs; secrets stay out of memory/logs; plugin failures are contained; cancellation/resource limits work; agents cannot weaken policy.
+
+## Reconciliation: collaboration and mod security
+
+Agent messages, review results, broadcasts, and claimed approvals are untrusted proposals. They cannot grant permissions, alter protected decisions, or bypass Policy Engine checks. Mods are untrusted extensions: validate manifests, dependencies, compatibility, requested capabilities, and lifecycle transitions; isolate executable behavior; and reauthorize protected operations. Mods cannot modify policy enforcement, audit history, secrets, or spending limits. A blocked task may checkpoint and pause; unrelated work may continue only within already-authorized scope. Resumption requires policy and precondition checks. This does not relax restrictions on unattended external operations or autonomous financial commitments.

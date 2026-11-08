@@ -46,6 +46,14 @@ Use the harness's reported context usage when available. These are conservative 
 
 At approximately 70% usage, prepare a handoff rather than waiting until context is nearly exhausted. If the harness does not expose a reliable usage estimate, use task boundaries and signs of lost or competing context; do not invent a percentage.
 
+## Usage-efficient execution
+
+- Search first and read only relevant sections or ranges. For large sources, extract targeted evidence instead of printing the full file into context.
+- Reuse repository records and source references rather than restating the full project history. Keep raw transcripts in research sources, not routine handoffs.
+- Batch independent read-only checks and avoid repeating unchanged scans.
+- Use the lowest model and reasoning effort that meets the task. Raise effort for ambiguous, security-sensitive, architectural, or high-error-cost work.
+- Preserve output quality with clear acceptance criteria and proportionate verification. Report usage savings only when measured or billing-reported; estimates are not production results.
+
 ## Project memory and checkpoint quality
 
 After meaningful work, update the appropriate existing project record when one exists and the task authorizes that update. Record:
