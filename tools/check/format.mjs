@@ -39,7 +39,7 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { main } from './lib/report.mjs';
+import { isEntryPoint, main } from './lib/report.mjs';
 
 /** Paths this repository owns and enforces the policy on. */
 export const OWNED_PATHS = [
@@ -147,7 +147,7 @@ async function walk(dir, root, out) {
   }
 }
 
-await main('format', async ({ result, selfTest, root, argv }) => {
+if (isEntryPoint(import.meta.url)) await main('format', async ({ result, selfTest, root, argv }) => {
   const strict = argv.includes('--strict');
 
   if (selfTest) {
