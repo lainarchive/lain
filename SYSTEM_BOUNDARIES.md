@@ -65,3 +65,7 @@ Secrets use a dedicated secret mechanism, never ordinary memory/logs/prompts. Pr
 
 ## 8. Interface boundary
 CLI, TUI, and desktop use the same command/query/event contracts. UI layout preferences may be client-owned; task/session/policy truth may not.
+
+## Reconciliation: collaboration ownership
+
+The Collaboration Service owns messages, discussions, broadcasts, review records, and disputes. Task Manager remains the sole owner of task state; Agent Runtime remains the owner of agent execution state; Policy Engine remains the sole authorization authority. Collaboration records reference canonical IDs and cannot mutate those owners or grant permissions. Mods use the existing Capability Registry and Execution Runtime. Blocked-task checkpoints and resumption remain owned by Task Manager and Scheduler.
