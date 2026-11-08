@@ -1,16 +1,17 @@
 # Current Project State
 
 **Record status:** Implementation record, verified 2026-11-08. Supersedes the planning baseline of 2026-11-05.
-**Repository revision inspected:** `d12fda0086b88ed3f6ee12cc9caee1e93c7f38d5` at the start of the V-1 session; the latest commit at the time of writing is
-`2b90c9b5416a77992fa8f62a8be0c04f7a86fe90` (`main`, `feat: run one authorized task end to end without a model`). The working tree is clean; the record above
-is updated in the commit that follows it.
+**Repository revision inspected:** `d12fda0086b88ed3f6ee12cc9caee1e93c7f38d5` at the start of the V-1 session; V-1 itself is
+`2b90c9b5416a77992fa8f62a8be0c04f7a86fe90` (`feat: run one authorized task end to end without a model`), followed by
+`9fda0a2` (`docs: record the V-1 implementation state`) and `2cf60c9` (`style: drop the trailing blank line the format gate refuses`), which is the commit
+this record describes. The working tree is clean.
 
 **Recorded because the previous version was wrong:** this file said there was "no implementation source tree" and "no active implementation milestone or completed
 code work". Both were true on 2026-11-05 and are false now. The claims are kept visible in this history rather than silently replaced.
 
 ## Verified facts
 
-- This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **13 commits ahead of origin and unpushed**, and
+- This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **15 commits ahead of origin and unpushed**, and
   `git ls-remote origin refs/heads/main` still reports `7074c0db…`. No push has been performed, by instruction.
 - **An implementation source tree exists.** `src/` contains the event store (`src/store/`), the host probe (`src/host/`), the resource budget and admission layer
   (`src/budget/`), core primitives (`src/core/`), the Policy Engine (`src/policy/`), task records (`src/tasks/`), the contained workspace (`src/exec/`), the tool
@@ -19,7 +20,7 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 - **The build/check baseline exists and can fail.** `npm run check` runs eight checks (runtime, layout, format, types, tests, store-boundary, process-boundary,
   repo-hygiene) plus an advisory secrets scan; `npm run check:self` proves each check can fail; `npm run verify` makes the secret scan required and **exits 1 while
   `gitleaks` is absent**, so the required security gate cannot pass silently.
-- **Measured at `2b90c9b`:** 153 tests, 153 pass, 0 fail; `node tools/verify.mjs` → `checks=8 pass=7 fail=0 skipped_or_untestable=1` (the skip is the advisory
+- **Measured at `2cf60c9`:** 153 tests, 153 pass, 0 fail; `node tools/verify.mjs` → `checks=8 pass=7 fail=0 skipped_or_untestable=1` (the skip is the advisory
   secrets check, `files_considered: 124`, `fallback_hits: 0`, "this is NOT a clean scan"); `--self-test` → 8 of 8; `tsc --noEmit` → 0 errors;
   `npm run check:format-strict` → `owned_violations: 0`, `legacy_violations_not_enforced: 875`; `npm run verify` → exit 1.
 - **One authorized task now runs end to end without a model.** `lain task run --task examples/hello-task.json` admits a task through the Policy Engine
