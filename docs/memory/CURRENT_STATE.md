@@ -47,11 +47,27 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 
 ## Current position
 
-**M-1 (Lain Foundation) is complete and V-1 (One Authorized Task) is implemented and committed.** The local history is
-`0c5dca8` → `55c27c1` → `2cf60c9` → `9fda0a2` → `2b90c9b` → `d12fda0` → `d5452f1` → `38a5e66` → `affdc67` → `1482359` → `7684519` → `e01dbb2` → `379b4f2` →
-`1ff3d688c3f0` → `36a3e18` → `01ac126`, all local, nothing pushed.
+**M-1 is complete, V-1 (One Authorized Task) is complete, and V-2 (Contained Execution) is implemented and committed.** The local history ends
+`98e52d0` → `d2f152a` → `a6911bf` → `be1b501` → `9ba13a7`, and `main` is **5 commits ahead of `origin/main`**; the published tip is still
+`c204604a91d51b2d4b792f3be25cca19efeaeb1f`, so nothing from V-2 is off-machine yet.
 
-**Every gate is green for the first time.** `npm run verify` passes with the secret scan required; there is no advisory skip left in any check.
+**V-2 closed the three V-1 gaps it was written for, and the milestone test now passes for real.** `lain task run --cancel-after 200` against a 3-second blocking
+script is stopped in **591 ms** and settles `cancelled`; before the tool runner went asynchronous the same command ran **3996 ms and completed**. Resource ceilings are
+enforced by a job object through `tools/win32/job_host.py`, and the approval surface has a real prompt, `lain approve`, with the answer bound to the request digest.
+Measured at `9ba13a7`: **211 tests, 211 pass, 0 fail**; `node tools/verify.mjs` and `npm run verify` both **`checks=8 pass=8 fail=0`**; `--self-test` 8 of 8; `tsc`
+0 errors; `owned_violations: 0`.
+
+**Five ceilings are stated rather than implied.** `CEILINGS` carries one row per ceiling with `enforced_by` of `job_object`, `timer`, `buffer`, `counter` or `none`.
+Three are `none` and say why: `max_processes`, because `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` counts the process doing the spawning and a limit of 1 fails its first
+`CreateProcess` with `WinError 1816 ERROR_NOT_ENOUGH_QUOTA`; the per-process time ceiling, because `JOB_OBJECT_LIMIT_PROCESS_TIME` never fires at all; and the
+tool-call ceiling at the tool layer, which the task runner now enforces by spending one counter per invocation at admission. Job time is user-mode CPU time, so the
+overshoot is load-dependent — measured between 2.07 s and 8.13 s for a 1000 ms ceiling over an 8 s burn — and is recorded as a range rather than a number.
+
+**The house style is written down and applied.** `docs/implementation/code-style.md` records it, `AGENTS.md` points at it, and `src/tasks/states.mjs` is the reference
+implementation. The pass removed comments that restated the code and kept every measured fact and reasoned decision; a comment-stripping diff proved the code lines
+identical in each file it touched.
+
+**Every gate is green.** `npm run verify` passes with the secret scan required; there is no advisory skip left in any check.
 
 **Correction, 2026-11-08 evening: the model was never missing.** This record and the M-2 preflight both said the ollama daemon was not listening and no model was
 pulled. The daemon was indeed down, but the model — `qwen3-4b-instruct-2507:latest`, digest `1a2c1c9c3f3b02803c567e3b720166f6391eea1c0d5759e32c3655ba97355137`,
@@ -73,14 +89,19 @@ there the whole time and nobody had started the service. Recorded because a clai
 
 ## Next action
 
-V-1 is complete and its evidence is recorded, every gate is green, and the work is published. What remains needs a decision rather than a keystroke:
+V-2 is complete and its evidence is recorded, every gate is green, and the work past the published tip is local. What remains needs a decision rather than a keystroke:
 
-1. **The M-2 authorization question**: whether to build the model loop. The model-binding precondition is now **satisfied and measured** — the ollama daemon is serving
-   and the pinned model (`qwen3-4b-instruct-2507:latest`, digest `1a2c1c9c3f3b…`) answered a real call (see below). D-P4's blocking condition is therefore cleared;
-   what remains is the authorization itself. No model, network or native containment work is authorized yet.
-2. **The remaining V-1 gaps**, in the order they matter: reads are unrestricted, the network is unrestricted, no Job Object limits, no cancellation, and the
-   approval ledger has no prompt wired to it. Issues 10–12 in [`open-issues.md`](../implementation/open-issues.md).
-3. **D-P10**: `VISION.md` and the numeric-threshold rewrite of `ACCEPTANCE_TESTS.md`, which wait until the M-2 scope freezes.
+1. **Publishing the five V-2 commits.** The owner approved the push that produced `c204604` and I published it; `98e52d0`, `d2f152a`, `a6911bf`, `be1b501` and
+   `9ba13a7` came after that approval, so they are held. They are a fast-forward from `c204604` — no rewrite, no force, no tags — and `npm run verify` is green at
+   `9ba13a7`. A further push needs a further explicit approval.
+2. **The M-2 authorization question**: whether to build the model loop. The model-binding precondition is **satisfied and measured** — the ollama daemon is serving
+   and the pinned model (`qwen3-4b-instruct-2507:latest`, digest `1a2c1c9c3f3b…`) answered a real call. D-P4's blocking condition is cleared; what remains is the
+   authorization itself. No model, network or native containment work is authorized yet, and V-2 came first by the owner's instruction.
+3. **What V-2 did not do**, stated here rather than discovered later: reads are still unrestricted; the network is still policy-only; AppContainer/LPAC is
+   unmeasured; the supervisor is a soft target, so anything holding its PID can kill it and anything that can write the helper can change what it enforces — the
+   helper hash and the settle record make that visible, not impossible; `JOB_OBJECT_LIMIT_JOB_MEMORY` is wired but was never measured; and the supervisor's own
+   timeout path is not driven by a test.
+4. **D-P10**: `VISION.md` and the numeric-threshold rewrite of `ACCEPTANCE_TESTS.md`, which wait until the M-2 scope freezes.
 
 **Backups are same-disk only** (the machine has one physical disk), so `origin` is now the only genuinely off-machine copy; removable media remains the follow-up
 D-P1 named.
