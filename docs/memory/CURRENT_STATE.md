@@ -11,18 +11,23 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 
 ## Verified facts
 
-- This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **15 commits ahead of origin and unpushed**, and
+- This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **18 commits ahead of origin and unpushed**, and
   `git ls-remote origin refs/heads/main` still reports `7074c0db…`. No push has been performed, by instruction.
+- **`gitleaks` is installed** (8.30.1, `Gitleaks.Gitleaks` via `winget`; D-P9 approved 2026-11-08). The required security gate therefore produces a real verdict:
+  `npm run verify` **exits 0 with `checks=8 pass=8 fail=0`**, and the advisory skip that appeared in every earlier report is gone. Its first scan found two
+  historical findings — both the synthetic JWT fixture on `test/store/redaction.test.mjs:70` in commit `e01dbb2`, no real credential. The fixture's base64
+  obfuscation did not hide it, because gitleaks' `jwt-base64` rule decodes base64 before matching; the fixture is now assembled from its segments at runtime, and
+  `.gitleaksignore` carries exactly two fingerprints for the historical blob. A clean scan means no known pattern matched, not that the repository is proven clean.
 - **An implementation source tree exists.** `src/` contains the event store (`src/store/`), the host probe (`src/host/`), the resource budget and admission layer
   (`src/budget/`), core primitives (`src/core/`), the Policy Engine (`src/policy/`), task records (`src/tasks/`), the contained workspace (`src/exec/`), the tool
   registry and invocation path (`src/tools/`), the task runner (`src/agent/`) and the CLI (`src/cli/`). `tools/` holds the verification system, the probe command
   and the boundary checks.
 - **The build/check baseline exists and can fail.** `npm run check` runs eight checks (runtime, layout, format, types, tests, store-boundary, process-boundary,
-  repo-hygiene) plus an advisory secrets scan; `npm run check:self` proves each check can fail; `npm run verify` makes the secret scan required and **exits 1 while
-  `gitleaks` is absent**, so the required security gate cannot pass silently.
-- **Measured at `2cf60c9`:** 153 tests, 153 pass, 0 fail; `node tools/verify.mjs` → `checks=8 pass=7 fail=0 skipped_or_untestable=1` (the skip is the advisory
-  secrets check, `files_considered: 124`, `fallback_hits: 0`, "this is NOT a clean scan"); `--self-test` → 8 of 8; `tsc --noEmit` → 0 errors;
-  `npm run check:format-strict` → `owned_violations: 0`, `legacy_violations_not_enforced: 875`; `npm run verify` → exit 1.
+  repo-hygiene) plus the secret scan; `npm run check:self` proves each check can fail; `npm run verify` makes the secret scan required and now **passes**, because
+  gitleaks is installed.
+- **Measured at `0c5dca8`:** 153 tests, 153 pass, 0 fail; `npm run verify` → **`checks=8 pass=8 fail=0`, exit 0**; `node tools/verify.mjs --self-test` → 8 of 8;
+  `tsc --noEmit` → 0 errors; `npm run check:format-strict` → `owned_violations: 0`, `legacy_violations_not_enforced: 874`; `gitleaks detect` → `no leaks found`,
+  24 commits scanned.
 - **One authorized task now runs end to end without a model.** `lain task run --task examples/hello-task.json` admits a task through the Policy Engine
   (`allow_with_conditions`, arm A8, condition `workspace_only`), runs `run_script` once inside `<LAIN_HOME>/workspaces/<task_id>`, evaluates both acceptance
   criteria, records the run, and reaches `completed` with evidence. `lain task show <id>` and `lain store verify` prove it from the records afterwards.
@@ -35,13 +40,16 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
   and the path scrub is implemented. `SECURITY_MODEL.md` §10 states the measured containment ceiling rather than requiring container/VM isolation.
 - `DECISIONS.md` remains the canonical decision register and its accepted set is unchanged. **The event-store ownership model is a recommendation, not an accepted
   decision**; the implementation does not depend on the answer because it only stores and orders records. The M-2 preflight's decision register (D-P1…D-P10) is
-  likewise a set of recommendations: the user approved **V-1 only**, so D-P1 (push) and D-P9 (install gitleaks) remain unanswered and unacted on.
+  likewise a set of recommendations: the user approved **V-1** and then **D-P9**, so **D-P9 is answered and closed** while **D-P1 (push) remains unanswered and
+  unacted on**.
 
 ## Current position
 
 **M-1 (Lain Foundation) is complete and V-1 (One Authorized Task) is implemented and committed.** The local history is
-`2b90c9b` → `d12fda0` → `d5452f1` → `38a5e66` → `affdc67` → `1482359` → `7684519` → `e01dbb2` → `379b4f2` → `1ff3d688c3f0` → `36a3e18` → `01ac126`, all local,
-nothing pushed.
+`0c5dca8` → `55c27c1` → `2cf60c9` → `9fda0a2` → `2b90c9b` → `d12fda0` → `d5452f1` → `38a5e66` → `affdc67` → `1482359` → `7684519` → `e01dbb2` → `379b4f2` →
+`1ff3d688c3f0` → `36a3e18` → `01ac126`, all local, nothing pushed.
+
+**Every gate is green for the first time.** `npm run verify` passes with the secret scan required; there is no advisory skip left in any check.
 
 ## Constraints to preserve
 
@@ -58,11 +66,12 @@ nothing pushed.
 
 V-1 is complete and its evidence is recorded; the next work needs a decision rather than a keystroke. The open items, in the order they block things:
 
-1. **D-P1 — off-device protection.** 13 commits exist in exactly one place. Pushing them to `origin` is the only genuinely off-machine copy available without
-   removable media, and it needs explicit permission.
-2. **D-P9 — install gitleaks**, without which `npm run verify` cannot pass and the secret-scan gate stays advisory.
-3. **The M-2 authorization question**: whether to build the model loop, which additionally needs the model-binding spike (the ollama daemon is not listening and
+1. **D-P1 — off-device protection.** 18 commits exist in exactly one place, on one disk. Pushing them to `origin` is the only genuinely off-machine copy
+   available without removable media, and it needs explicit permission.
+2. **The M-2 authorization question**: whether to build the model loop, which additionally needs the model-binding spike (the ollama daemon is not listening and
    no model is pulled, so it cannot be tested today).
+3. **The remaining V-1 gaps**, in the order they matter: reads are unrestricted, the network is unrestricted, no Job Object limits, no cancellation, and the
+   approval ledger has no prompt wired to it. Issues 10–12 in [`open-issues.md`](../implementation/open-issues.md).
 
 ## Evidence
 
