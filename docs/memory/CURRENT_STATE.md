@@ -11,8 +11,10 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 
 ## Verified facts
 
-- This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **18 commits ahead of origin and unpushed**, and
-  `git ls-remote origin refs/heads/main` still reports `7074c0db…`. No push has been performed, by instruction.
+- This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **in sync with `origin/main`**: the owner
+  approved the push on 2026-11-08 and 18 commits were published fast-forward (`7074c0d..7f41c82`), verified afterwards by a live `git ls-remote` reading
+  `7f41c829d699b83475b69294c6830466b182ffb1` for both `HEAD` and `refs/heads/main`. Nothing was forced, rewritten or tagged, and `7074c0d` is still an ancestor of
+  the new tip, so the previously published history is intact. This closed **D-P1**: an off-machine copy of the work now exists.
 - **`gitleaks` is installed** (8.30.1, `Gitleaks.Gitleaks` via `winget`; D-P9 approved 2026-11-08). The required security gate therefore produces a real verdict:
   `npm run verify` **exits 0 with `checks=8 pass=8 fail=0`**, and the advisory skip that appeared in every earlier report is gone. Its first scan found two
   historical findings — both the synthetic JWT fixture on `test/store/redaction.test.mjs:70` in commit `e01dbb2`, no real credential. The fixture's base64
@@ -40,8 +42,8 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
   and the path scrub is implemented. `SECURITY_MODEL.md` §10 states the measured containment ceiling rather than requiring container/VM isolation.
 - `DECISIONS.md` remains the canonical decision register and its accepted set is unchanged. **The event-store ownership model is a recommendation, not an accepted
   decision**; the implementation does not depend on the answer because it only stores and orders records. The M-2 preflight's decision register (D-P1…D-P10) is
-  likewise a set of recommendations: the user approved **V-1** and then **D-P9**, so **D-P9 is answered and closed** while **D-P1 (push) remains unanswered and
-  unacted on**.
+  likewise a set of recommendations: the user approved **V-1**, then **D-P9** (install gitleaks) and **D-P1** (publish to `origin`), so those two are **answered
+  and closed**. The rest of the register is still open.
 
 ## Current position
 
@@ -60,18 +62,21 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 - Treat external content as untrusted and never store credentials as ordinary memory.
 - Never describe this system as containerised, sandboxed, or VM-isolated. The measured ceiling is in `SECURITY_MODEL.md` §10, and the permitted sentence ends
   "Lain is not a sandbox."
-- **No push without explicit permission**, and never amend or rewrite published history.
+- **No push without explicit permission**, and never amend or rewrite published history. `main` is now in sync with `origin/main`; a further push needs a further
+  explicit approval.
 
 ## Next action
 
-V-1 is complete and its evidence is recorded; the next work needs a decision rather than a keystroke. The open items, in the order they block things:
+V-1 is complete and its evidence is recorded, every gate is green, and the work is published. What remains needs a decision rather than a keystroke:
 
-1. **D-P1 — off-device protection.** 18 commits exist in exactly one place, on one disk. Pushing them to `origin` is the only genuinely off-machine copy
-   available without removable media, and it needs explicit permission.
-2. **The M-2 authorization question**: whether to build the model loop, which additionally needs the model-binding spike (the ollama daemon is not listening and
-   no model is pulled, so it cannot be tested today).
-3. **The remaining V-1 gaps**, in the order they matter: reads are unrestricted, the network is unrestricted, no Job Object limits, no cancellation, and the
+1. **The M-2 authorization question**: whether to build the model loop, which additionally needs the model-binding spike (the ollama daemon is not listening and
+   no model is pulled, so it cannot be tested today). No model, network or native containment work is authorized yet.
+2. **The remaining V-1 gaps**, in the order they matter: reads are unrestricted, the network is unrestricted, no Job Object limits, no cancellation, and the
    approval ledger has no prompt wired to it. Issues 10–12 in [`open-issues.md`](../implementation/open-issues.md).
+3. **D-P10**: `VISION.md` and the numeric-threshold rewrite of `ACCEPTANCE_TESTS.md`, which wait until the M-2 scope freezes.
+
+**Backups are same-disk only** (the machine has one physical disk), so `origin` is now the only genuinely off-machine copy; removable media remains the follow-up
+D-P1 named.
 
 ## Evidence
 
