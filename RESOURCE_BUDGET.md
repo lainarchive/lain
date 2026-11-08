@@ -1,9 +1,16 @@
 # RESOURCE_BUDGET
 
-**Status:** proposed specification with current measurements. The **probe and
-admission layer are not implemented yet** (M-1 Step 3); this document is the
-specification they will implement, and every number is labelled with how it was
-obtained.
+**Status:** the probe and admission layer **are implemented** (M-1 Step 3,
+committed after `7684519`); this document is both the specification they
+implement and the record of the numbers they enforce. Every number is labelled
+with how it was obtained.
+
+**Where the numbers live now.** The table below is the *documented* record. The
+limit values admission actually enforces live in `src/budget/index.mjs` under
+three named profiles, and each one carries its own `kind` and a note saying where
+it came from. The probe that produces the measurements lives in
+`src/host/probe.mjs` and is run with `npm run probe`. Where this document and the
+code disagree, the code is what runs and the disagreement is a bug in this file.
 
 **Measurement convention.** Every measurement carries four things: the value, the
 method, the time it was taken, and the machine it was taken on. A value copied
@@ -68,8 +75,14 @@ three are **HIST**:
 
 **No measurement exists** for: model load time, tokens per second, tool-call
 conformance rate of a small model, peak RSS of any Lain process, or the CPU cost
-of prompt evaluation. Those are the numbers Step 3's probe and the M-2 evaluation
-work exist to produce; nothing in this repository may assume them.
+of prompt evaluation. Those are the numbers the M-2 evaluation work exists to
+produce; nothing in this repository may assume them.
+
+**A fresh measurement taken while implementing Step 3** (`npm run probe`,
+2026-11-08T20:00:53Z) agreed with the table above on every field it covers and
+added one: SQLite 3.53.4 through Node's built-in `node:sqlite`. Free memory was
+7.22 GiB at that moment against 7.99 GiB earlier — the same kind of movement the
+`HIST` warning exists for.
 
 ## 3. Configured limits (CFG)
 
@@ -106,29 +119,43 @@ measurement is how a project starts believing a number nobody took.
 
 ## 6. How resources are discovered and how admission works
 
-**Specification for Step 3** (not implemented):
+**Implemented** (M-1 Step 3). The behaviour below is code, not intent:
+`src/host/probe.mjs`, `src/budget/index.mjs`, `npm run probe`.
 
-1. **Probe** — a single command (`npm run probe`) collects exactly the fields in
-   §1, plus the workspace volume's free space, and prints versioned JSON. GPU
-   data is best-effort: when `nvidia-smi` is absent or fails, the field is
-   `unavailable` with a reason, never a guess and never zero.
-2. **Classify** — every field is emitted with its label (`measured`,
-   `unavailable`) so a consumer cannot mistake absence for zero.
-3. **Admit** — admission compares a request
-   (`{model_bytes, context_tokens, tool_slots, agent_slots, disk_bytes}`) against
-   the configured limits and the freshly measured free resources. Three outcomes:
-   `allow`, `deny` (with the rule that refused it), `indeterminate` (a required
-   measurement is unavailable).
+1. **Probe** — `npm run probe` collects exactly the fields in §1 plus the
+   workspace volume's free space and prints versioned JSON (`--text` for a
+   readable summary). GPU data is best-effort: when `nvidia-smi` is absent or
+   fails, or when `LAIN_DISABLE_GPU_PROBE=1` is set, the field is `unavailable`
+   with a reason — never a guess and never zero. The record carries
+   `probe_schema_version` and `probed_at`, so a consumer knows how old it is.
+2. **Classify** — every field is emitted with its status (`measured`,
+   `unavailable`, `unsupported`) so absence cannot be read as zero. The
+   distinction matters in one specific case: "no GPU data" leads to
+   `indeterminate` while "GPU measured, 200 MiB free" leads to a denial.
+3. **Admit** — `admit(budget, request)` compares a request
+   (`model_memory_bytes`, `context_tokens`, `tool_subprocesses`,
+   `live_task_agents`, `store_growth_bytes`) against the configured limits **and**
+   the freshly measured free resources. Three outcomes: `admit`, `deny` (with the
+   `reason_code` that refused it), `indeterminate` (a required measurement is
+   missing). `deny` and `indeterminate` are different answers and are never
+   collapsed: one means "no", the other means "Lain cannot tell".
 4. **Never adapt silently.** Admission never reduces a context window, substitutes
    a smaller model, lowers precision, or changes an execution mode to make a
-   request fit. Each of those changes what a result means, so each one requires a
-   new decision — and the refusal is recorded with its reason.
+   request fit. The refusal is returned with its reason instead. A test asserts
+   that a refused context request does not come back with a smaller one.
 5. **Independent of the model.** Admission is deterministic code. A model cannot
    argue its way past a limit, and no model output is an input to the check.
-6. **Profiles** — three named profiles ship as configuration, not as code paths:
-   `minimal` (one agent, no background work, model loaded on demand),
-   `development` (the §3 limits), `workload` (limits raised deliberately, with the
-   raised values recorded in the run). The historical i5-7500/RTX 3050 profile is
-   the default *because it was measured here*, not as a universal target: on any
-   other machine the probe's measurements govern and the defaults only apply where
-   a measurement is missing.
+6. **Profiles** — three named profiles ship as data, not as code paths:
+   `minimal-background` (one agent, one tool slot, no delegation),
+   `standard-development` (the §3 limits), and `higher-resource-workload`
+   (deliberately raised data budgets, with the same VRAM constraint). The
+   historical i5-7500/RTX 3050 profile is the starting point *because it was
+   measured here*, not as a universal target: on any other machine the probe's
+   measurements govern, and a configured budget can only tighten what a
+   measurement allows — never widen it. A test asserts exactly that.
+
+**Verified behaviour worth stating.** With a GPU reading of 5389 MiB free,
+admission allows a 3 GiB model, refuses 5 GiB as `VRAM_INSUFFICIENT` (usable VRAM
+is `5389 − 768 = 4621 MiB`), and allows 4.5 GiB because it genuinely fits. When
+the GPU cannot be read at all, the same request returns `indeterminate` with
+`GPU_UNMEASURED` rather than a denial or an approval.
