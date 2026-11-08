@@ -217,14 +217,15 @@ test('AT-V1-TOOL-08 (real execution): run_script runs a real process inside the 
   }
 });
 
-test('AT-V1-TOOL-10: a script may be given as an array of lines, and the array is the same program', () => {
+test('AT-V1-TOOL-10: a script may be given as an array of lines, and the array is the same program', async () => {
   const dir = tempDir();
   try {
     const workspace = createWorkspace({ task_id: 'task-1', root: dir });
     workspace.create();
     const tool = createRunScriptTool({ workspace });
     const ctx = { budget: { max_wall_ms: 10_000, max_output_bytes: 4096 }, task_id: 'task-1', decision_id: 'd1' };
-    const result = tool.run({ script: ['const answer = 6 * 7;', 'console.log(answer);', ''] }, ctx);
+    // run() is asynchronous now so --cancel-after can interrupt a script.
+    const result = await tool.run({ script: ['const answer = 6 * 7;', 'console.log(answer);', ''] }, ctx);
     assert.equal(result.exit_code, 0);
     assert.equal(String(result.stdout).trim(), '42');
     assert.match(readFileSync(join(dir, 'task-1', 'task-script.mjs'), 'utf8'), /const answer = 6 \* 7;\nconsole\.log\(answer\);\n/);
