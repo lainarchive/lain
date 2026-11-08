@@ -135,6 +135,7 @@
  * @property {(relativePath: string) => string} file
  * @property {(relativePath: string, contents: string) => {path: string, bytes: number}} write
  * @property {(spec: {command: string, args?: string[], timeoutMs: number, maxOutputBytes: number, cwd?: string}) => Record<string, unknown>} run
+ * @property {(spec: {command: string, args?: string[], timeoutMs: number, maxOutputBytes: number, cwd?: string}) => Promise<Record<string, unknown>>} runAsync
  * @property {() => ArtifactRef[]} contents
  * @property {() => {removed: string, exists: boolean}} destroy
  *

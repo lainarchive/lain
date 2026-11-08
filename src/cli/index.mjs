@@ -2,12 +2,16 @@
 /**
  * `lain` — the command line for the first execurable milestone.
  *
- * Three commands, deliberately: run one task, look at one task, verify the log.
- * There is no REPL, no interactive mode and no model call.
+ * Four commands, deliberately: run one task, look at one task, verify the log,
+ * answer one approval question. There is no REPL and no model call; `lain
+ * approve` is the only command that reads stdin, and only to answer a question it
+ * has just displayed.
  *
- *   lain task run --task <file.json> [--allow <tool_id>] [--keep-workspace] [--json]
+ *   lain task run --task <file.json> [--allow <tool_id>] [--by <flag_source>] [--cancel-after <ms>]
+ *                 [--keep-workspace] [--json]
  *   lain task show <task_id> [--json]
  *   lain store verify [--json]
+ *   lain approve <approval_id> [--list] [--answer granted|denied --by <name> --digest <hex>] [--json]
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -20,6 +24,7 @@ import { createRunScriptTool } from '../tools/run-script.mjs';
 import { contractFromJson, createTaskRunner } from '../agent/task-runner.mjs';
 import { open as openEventStore } from '../store/index.mjs';
 import { isEntryPoint } from '../../tools/check/lib/report.mjs';
+import { approveCommand } from './commands/approve.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -36,12 +41,17 @@ export function statePaths(env = process.env) {
     log: join(base, 'events.db'),
     tasks: join(base, 'tasks.db'),
     workspaces: join(base, 'workspaces'),
+    approvals: join(base, 'approvals.json'),
   };
 }
 
 /** @param {string[]} argv */
 export function parseArgs(argv) {
-  const [group, command, ...rest] = argv;
+  const [group, second, ...tail] = argv;
+  // The second token is a command only when it reads as one: `lain approve --list`
+  // is a group followed by a flag, not a two-word command called "--list".
+  const command = second !== undefined && !second.startsWith('--') ? second : undefined;
+  const rest = command === undefined ? argv.slice(1) : tail;
   /** @type {Record<string, string|boolean>} */
   const flags = {};
   const positional = [];
@@ -63,9 +73,14 @@ export function parseArgs(argv) {
 
 const USAGE = `lain — one bounded, authorized task
 
-  lain task run --task <file.json> [--allow <tool_id>] [--keep-workspace] [--json]
+  lain task run --task <file.json> [--allow <tool_id>] [--by <flag_source>] [--cancel-after <ms>]
+                [--keep-workspace] [--json]
   lain task show <task_id> [--json]
   lain store verify [--json]
+  lain approve <approval_id> [--json]
+  lain approve --list [--json]
+  lain approve <approval_id> --answer granted|denied --by <name> --digest <hex> [--json]
+  lain approve <approval_id> --allow [--json]
 `;
 
 /** @param {string} path */
@@ -103,6 +118,31 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
     const events = openEventStore({ path: paths.log, producer: 'cli' });
     const taskStore = openTaskStore({ path: paths.tasks });
     try {
+      // `--cancel-after <ms>` asks for a stop that long after execution starts.
+      // Validated here rather than passed through, because a typo like
+      // `--cancel-after soon` must not quietly become "no cancellation" — a run
+      // that looks like it honoured a limit it never received is worse than one
+      // that refuses the flag. Parsed strictly: digits only, positive, finite.
+      //
+      // One caveat worth knowing while `run_script` is still synchronous: a
+      // request made mid-tool cannot be turned into an in-process action, so the
+      // run settles `cancelled` without the invocation's result ever being read
+      // (it reports `invocation: null`) and the workspace is left on disk for
+      // the operator to look at. Measured on a 3 s blocking script with
+      // `--cancel-after 200`: state `cancelled`, wall 729 ms, exit 1, no result.
+      // That is the right terminal state reached the awkward way; a longer
+      // blocking tool is the case this is not yet proof against.
+      let cancelAfter;
+      if (flags['cancel-after'] !== undefined) {
+        const raw = flags['cancel-after'];
+        const ms = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+        if (!Number.isFinite(ms) || ms <= 0) {
+          io.err(`usage: --cancel-after takes a positive whole number of milliseconds, not ${String(raw)}`);
+          return EXIT.usage;
+        }
+        cancelAfter = ms;
+      }
+
       const registry = createRegistry({ rules: DEFAULT_RULES });
       const runner = createTaskRunner({
         taskStore,
@@ -111,10 +151,20 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
         rules: DEFAULT_RULES,
         workspaceRoot: paths.workspaces,
         makeTool: (workspace) => createRunScriptTool({ workspace }),
-        approvals: flags.allow ? { allow: [String(flags.allow)] } : {},
+        // A `--allow` grant is recorded in the ledger like any other approval, so
+        // the run leaves behind what it was granted and who granted it — a flag,
+        // not a person. `path` is what makes the record outlive the process.
+        approvals: flags.allow
+          ? { allow: [String(flags.allow)], by: flags.by ? String(flags.by) : null, path: paths.approvals }
+          : {},
       });
 
-      const outcome = await runner.run({ contract, tool_id: file.tool_id, tool_arguments: file.tool_arguments });
+      const outcome = await runner.run({
+        contract,
+        tool_id: file.tool_id,
+        tool_arguments: file.tool_arguments,
+        ...(cancelAfter === undefined ? {} : { cancel_after_ms: cancelAfter }),
+      });
 
       if (flags.json) log(JSON.stringify(outcome, null, 2));
       else printOutcome(log, outcome);
@@ -175,6 +225,18 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
     } finally {
       events.close();
     }
+  }
+
+  if (group === 'approve') {
+    // `lain approve <id>` is one word plus an id, so the id arrives in the
+    // "command" token: parseArgs is shaped for two-word commands, and this is the
+    // one command whose verb is a single word.
+    return approveCommand({
+      positional: command ? [command, ...positional] : positional,
+      flags,
+      io,
+      approvalsPath: paths.approvals,
+    });
   }
 
   io.err(USAGE);

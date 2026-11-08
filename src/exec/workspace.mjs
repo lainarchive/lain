@@ -14,9 +14,9 @@
  * refusal is a recorded outcome rather than an exception nobody sees.
  */
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { LainError } from '../core/errors.mjs';
+import { runInJob, runInJobSync } from './job.mjs';
 
 export class WorkspaceError extends LainError {
   /**
@@ -90,7 +90,12 @@ export function scrubPath(workspace, candidate, opts = {}) {
 /**
  * A workspace handle for one task.
  *
- * @param {{root: string, task_id: string, forbidden?: string[], now?: () => number}} options
+ * `helperPath` and `python` exist so a test can describe a broken machine - a
+ * missing supervisor, a missing interpreter - without breaking this one. They
+ * are how the fail-closed path is exercised rather than assumed.
+ *
+ * @param {{root: string, task_id: string, forbidden?: string[], now?: () => number,
+ *   helperPath?: string, python?: string}} options
  * @returns {import('../core/types.mjs').WorkspaceHandle}
  */
 export function createWorkspace(options) {
@@ -98,6 +103,47 @@ export function createWorkspace(options) {
   const dir = join(root, options.task_id);
   const temp = join(dir, '.tmp');
   const forbidden = options.forbidden ?? [];
+
+  /** @param {Record<string, any>} spec @param {string} cwd */
+  const jobSpec = (spec, cwd) => ({
+    command: spec.command,
+    args: spec.args ?? [],
+    cwd,
+    outputBytes: spec.maxOutputBytes,
+    supervisorMs: spec.timeoutMs,
+    env: buildEnv({ workspace: dir, temp }),
+    limits: { job_ms: spec.timeoutMs },
+    // Registered against this, so the cancel path can find the supervisor
+    // while the tool is still running.
+    task_id: options.task_id,
+    helperPath: options.helperPath,
+    python: options.python,
+  });
+
+  /** @param {Record<string, any>} spec @param {string} cwd @param {Record<string, any>} result */
+  const shape = (spec, cwd, result) => {
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    return {
+      status: result.status === 'ok' ? 'ok'
+        : result.status === 'exit_nonzero' ? 'exit_nonzero' : 'error',
+      exit_code: result.exit_code,
+      error_code: result.error_code,
+      stdout: stdout.slice(0, spec.maxOutputBytes),
+      stderr: stderr.slice(0, spec.maxOutputBytes),
+      output_truncated: result.output_truncated
+        || Buffer.byteLength(stdout, 'utf8') > spec.maxOutputBytes,
+      duration_ms: result.duration_ms,
+      cwd,
+      pid: result.pid,
+      limits_applied: result.limits_applied,
+      limits_refused: result.limits_refused,
+      killed_by: result.killed_by,
+      kill_reason: result.kill_reason,
+      job_name: result.job_name,
+      helper_sha256: result.helper_sha256,
+    };
+  };
 
   return {
     path: dir,
@@ -148,37 +194,36 @@ export function createWorkspace(options) {
     },
 
     /**
-     * Run one process. `child_process` is imported here and nowhere else outside
-     * this module, which is what `tools/check/process-boundary.mjs` verifies: a
-     * second call site would mean a code path that runs a program without the
-     * environment allow-list, the timeout and the output ceiling.
+     * Run one process inside a Windows job object, through src/exec/job.mjs and
+     * tools/win32/job_host.py.
+     *
+     * `timeoutMs` is applied twice on purpose: as the job's CPU-time ceiling and
+     * as the supervisor's wall clock. The job ceiling alone would not bound a
+     * tool that sleeps, because it is charged in user-mode CPU time.
+     *
+     * A run whose ceilings could not be applied comes back as `error` with
+     * `limits_refused` filled in, and is never retried without them: falling
+     * back to unenforced execution is the one outcome this seam exists to
+     * prevent.
      *
      * @param {{command: string, args?: string[], timeoutMs: number, maxOutputBytes: number, cwd?: string}} spec
      */
     run(spec) {
-      const started = Date.now();
       const cwd = spec.cwd ? this.file(spec.cwd) : dir;
-      const result = spawnSync(spec.command, spec.args ?? [], {
-        cwd,
-        env: buildEnv({ workspace: dir, temp }),
-        encoding: 'utf8',
-        timeout: spec.timeoutMs,
-        windowsHide: true,
-        shell: false,
-        maxBuffer: Math.max(spec.maxOutputBytes * 2, 1_048_576),
-      });
-      const stdout = result.stdout ?? '';
-      const stderr = result.stderr ?? '';
-      return {
-        status: result.error ? 'error' : result.status === 0 ? 'ok' : 'exit_nonzero',
-        exit_code: typeof result.status === 'number' ? result.status : null,
-        error_code: result.error ? /** @type {NodeJS.ErrnoException} */ (result.error).code ?? 'SPAWN_FAILED' : null,
-        stdout: stdout.slice(0, spec.maxOutputBytes),
-        stderr: stderr.slice(0, spec.maxOutputBytes),
-        output_truncated: Buffer.byteLength(stdout, 'utf8') > spec.maxOutputBytes,
-        duration_ms: Date.now() - started,
-        cwd,
-      };
+      return shape(spec, cwd, runInJobSync(jobSpec(spec, cwd)));
+    },
+
+    /**
+     * The same run without holding the event loop, which is what a cancellable
+     * tool needs: while the promise is pending the supervisor pid is published,
+     * so `--cancel-after` has something to kill. The synchronous face cannot
+     * offer that - by the time spawnSync returns, the run is already over.
+     *
+     * @param {{command: string, args?: string[], timeoutMs: number, maxOutputBytes: number, cwd?: string}} spec
+     */
+    async runAsync(spec) {
+      const cwd = spec.cwd ? this.file(spec.cwd) : dir;
+      return shape(spec, cwd, await runInJob(jobSpec(spec, cwd)));
     },
 
     /** Everything created inside the workspace, by relative path. */
