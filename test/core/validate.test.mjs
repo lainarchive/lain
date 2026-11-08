@@ -31,7 +31,7 @@ test('requireString enforces type, emptiness, length and pattern', () => {
   assert.equal(requireString('ABC-1', 'x', { pattern: /^[A-Z]+-\d$/ }), 'ABC-1');
   assert.throws(() => requireString('', 'x'), StoreError);
   assert.throws(() => requireString(5, 'x'), StoreError);
-  assert.throws(() => requireString('abcd', 'x', { maxLength: 3 }), StoreError);
+  assert.throws(() => requireString('abcd', 'x', { max: 3 }), StoreError);
   assert.throws(() => requireString('abc', 'x', { pattern: /^\d+$/ }), StoreError);
 });
 
