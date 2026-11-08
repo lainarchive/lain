@@ -179,3 +179,46 @@ test('AT-V1-E2E-06b: usage is reported when no command is given', () => {
     assert.equal(run.status, 2, 'no command is a usage error');
   });
 });
+
+test('AT-V2-CAN-05 (acceptance): `--cancel-after` stops a running tool, and says so honestly', () => {
+  withHome((home) => {
+    // Six seconds of busy loop, cancelled at 1500 ms. If the run takes anywhere
+    // near six seconds the cancellation did not reach the tool, whatever the
+    // final state says.
+    const file = writeTask(home, 'slow.json', {
+      objective: 'block long enough that a cancellation has to interrupt it',
+      acceptance_criteria: [
+        { id: 'c1', statement: 'the script exited zero', check: { kind: 'assertion', exit_code: 0 }, required: true },
+      ],
+      capabilities: ['workspace.write', 'process.spawn'],
+      effect_class: 'local_reversible',
+      budget: { max_tool_calls: 1, max_wall_ms: 60_000 },
+      tool_id: 'run_script',
+      tool_arguments: {
+        script: ['const until = Date.now() + 6000;', 'while (Date.now() < until) {}', 'console.log("blocked");'],
+      },
+    });
+
+    const started = Date.now();
+    const run = lain(['task', 'run', '--task', file, '--json', '--cancel-after', '1500'], home);
+    const elapsed = Date.now() - started;
+
+    // Exit 3, not 4: the tool did not fail, it was stopped.
+    assert.equal(run.status, 3, `a cancelled run is a refusal, got ${run.status}\n${run.stderr}`);
+    // This is the assertion the milestone actually rests on, and it is why the
+    // run is timed rather than inspected. Before the job handle was wired into
+    // the CLI the outcome still read `cancelled` — but the tool had run to
+    // completion and the run had been stopped by this process crashing, which
+    // also left a partial JSON document on stdout. A state assertion alone would
+    // have passed through all of that.
+    assert.ok(elapsed < 5000, `the tool has to be interrupted, not waited out: ${elapsed} ms`);
+
+    const outcome = JSON.parse(run.stdout);
+    assert.equal(outcome.state, 'cancelled');
+    assert.equal(outcome.result, null, 'a cancelled task has no result');
+    assert.equal(run.stdout.trimEnd().endsWith('}'), true, 'stdout stays one JSON document even when the run is stopped');
+
+    const history = JSON.parse(lain(['task', 'show', outcome.task_id, '--json'], home).stdout).history;
+    assert.deepEqual(history.map((row) => row.to), ['submitted', 'admitted', 'running', 'cancelling', 'cancelled']);
+  });
+});
