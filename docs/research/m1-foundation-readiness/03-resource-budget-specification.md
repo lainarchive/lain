@@ -21,7 +21,7 @@
 | Free VRAM range observed | **835 MiB → 3 629 MiB** across sessions (a 2.8 GB swing outside Lain's control) | HIST (audit G-4) | sample before each model load |
 | OS | Windows 11 Pro; user token **Medium** integrity, UAC-filtered; `SeImpersonatePrivilege` and `SeIncreaseQuotaPrivilege` **absent**; Developer Mode ON | HIST §6 | `whoami /priv` |
 | Storage | C: ~113.5 GB free at audit time; D: 0.4 GB unusable stub | HIST | `Get-PSDrive` |
-| Toolchain present | `node v24.21.0`, `Python 3.15.0`, `git 2.56.0.windows.2`, ollama client 0.40.4 (no daemon listening); **`cargo`/`rustc` absent** | SESS | re-probe at session start |
+| Toolchain present | `node v24.21.0`, `Python 3.15.0`, `git 2.56.0.windows.2`, ollama client 0.40.4 (no daemon listening); **`cargo`/`rustc` absent** | SESS | re-probe at session start · **the daemon half was resolved 2026-11-08: it serves, and the pinned model was already on disk** (see `RESOURCE_BUDGET.md`) |
 
 **ESR.** These are *environment details*, not a specification. Every environment-specific recommendation elsewhere in the research must re-measure and **timestamp** rather than inherit these values (Phase 7 §5 rule).
 
