@@ -55,3 +55,10 @@ Security, cost, privacy, reliability, quality, and provenance are mandatory thro
 
 ## Explicitly deferred
 Full swarms, advanced GraphRAG, dedicated graph databases, model training, broad plugin marketplace, mobile, remote multi-user hosting, unattended external operations, and production self-modification.
+
+## Reconciliation: future integration work
+
+Future integration work, without changing the existing foundation milestone:
+- Orchestration: collaboration records, independent review, dispute escalation, and bounded blocker handling.
+- Extensibility: Mods integrated through the existing extension contracts, registry, isolation, and lifecycle.
+- Intelligence and evaluation: capability effectiveness and artifact-quality evaluation shared across engineering, Creator Engine, and Labs.

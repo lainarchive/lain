@@ -146,3 +146,14 @@ No candidate becomes a permanent commitment without a proof of concept or docume
 The first useful release should provide a CLI, one configured model provider, persistent sessions, one reliable agent, approved tool execution, basic tasks, policy enforcement, inspectable events, interruption/recovery, basic memory, structured logs, and usage/cost tracking.
 
 Defer full swarms, advanced GraphRAG, model training, marketplace, desktop/mobile, unattended business operations, and self-modifying production Core.
+
+## Reconciliation: collaboration, mods, and quality
+
+### Collaboration
+A Collaboration Service owns communication records, discussions, broadcasts, reviews, and disputes. It does not own task state, agent execution state, approvals, or canonical decisions. It uses existing identity, task, event, memory, and policy contracts. Agent messages and claimed approvals never grant execution authority.
+
+### Mods
+Mods are a distinct extension component for approved interface, workspace, and bounded behavior contributions. They use the existing extension contracts, registry, lifecycle, execution isolation, and Policy Engine. They cannot modify policy enforcement, audit integrity, secrets, or spending limits.
+
+### Bounded continuation and capability quality
+The Task Manager owns task state. A blocked task may checkpoint and pause while unrelated, already-authorized work continues within its own scope, dependencies, deadlines, and resource limits. Capability selection must consider relevance, compatibility, permissions, cost, latency, resources, reliability, and measured effectiveness. Deliverable quality must be evaluated, not inferred from capability invocation.
