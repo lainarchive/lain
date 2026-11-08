@@ -8,6 +8,7 @@ separate from the canonical project documents at the repository root:
 | --- | --- |
 | `README.md` (this file) | Index and status of the implementation documentation. |
 | `build-and-verification.md` | The build/check system: what runs, what each check proves, what is not covered. |
+| `event-store.md` | The event store as implemented: guarantees, known limitations, the enforced store/policy boundary. |
 | `open-issues.md` | Known limitations, unresolved guarantees and the decisions they need. |
 | `../RESOURCE_BUDGET.md` | Measured hardware, configured limits and the admission rules that use them. |
 | `../docs/memory/CURRENT_STATE.md` | What is true about the repository right now. |
@@ -23,7 +24,7 @@ bug in the canonical document — report it rather than quietly fixing one side.
 | --- | --- |
 | Build and verification environment | implemented (`npm run check`, `npm run verify`, `npm run check:self`) |
 | Core primitives (ids, canonical JSON, validation, errors) | implemented with unit tests |
-| Event store | not implemented (M-1 Step 2) |
+| Event store | implemented (`e01dbb2`), 37 store tests, 37 pass — see `event-store.md` |
 | Host probe and resource admission | not implemented (M-1 Step 3) |
 | Policy decision contract | not implemented |
 | Task records | not implemented |
