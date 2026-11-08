@@ -71,17 +71,20 @@ export const CEILINGS = [
   },
   {
     name: 'tool_calls',
-    enforced_by: 'none',
+    enforced_by: 'counter',
     mechanism:
-      'A counter is intended and the check exists - src/tools/invoke.mjs:80 denies with TOOL_CALL_BUDGET when '
-      + 'budget.remaining_tool_calls <= 0 - but the counter is never advanced. src/agent/task-runner.mjs:374-378 '
-      + 'builds a fresh budget object per invocation and nothing in src/ decrements it, so a positive ceiling is '
-      + 'compared and can never be reached by spending calls, and only a contract ceiling of 0 denies anything. '
-      + 'Recorded as unenforced because the fix belongs to the tool runner, not to this seam.',
+      'src/agent/task-runner.mjs owns the counter: :277 starts toolCallsMade, :292 hands the admission decision '
+      + '"exceeded: toolCallsMade >= max_tool_calls", :447 subtracts it from remaining_tool_calls, and :482 spends it '
+      + 'once per completed invocation. src/tools/invoke.mjs:80 denies with TOOL_CALL_BUDGET when remaining_tool_calls '
+      + '<= 0, so a ceiling of 0 refuses before a workspace exists. What the mechanism does not yet reach: one task run '
+      + 'makes one invocation, so the counter climbs to 1 and stops. A ceiling of 0 binds; any ceiling above it is '
+      + 'compared and never spent up to. That sentence belongs here, because a reader who takes "max_tool_calls: 8" '
+      + 'for a budget over eight calls is reading a number that nothing will ever refuse them.',
     measured:
-      'a search of src/ for "remaining_" finds two typedef comments, the read at src/tools/invoke.mjs:80 and the '
-      + 'write at src/agent/task-runner.mjs:375; no decrement exists. TOOL_CALL_BUDGET occurs exactly once in the '
-      + 'repository, that same check, so no other code path enforces or tests this ceiling.',
+      'a task with budget.max_tool_calls 0 settled state=failed, reason=BUDGET_EXCEEDED, outcome=deny_budget, '
+      + 'workspace empty, and <LAIN_HOME>/workspaces was never created - the refusal lands before the effect. '
+      + 'normaliseBudget (src/tasks/contract.mjs:136-141) is Math.min(n, 100) over a floored non-negative integer, so '
+      + '0 is reachable and 100 is the cap. The positive case is unmeasured because the counter cannot get past 1.',
   },
 ];
 

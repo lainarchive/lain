@@ -2,6 +2,14 @@
 
 These instructions apply to all work in this repository.
 
+## Code style
+
+Read `docs/implementation/code-style.md` before writing or editing code, and follow
+it. It is short, and it is not a lint rule — the format gate checks line length and
+whitespace, not voice. Two things it exists to prevent: comments that restate the
+line beneath them, and the measured facts being cut for the sake of a shorter file.
+`src/tasks/states.mjs` and `src/store/lock.mjs` are the reference for the shape.
+
 # Context Management Protocol
 
 Actively manage working context throughout each project session. Conversation history is temporary; the current repository and approved project records are the persistent sources of truth. Use concise, task-relevant context and reconstruct state from evidence instead of relying on a long conversation summary.

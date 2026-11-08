@@ -1,24 +1,18 @@
-/**
- * `lain approve` — ask and answer one bound approval question.
- *
- * The point of this command is that a grant is evidence. It is not a button that
- * makes a refusal go away, so:
- *
- *   - The question is presented whole: action, tool, target, effect class and the
- *     request digest. An approval you cannot read is not an approval you gave.
- *   - An answer must carry the digest of the question it answers. `--answer`
- *     refuses without one, and a digest that belongs to a different question is
- *     refused, not reused (a stale grant is not a grant).
- *   - `--allow` still exists for non-interactive use and is recorded as a
- *     flag-shaped grant (`decided_by: 'flag:...'`), never as a human answer. The
- *     log has to be able to say whether a person agreed or a flag did.
- *   - A window that closed is `deny_indeterminate` and is refused forever. There
- *     is no `--retry` here, because "wait forever" is not an answer either.
- *
- * Exit codes follow the CLI: ok 0, usage 2, refused 3, failed 4. A recorded
- * `denied` is a successful answer and exits 0 — the refusal is the *answer*, not
- * a failure of the command.
- */
+// `lain approve` — ask and answer one bound approval question.
+//
+// A grant here is evidence, not a button that makes a refusal go away. The
+// question is presented whole, digest included, because an approval you cannot
+// read is not an approval you gave. An answer has to carry the digest of the
+// question it answers: `--answer` refuses without one, and a digest belonging to
+// a different question is refused rather than reused. `--allow` still exists for
+// non-interactive use and is recorded as flag-shaped (`decided_by: 'flag:...'`),
+// never as a human answer — the log has to be able to say which of the two
+// happened. A window that closed is `deny_indeterminate` and is refused forever;
+// there is no `--retry`, because "wait forever" is not an answer either.
+//
+// Exit codes follow the CLI: ok 0, usage 2, refused 3, failed 4. A recorded
+// `denied` is a successful answer and exits 0 — the refusal is the answer, not a
+// failure of the command.
 import { userInfo } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { approvalMsRemaining, createApprovalLedger, decisionSource, TIMEOUT_DECIDED_BY } from '../../policy/approvals.mjs';
@@ -333,8 +327,8 @@ export async function approveCommand(input) {
         io.err(`refused: ${reply === '' ? 'no answer' : `"${reply}" is not an answer`}; absence of an answer is refusal, not consent`);
         return EXIT.refused;
       }
-      // The human answered the question that was just displayed, so the digest of
-      // that question is the digest of their answer.
+      // The human answered the question that was just printed, so that question's
+      // digest is the digest of their answer.
       meta = { by, digest: record.binding, source: 'prompt' };
     }
 
