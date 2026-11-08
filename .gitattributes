@@ -1,0 +1,32 @@
+# Lain — line-ending policy.
+#
+# The repository runs with core.autocrlf=true on Windows, which normalises LF to
+# CRLF in the working tree. That makes working-tree byte comparison unreliable
+# and makes any formatting check line-ending dependent. This file pins the
+# working tree to LF for text, so a byte read from disk equals a byte in Git.
+#
+# Deliberately narrow: only files Git already treats as text are affected, and
+# no binary type is reclassified.
+* text=auto eol=lf
+
+# Explicit: these are always text and always LF.
+*.md   text eol=lf
+*.mjs  text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.txt  text eol=lf
+
+# Explicit: never touch line endings in binaries.
+*.db      binary
+*.db-wal  binary
+*.db-shm  binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.zip     binary
+*.exe     binary
+*.dll     binary
