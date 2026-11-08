@@ -138,7 +138,7 @@ test('AT-M1-15: tampering with a stored payload is detected by verification', ()
   const reopened = open({ path: db });
   const verdict = reopened.verify();
   assert.equal(verdict.ok, false, 'edited bytes must fail verification');
-  const hashCheck = verdict.checks.find((check) => check.check === 'payload_hashes');
+  const hashCheck = verdict.checks.find((check) => check.name === 'payload_hashes');
   assert.ok(hashCheck && !hashCheck.ok, `expected a payload hash failure, got ${JSON.stringify(verdict.checks)}`);
   reopened.close();
   cleanup(dir);
@@ -155,7 +155,7 @@ test('AT-M1-15b: a deleted row is detected as a sequence gap', () => {
   const reopened = open({ path: db });
   const verdict = reopened.verify();
   assert.equal(verdict.ok, false);
-  assert.equal(verdict.checks.find((check) => check.check === 'sequence_contiguous')?.ok, false);
+  assert.equal(verdict.checks.find((check) => check.name === 'sequence_contiguous')?.ok, false);
   reopened.close();
   cleanup(dir);
 });

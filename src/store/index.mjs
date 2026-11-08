@@ -63,6 +63,7 @@ CREATE INDEX IF NOT EXISTS idx_events_correlation ON events (correlation_id, seq
 
 /**
  * @param {OpenOptions} options
+ * @returns {import('../core/types.mjs').EventLog}
  */
 export function open(options) {
   if (!options || typeof options.path !== 'string' || options.path.length === 0) {
@@ -318,10 +319,11 @@ export function open(options) {
     return row === undefined ? null : fromRow(/** @type {Record<string, unknown>} */ (row));
   }
 
-  function stats() {
+  /** @returns {{count: number, max_seq: number, schema_version: number}} */
+function stats() {
     if (!db) throw new StoreError('STORE_CLOSED', 'the store is closed');
     const row = /** @type {any} */ (db.prepare('SELECT COUNT(*) AS count, COALESCE(MAX(seq), 0) AS max_seq FROM events').get());
-    return { count: Number(row.count), max_seq: Number(row.max_seq), schema_version: readMetaNumber(db, 'store_schema_version') };
+    return { count: Number(row.count), max_seq: Number(row.max_seq), schema_version: readMetaNumber(db, 'store_schema_version') ?? SCHEMA_VERSION };
   }
 
   /**
@@ -329,13 +331,13 @@ export function open(options) {
    */
   function verify(opts = {}) {
     if (!db) throw new StoreError('STORE_CLOSED', 'the store is closed');
-    /** @type {{check: string, ok: boolean, detail?: string}[]} */
+    /** @type {{name: string, ok: boolean, detail?: string}[]} */
     const checks = [];
     const pragma = /** @type {any} */ (db.prepare('PRAGMA integrity_check').get());
     // The pragma returns a single column named `integrity_check` whose value is
     // the string 'ok' when clean, or one row per problem when not.
     const pragmaValue = pragma?.integrity_check;
-    checks.push({ check: 'sqlite_integrity_check', ok: pragmaValue === 'ok', detail: String(pragmaValue) });
+    checks.push({ name: 'sqlite_integrity_check', ok: pragmaValue === 'ok', detail: String(pragmaValue) });
 
     const seqRows = /** @type {any[]} */ (db.prepare('SELECT seq FROM events ORDER BY seq ASC').all());
     let contiguous = true;
@@ -347,7 +349,7 @@ export function open(options) {
       }
       expected += 1;
     }
-    checks.push({ check: 'sequence_contiguous', ok: contiguous, detail: `${seqRows.length} rows from 1` });
+    checks.push({ name: 'sequence_contiguous', ok: contiguous, detail: `${seqRows.length} rows from 1` });
 
     let hashMismatch = 0;
     if (opts.deep !== false) {
@@ -362,7 +364,7 @@ export function open(options) {
         }
         if (canonicalHash(parsed) !== row.payload_hash) hashMismatch += 1;
       }
-      checks.push({ check: 'payload_hashes', ok: hashMismatch === 0, detail: `${hashMismatch} mismatched of ${rows.length}` });
+      checks.push({ name: 'payload_hashes', ok: hashMismatch === 0, detail: `${hashMismatch} mismatched of ${rows.length}` });
     }
 
     const ok = checks.every((item) => item.ok);

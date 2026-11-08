@@ -54,6 +54,26 @@ a failing test, a crashed runner, or **zero tests discovered**.
 identifier. Fails when `decide(`, `authorize(`, `grantPermission` or a similar
 identifier appears in `src/store/`.
 
+**`process-boundary`** — passes when `node:child_process` appears only inside
+`src/exec/`. Fails on an import or a bare spawn call anywhere else under `src/`,
+and reports NOT-TESTABLE when `src/` contains no source files, because "no
+violations" and "nothing to inspect" are different results.
+
+The check was added in V-1 and immediately earned its place: it failed on
+`src/host/probe.mjs`, which imported `execFileSync` to query `nvidia-smi`. The
+answer was **not** to widen the allow-list — the next module with an equally
+reasonable excuse would widen it again — but to add `src/exec/one-shot.mjs` and
+route the probe through it. The check then produced a false positive on
+`db.exec('PRAGMA busy_timeout = 0')`, a string method; `SPAWN_RE` gained the
+`(?<![.\w])` guard so a method call is not mistaken for a process launch. A check
+that cries wolf on a string method is one people learn to ignore, which is worse
+than not having it.
+
+Its `--self-test` case runs the **same** `scanSource()` function the real walk
+uses, against one violating source and one clean one, and fails if either the
+real spawn goes undetected or the string method is flagged. A self-test with its
+own copy of the regex would prove nothing about the regex that actually runs.
+
 **`repo-hygiene`** — passes when the dependency list is exactly the approved one,
 the reproducibility files exist, and nothing forbidden is staged. Fails on an
 unapproved dependency; a missing `package.json`, `package-lock.json` or
