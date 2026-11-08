@@ -1,0 +1,40 @@
+{
+  "objective": "prove that one authorized tool call can run and be checked without a model",
+  "acceptance_criteria": [
+    {
+      "id": "health-written",
+      "statement": "the health check wrote health.json into the workspace",
+      "check": { "kind": "artifact", "path": "health.json" },
+      "required": true
+    },
+    {
+      "id": "exit-clean",
+      "statement": "the script exited with code 0",
+      "check": { "kind": "assertion", "exit_code": 0 },
+      "required": true
+    }
+  ],
+  "capabilities": ["workspace.write", "process.spawn"],
+  "effect_class": "local_reversible",
+  "budget": {
+    "max_tool_calls": 1,
+    "max_processes": 1,
+    "max_wall_ms": 30000,
+    "max_output_bytes": 65536,
+    "max_model_calls": 0
+  },
+  "tool_id": "run_script",
+  "tool_arguments": {
+    "script": [
+      "import { writeFileSync } from 'node:fs';",
+      "const facts = {",
+      "  node: process.version, platform: process.platform, arch: process.arch,",
+      "  cwd: process.cwd(), wrote_at: new Date().toISOString(),",
+      "};",
+      "writeFileSync('health.json', JSON.stringify(facts, null, 2) + '\\n');",
+      "console.log('health check wrote health.json');",
+      ""
+    ],
+    "timeout_ms": 10000
+  }
+}

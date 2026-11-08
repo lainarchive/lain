@@ -21,7 +21,7 @@
  * therefore testable with fixtures.
  */
 
-import { execFileSync } from 'node:child_process';
+import { runOneShot } from '../exec/one-shot.mjs';
 import { existsSync, statfsSync } from 'node:fs';
 import { cpus, freemem, platform, release, totalmem } from 'node:os';
 
@@ -71,6 +71,12 @@ export const PROBE_SCHEMA_VERSION = 1;
 
 /** Timeout for the optional GPU probe. A hung external tool must not hang Lain. */
 const GPU_TIMEOUT_MS = 3000;
+
+/**
+ * The one nvidia-smi query Lain asks. Kept as a single constant so the presence
+ * probe and the measurement probe cannot drift apart and silently disagree.
+ */
+const GPU_QUERY_ARGS = '--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu';
 
 /**
  * @typedef {object} Measurement
@@ -176,37 +182,31 @@ export function probeGpu(options = {}) {
       );
     }
     // Not "no GPU": we cannot tell whether one exists without the tool.
-    try {
-      execFileSync('nvidia-smi', ['--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu', '--format=csv,noheader,nounits'], {
-        timeout: GPU_TIMEOUT_MS,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      binary = 'nvidia-smi';
-    } catch (error) {
-      const code = /** @type {{ code?: string }} */ (error).code;
-      const reason = code === 'ENOENT'
+    const probe = runOneShot({ command: 'nvidia-smi', args: [GPU_QUERY_ARGS], timeoutMs: GPU_TIMEOUT_MS });
+    if (!probe.ran) {
+      const reason = probe.error_code === 'ENOENT'
         ? 'nvidia-smi is not on PATH, so GPU memory could not be measured'
         : 'nvidia-smi exists but did not answer, so GPU memory could not be measured';
       return /** @type {Measurement} */ (unavailable(reason, 'nvidia-smi'));
     }
+    binary = 'nvidia-smi';
   }
 
-  try {
-    const stdout = execFileSync(binary, [
-      '--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu',
-      '--format=csv,noheader,nounits',
-    ], { timeout: GPU_TIMEOUT_MS, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const detail = parse(stdout);
-    if (detail === null) {
-      return /** @type {Measurement} */ (unavailable('nvidia-smi returned output that could not be parsed', 'nvidia-smi'));
-    }
-    return { ...measured(1, 'nvidia-smi'), detail };
-  } catch (error) {
+  const answer = runOneShot({
+    command: binary,
+    args: ['--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu', '--format=csv,noheader,nounits'],
+    timeoutMs: GPU_TIMEOUT_MS,
+  });
+  if (!answer.ran) {
     return /** @type {Measurement} */ (
-      unavailable(`nvidia-smi failed: ${/** @type {Error} */ (error).message}`, 'nvidia-smi')
+      unavailable(`nvidia-smi could not be run (${answer.error_code ?? 'unknown error'})`, 'nvidia-smi')
     );
   }
+  const detail = parse(answer.stdout);
+  if (detail === null) {
+    return /** @type {Measurement} */ (unavailable('nvidia-smi returned output that could not be parsed', 'nvidia-smi'));
+  }
+  return { ...measured(1, 'nvidia-smi'), detail };
 }
 
 /**
