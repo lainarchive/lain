@@ -81,7 +81,10 @@ unapproved dependency; a missing `package.json`, `package-lock.json` or
 database or audit path.
 
 **`secrets`** — passes when gitleaks reports nothing (required mode). Fails on a
-finding, or, in required mode, when gitleaks is unavailable.
+finding, or, in required mode, when gitleaks is unavailable. gitleaks is now
+installed, so the required gate produces a real verdict rather than a refusal;
+see §3a for the two historical findings it produced on the first run and the
+narrow ignore entries that cover them.
 
 Three of these are worth explaining, because they are the ones that could be
 mistaken for ceremony:
@@ -110,8 +113,10 @@ test produces a non-zero exit and a `fail` counter.
 - **Development:** minimal, pinned, justified individually. Currently
   `typescript` 7.0.2 (type checker) and `@types/node` ^24.19.2 (Node API
   declarations).
-- **System tools:** optional; absence is reported, never hidden. Currently
-  `gitleaks`, which is **not installed**.
+- **System tools:** optional; absence is reported, never hidden. `gitleaks` **8.30.1**
+  is now installed (`Gitleaks.Gitleaks` via `winget`, at
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gitleaks.Gitleaks_…\gitleaks.exe`, linked
+  onto PATH by winget).
 
 `typescript` is used only through `tsc --noEmit`. The source files are `.mjs` with
 JSDoc types, so the runtime artifact is exactly the file Node executes and no
@@ -125,10 +130,42 @@ worse than not having it.
 installed set differs. Adding a dependency is therefore a deliberate edit to the
 policy, not an accident of `npm install`.
 
-**gitleaks is not installed and this build does not install it.** That is the
-project owner's call. Until it is present, `npm run verify` fails, and the final
-report of any milestone must say "the secret scanner was unavailable", not "no
-secrets found".
+## 3a. The secret scanner, once it existed
+
+Installing gitleaks changed the gate from a red light into a working detector, and
+it immediately found two leaks. **Both were on `test/store/redaction.test.mjs:70`
+in commit `e01dbb2`** — the synthetic JWT fixture for the test that proves
+secrets do not reach the store. The story is worth keeping, because the first
+attempt at hiding it was a defence that looked correct and was not.
+
+The M-1 author stored the fixtures as base64 blobs and decoded them at runtime, so
+the file would contain no secret text. It contains no secret text. gitleaks found
+it anyway: its `jwt-base64` rule **decodes a base64 blob before matching**. The
+defence assumed a scanner that reads text, and the real one decodes. The current
+tree now builds the token from its three segments at runtime — same 123-character
+token, no base64 or base64url string anywhere in the file — and the store still
+redacts it as `redacted:jwt`.
+
+History still holds the old blob, and `gitleaks detect` scans commits rather than
+the working tree, so the finding outlives the fix. Rewriting published history is
+not something this project does without permission, so `.gitleaksignore` carries
+**exactly two fingerprints**:
+
+```
+e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt-base64:70
+e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt:70
+```
+
+The file names two findings rather than a path or a rule, so a real secret added
+to that file or any other does not match it; and if the fixture line changes the
+fingerprints stop matching and the finding comes back, which is the correct
+failure, because then nobody has read it.
+
+**What this does not prove.** gitleaks' rule set is a detector, not a proof. It
+did not see the real leak because it did not exist; it saw a synthetic one because
+the fixture is shaped like the thing it detects. A clean scan means "no known
+pattern matched", and the report says exactly that.
+
 
 ## 4. Runtime and the SQLite API
 
