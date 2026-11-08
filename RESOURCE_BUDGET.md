@@ -44,7 +44,10 @@ budget, it is a guess with a decimal point.
 | Disk, D: | 0.38 GiB free — unusable as a workspace | **M** | `Get-PSDrive D` | 2026-11-08 |
 | GPU | NVIDIA GeForce RTX 3050, **6144 MiB total** | **M** | `nvidia-smi --query-gpu` | 2026-11-08 |
 | GPU memory free | **5389 MiB**, 614 MiB in use, 5 % utilisation, 77 °C | **M** | `nvidia-smi` | 2026-11-08 |
-| GPU tooling | `nvidia-smi` present; **`ollama` client 0.40.4 present, daemon not listening** on `127.0.0.1:11434` | **M** | `nvidia-smi`, `ollama --version`, HTTP probe | 2026-11-08 |
+| GPU tooling | `nvidia-smi` present; **`ollama` 0.40.4 serving on `127.0.0.1:11434`** | **M** | `nvidia-smi`, `/api/version` | 2026-11-08 |
+| Pinned model | **present and answering** — `qwen3-4b-instruct-2507:latest`, 2.33 GB, Q4_K_M, 4.0 B params | **M** | `/api/tags`, `/api/generate` | 2026-11-08 |
+| Pinned model digest | `1a2c1c9c3f3b02803c567e3b720166f6391eea1c0d5759e32c3655ba97355137` | **M** | `/api/tags` | 2026-11-08 |
+| Pinned model call | returned `READY`; 12.8 s wall, of which 12.4 s was model load | **M** | `/api/generate` | 2026-11-08 |
 | OS | Windows 11 (`Microsoft Windows NT 10.0.26200`), x64 | **M** | `os.type()`, `os.release()` | 2026-11-08 |
 
 **Historical comparison (HIST).** An earlier session on the same machine recorded

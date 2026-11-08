@@ -53,6 +53,12 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 
 **Every gate is green for the first time.** `npm run verify` passes with the secret scan required; there is no advisory skip left in any check.
 
+**Correction, 2026-11-08 evening: the model was never missing.** This record and the M-2 preflight both said the ollama daemon was not listening and no model was
+pulled. The daemon was indeed down, but the model — `qwen3-4b-instruct-2507:latest`, digest `1a2c1c9c3f3b02803c567e3b720166f6391eea1c0d5759e32c3655ba97355137`,
+2.33 GB, Q4_K_M, 4.0 B parameters — has been on disk since about 2026-10-25, and the digest matches OD-8's pin exactly. Starting the daemon and calling the model
+returned `READY` in 12.8 s of which 12.4 s was load time; the generation itself was two tokens. So the fact asserted was wrong rather than stale: the capability was
+there the whole time and nobody had started the service. Recorded because a claim repeated across several documents is exactly the kind that stops being checked.
+
 ## Constraints to preserve
 
 - Keep Lain independent; DSH and prior projects are research inputs, not source to import.
@@ -69,8 +75,9 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 
 V-1 is complete and its evidence is recorded, every gate is green, and the work is published. What remains needs a decision rather than a keystroke:
 
-1. **The M-2 authorization question**: whether to build the model loop, which additionally needs the model-binding spike (the ollama daemon is not listening and
-   no model is pulled, so it cannot be tested today). No model, network or native containment work is authorized yet.
+1. **The M-2 authorization question**: whether to build the model loop. The model-binding precondition is now **satisfied and measured** — the ollama daemon is serving
+   and the pinned model (`qwen3-4b-instruct-2507:latest`, digest `1a2c1c9c3f3b…`) answered a real call (see below). D-P4's blocking condition is therefore cleared;
+   what remains is the authorization itself. No model, network or native containment work is authorized yet.
 2. **The remaining V-1 gaps**, in the order they matter: reads are unrestricted, the network is unrestricted, no Job Object limits, no cancellation, and the
    approval ledger has no prompt wired to it. Issues 10–12 in [`open-issues.md`](../implementation/open-issues.md).
 3. **D-P10**: `VISION.md` and the numeric-threshold rewrite of `ACCEPTANCE_TESTS.md`, which wait until the M-2 scope freezes.
