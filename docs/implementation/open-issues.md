@@ -98,3 +98,48 @@ formatting policy. It does not; it satisfies the policy on the files this task
 owns, and the report says so out loud.
 
 **What it needs.** Issue 1's decision. No separate action.
+
+## Issue 7 — An explicit backup briefly releases single-writer ownership
+
+**What is true.** `node:sqlite`'s backup job cannot run while the store holds its
+long-lived write transaction; measured, it rejects with `errcode 0` and
+`errstr "not an error"`. `backup()` therefore releases the lock for the duration
+of the copy and re-takes it immediately afterwards with `claimWriteLock`, which
+throws `STORE_LOCK_LOST` if another process became the writer in that window. So
+during a backup there is a real gap in the single-writer guarantee.
+
+**Why it matters.** The guarantee this store sells is "one writer, always". A gap
+that exists only during an explicit, operator-initiated backup is small — but it
+is a gap, and it is documented here rather than left for someone to discover from
+the code.
+
+**What it needs.** Either accept the documented gap, or give backups their own
+read-only connection so the writer lock is never released. The second option is
+untested work.
+
+## Issue 8 — No retention policy and no compaction
+
+**What is true.** Events accumulate without bound. The measured cost is about
+146 bytes per event, so the documented 2 GiB warning threshold is roughly
+14.7 million events. Nothing deletes, archives or compacts.
+
+**Why it matters.** Storage exhaustion is a failure mode the specification asks
+the store to handle, and it is currently handled only by a warning threshold with
+no enforcement.
+
+**What it needs.** A retention decision (`08-open-decisions.md` OQ-M1.7/OQ-M1.13)
+before this store holds production volume.
+
+## Issue 9 — No tamper-evidence chain
+
+**What is true.** `payload_hash` detects an edited payload because verification
+recomputes it, and a deleted row shows up as a sequence gap. An attacker who
+rewrites both the payload and its stored hash is not detected.
+
+**Why it matters.** It bounds what "integrity verification" may claim: this is
+consistency checking, not tamper evidence. The distinction matters for any future
+claim that the log can be trusted against a hostile local actor.
+
+**What it needs.** The hash-chain decision (`08-open-decisions.md`
+OQ-M1.6/OQ-M1.21). If it is wanted later, it should be noted that adding it only
+for new batches weakens it — the cost of delaying is real, not zero.
