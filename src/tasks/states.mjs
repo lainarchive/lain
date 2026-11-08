@@ -1,29 +1,30 @@
-/**
- * Task state transitions.
- *
- * Two things this module refuses to allow, both of which are properties the
- * project has already paid for once:
- *
- *   1. **No transition into a terminal state is inferred.** Reaching `completed`
- *      requires every required check to have passed; reaching `cancelled`
- *      requires zero surviving processes. A state change nobody verified is a
- *      claim, and the event store exists so that claims are not the record.
- *   2. **Terminal is terminal.** There is no edge out of `completed`, `failed`,
- *      `cancelled` or `cancel_failed`. Continuing work after a terminal state is
- *      a new task, not a resume of this one.
- */
+// Task state transitions.
+//
+// Two rules, both of them things this project has already been burned by:
+//
+//   - No transition into a terminal state is inferred. `completed` needs every
+//     required check to have passed, `cancelled` needs zero surviving
+//     processes. A state change nobody verified is a claim, and the log exists
+//     so that claims are not the record.
+//   - Terminal is terminal. There is no edge out of completed, failed,
+//     cancelled or cancel_failed. Picking work back up is a new task.
 import { TASK_STATES } from './contract.mjs';
 
-/**
- * Legal transitions. Read as: from a state, which states may follow.
- * @type {Record<string, string[]>}
- */
+// From a state, which states may follow.
+//
+// Note where `cancelling` is reachable from. Every non-terminal state, not just
+// `running`, because a task nobody can stop is not safe to start. `submitted`
+// means no effect has begun, so the honest record is "stopped before anything
+// happened"; `indeterminate` means the runner lost track, so the request has to
+// be recordable even though what it can conclude is limited. The conditions for
+// those two are in transitionRequirements below, not in this table.
+/** @type {Record<string, string[]>} */
 export const TRANSITIONS = Object.freeze({
-  submitted: ['admitted', 'failed'],
+  submitted: ['admitted', 'failed', 'cancelling'],
   admitted: ['running', 'cancelling', 'failed'],
   running: ['completed', 'failed', 'cancelling', 'indeterminate'],
   cancelling: ['cancelled', 'cancel_failed'],
-  indeterminate: ['running', 'failed', 'cancelled'],
+  indeterminate: ['running', 'failed', 'cancelled', 'cancelling'],
   completed: [],
   failed: [],
   cancelled: [],
@@ -55,26 +56,36 @@ export function checkTransition(from, to) {
 }
 
 /**
- * The extra conditions a target state demands. Returning a list means the caller
- * must satisfy all of them *before* writing the transition; an empty list means
- * the transition needs nothing further.
+ * What a target state demands beyond being reachable. A non-empty list means
+ * the caller has to satisfy all of it before writing the transition.
  *
  * @param {string} to
- * @param {{requiredChecksPassed?: boolean, survivingProcesses?: number|null, reason?: string|null, evidenceCount?: number}} evidence
+ * @param {{requiredChecksPassed?: boolean, survivingProcesses?: number|null,
+ *   reason?: string|null, evidenceCount?: number}} evidence
  * @returns {string[]}
  */
 export function transitionRequirements(to, evidence = {}) {
   const missing = [];
-  if (to === 'completed' && evidence.requiredChecksPassed !== true) missing.push('required_checks_passed');
-  // Evidence, not a flag. `required_checks_passed` is the caller's claim about
-  // its own checks; requiring at least one recorded evidence entry is the
-  // structural half of the same rule, and it is the half a caller cannot talk
-  // its way past. A task that claims success with an empty evidence list is
-  // exactly the failure this milestone exists to make impossible.
-  if (to === 'completed' && (evidence.evidenceCount ?? 0) < 1) missing.push('recorded_evidence');
-  if (to === 'cancelled') {
-    if (evidence.survivingProcesses !== 0) missing.push('zero_surviving_processes');
+
+  if (to === 'completed' && evidence.requiredChecksPassed !== true) {
+    missing.push('required_checks_passed');
   }
-  if (to === 'failed' && !evidence.reason) missing.push('failure_reason');
+
+  // Evidence, not a flag. The check above is the caller's word about its own
+  // work; one recorded evidence entry is the half it cannot talk its way past.
+  // A task claiming success with an empty evidence list is the exact failure
+  // this milestone exists to make impossible.
+  if (to === 'completed' && (evidence.evidenceCount ?? 0) < 1) {
+    missing.push('recorded_evidence');
+  }
+
+  if (to === 'cancelled' && evidence.survivingProcesses !== 0) {
+    missing.push('zero_surviving_processes');
+  }
+
+  if (to === 'failed' && !evidence.reason) {
+    missing.push('failure_reason');
+  }
+
   return missing;
 }

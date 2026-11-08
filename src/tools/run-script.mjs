@@ -48,8 +48,16 @@ export function createRunScriptTool({ workspace }) {
     spawns_processes: true,
 
     /**
+     * Deliberately not `async`. A refusal has to stay a synchronous throw —
+     * AT-V1-TOOL-11 asserts an empty script is rejected before anything is
+     * written, and `async` would turn that throw into a rejection instead. The
+     * run itself is asynchronous so `--cancel-after` can interrupt it; the
+     * spawnSync path held the event loop until the script was already over,
+     * which is why that flag could not shorten a run by a millisecond.
+     *
      * @param {Record<string, unknown>} args
      * @param {import('./registry.mjs').RunContext} ctx
+     * @returns {Promise<Record<string, unknown>>}
      */
     run(args, ctx) {
       const script = scriptText(args?.script);
@@ -64,26 +72,24 @@ export function createRunScriptTool({ workspace }) {
         typeof args?.timeout_ms === 'number' ? args.timeout_ms : ctx.budget.max_wall_ms,
         ctx.budget.max_wall_ms,
       );
-      const run = workspace.run({
+
+      return workspace.runAsync({
         command: process.execPath,
         args: [decision.path],
         timeoutMs,
         maxOutputBytes: ctx.budget.max_output_bytes,
         cwd: '.',
-      });
-
-      const artifacts = workspace.contents().map((entry) => ({ path: entry.path, bytes: entry.bytes }));
-
-      return {
+      }).then((run) => ({
         status: run.status === 'error' ? 'error' : 'ok',
         script_path: written.path,
+        pid: run.pid,
         exit_code: run.exit_code,
         stdout: run.stdout,
         stderr: run.stderr,
         output_truncated: run.output_truncated,
         duration_ms: run.duration_ms,
-        artifacts,
-      };
+        artifacts: workspace.contents().map((entry) => ({ path: entry.path, bytes: entry.bytes })),
+      }));
     },
   };
 }
