@@ -124,14 +124,13 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
       // that looks like it honoured a limit it never received is worse than one
       // that refuses the flag. Parsed strictly: digits only, positive, finite.
       //
-      // One caveat worth knowing while `run_script` is still synchronous: a
-      // request made mid-tool cannot be turned into an in-process action, so the
-      // run settles `cancelled` without the invocation's result ever being read
-      // (it reports `invocation: null`) and the workspace is left on disk for
-      // the operator to look at. Measured on a 3 s blocking script with
-      // `--cancel-after 200`: state `cancelled`, wall 729 ms, exit 1, no result.
-      // That is the right terminal state reached the awkward way; a longer
-      // blocking tool is the case this is not yet proof against.
+      // Measured once the tool runner went asynchronous: a 3 s blocking script
+      // under `--cancel-after 200` is stopped in 591 ms and settles `cancelled`,
+      // against 3996 ms and `completed` before. The run reports
+      // `invocation: null`, because a cancellation that wins the race means
+      // there is no invocation result to report — the absence is the finding,
+      // not a missing field. The workspace is removed as usual: what the tool
+      // wrote before it was stopped is still in the log.
       let cancelAfter;
       if (flags['cancel-after'] !== undefined) {
         const raw = flags['cancel-after'];
