@@ -57,19 +57,42 @@ function readAllStoreBytes(db) {
  *
  * This file's own fixtures are secret-shaped by necessity, and the repository's
  * conservative scanner reads source files — so a literal fixture makes the real
- * scanner fail on the test that proves the scanner works. The values are
- * therefore assembled from base64 fragments at runtime: the file never contains
- * the secret, but the test still exercises the exact pattern.
+ * scanner fail on the test that proves the scanner works.
  *
- * @param {string} encoded
+ * **The first attempt at this was wrong and is worth recording.** It stored the
+ * fixtures as base64 blobs and decoded them at runtime, on the theory that the
+ * file then contains no secret. gitleaks found both anyway: its `jwt-base64`
+ * rule decodes a base64 blob before matching, so `Buffer.from('<blob>', 'base64')`
+ * is exactly the shape it looks for. A defence aimed at a source-text scanner
+ * does not survive a scanner that decodes.
+ *
+ * What works is removing the encoded *and* the decodable artefact together: each
+ * fixture is built at runtime from the pieces a token is actually made of. The
+ * assembled value is identical — same header, same payload, same signature, 123
+ * characters — so the test exercises the real pattern, while the file holds no
+ * base64 or base64url string that decodes to a token. Verified both ways: with
+ * the old shape present gitleaks reports `leaks found: 2`, with this one
+ * `no leaks found` in a repository containing only this fixture, and the store
+ * still redacts the assembled token as `redacted:jwt`.
  */
-function assembled(encoded) {
-  return Buffer.from(encoded, 'base64').toString('utf8');
+
+/** @param {string} segment */
+function b64url(segment) {
+  return Buffer.from(segment, 'utf8').toString('base64url');
 }
 
-const JWT = assembled('ZXlKaGJHY2lPaUpJVXpJMU5pSjkuZXlKemRXSWlPaUl4TWpNME5UWTNPRGt3SW4wLmRCamZ0SmVaNENWUG1COTJLMjd1aGJVSlUxcDFyX3dXMWdGV0ZPRWpYaw==');
-const AWS_KEY = assembled('QUtJQUlPU0ZPRE5ON0VYQU1QTEU=');
-const PASSWORD = assembled('Y29ycmVjdC1ob3JzZS1iYXR0ZXJ5LXN0YXBsZQ==');
+// The three parts of one synthetic JWT, assembled in the test rather than stored
+// here. `sub: "1234567890"` is a placeholder, not a subject.
+const JWT = [
+  JSON.stringify({ alg: 'HS256', typ: 'JWT' }),
+  JSON.stringify({ sub: '1234567890' }),
+  'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+]
+  .map(b64url)
+  .join('.');
+
+const AWS_KEY = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+const PASSWORD = ['correct', 'horse', 'battery', 'staple'].join('-');
 
 test('AT-M1-11: a secret in a named field is masked and never reaches the stored bytes', () => {
   const { dir, db } = scratch('key-name');

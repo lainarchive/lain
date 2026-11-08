@@ -1,0 +1,38 @@
+# gitleaks ignore list
+#
+# Scope: exactly two findings, both on one line of one file, both synthetic.
+#
+#   commit e01dbb2, test/store/redaction.test.mjs:70
+#     jwt-base64  — the base64 blob the fixture was stored as
+#     jwt         — the same token, decoded from that blob
+#
+# The value is a JWT fixture for `sub: "1234567890"` with the signature
+# `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk`. It is the well-known example
+# token used throughout JWT documentation, it carries no credential, and no
+# service anywhere accepts it. The test it belongs to proves the opposite of a
+# leak: that a secret-shaped value never reaches the store's bytes.
+#
+# WHY AN IGNORE FILE EXISTS AT ALL
+#
+# gitleaks scans commit history, and e01dbb2 is an ancestor of every later
+# commit, so the finding will be reported on every scan forever. The alternative
+# is rewriting published history, which is not something this project does
+# without explicit permission.
+#
+# The blob is gone from the current tree: the fixture is now built from its
+# segments at runtime, and a repository containing only the new shape reports
+# `no leaks found`. That fix is in the commit that adds this file. What remains
+# here is a record of a historical artefact, not a live exemption.
+#
+# This file is deliberately verbose and deliberately narrow. It names two exact
+# fingerprints rather than a path or a rule, so:
+#
+#   - a real secret added to this file, or anywhere else, does not match it;
+#   - the entries can only ever suppress these two findings on this one line;
+#   - if the fixture line changes, the fingerprints stop matching and the finding
+#     comes back — which is the correct failure, because then nobody has read it.
+#
+# Remove these two lines only together with the history that contains e01dbb2.
+
+e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt-base64:70
+e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt:70
