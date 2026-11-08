@@ -248,14 +248,19 @@ function readResult(resultPath) {
  * claim. The notification the kernel posted outranks the exit code; the
  * supervisor's own account of what it had to do outranks both.
  *
- * @param {{result: any, supervisorExit: number|null, killedByCaller: boolean, timedOut: boolean}} run
+ * @param {{result: any, supervisorExit: number|null, killedByCaller: boolean, timedOut: boolean,
+ *   wallClockExpired?: boolean}} run
  */
-export function deriveOutcome({ result, supervisorExit, killedByCaller, timedOut }) {
+export function deriveOutcome({ result, supervisorExit, killedByCaller, timedOut, wallClockExpired = false }) {
   if (killedByCaller) {
     return { status: 'killed_by_supervisor', killed_by: 'cancel', kill_reason: 'cancel' };
   }
-  if (timedOut) {
-    return { status: 'timeout', killed_by: 'cancel', kill_reason: 'supervisor_ms' };
+  // A wall clock that ran out is not somebody calling this off. Both used to
+  // report killed_by 'cancel', which would have let cancel.mjs count a
+  // timed-out tool as one this process stopped; killed_by stays null and only
+  // `status` names the event.
+  if (timedOut || wallClockExpired) {
+    return { status: 'timeout', killed_by: null, kill_reason: 'supervisor_ms' };
   }
   if (!result || result.ok !== true) {
     return {
@@ -282,7 +287,7 @@ export function deriveOutcome({ result, supervisorExit, killedByCaller, timedOut
   }
 
   if (result.kill_reason === 'supervisor_timeout') {
-    return { status: 'timeout', killed_by: 'cancel', kill_reason: 'supervisor_timeout' };
+    return { status: 'timeout', killed_by: null, kill_reason: 'supervisor_timeout' };
   }
   if (result.kill_reason === 'output_ceiling') {
     return { status: 'killed_by_supervisor', killed_by: null, kill_reason: 'output_ceiling' };
@@ -316,6 +321,7 @@ function assemble(prep, spec, run, extra) {
     supervisorExit: run.supervisorExit,
     killedByCaller: run.killedByCaller,
     timedOut: run.timedOut,
+    wallClockExpired: run.wallClockExpired === true,
   });
 
   return {
@@ -385,6 +391,13 @@ function spawnSupervisor(prep, dir, spec) {
       return killedByCaller;
     };
 
+    // The wall clock is not a caller, so it gets its own trigger. The timer
+    // cannot go through `kill` above without claiming somebody cancelled this.
+    let wallClockExpired = false;
+    const expire = () => {
+      if (child.kill()) wallClockExpired = true;
+    };
+
     const taskId = typeof spec.task_id === 'string' ? spec.task_id : null;
     if (taskId !== null && typeof child.pid === 'number') {
       liveRuns.set(taskId, { pid: child.pid, kill });
@@ -393,7 +406,7 @@ function spawnSupervisor(prep, dir, spec) {
       if (taskId !== null && liveRuns.get(taskId)?.pid === child.pid) liveRuns.delete(taskId);
     };
 
-    const timer = setTimeout(kill, prep.supervisorMs);
+    const timer = setTimeout(expire, prep.supervisorMs);
     timer.unref?.();
 
     child.on('error', () => {
@@ -403,6 +416,7 @@ function spawnSupervisor(prep, dir, spec) {
         result: null,
         supervisorExit: null,
         killedByCaller,
+        wallClockExpired,
         timedOut: false,
         supervisorStderr,
       });
@@ -414,6 +428,7 @@ function spawnSupervisor(prep, dir, spec) {
         result: readResult(dir.resultPath),
         supervisorExit: code,
         killedByCaller,
+        wallClockExpired,
         timedOut: false,
         supervisorStderr,
       });
