@@ -39,7 +39,16 @@ External pages, emails, files, code comments, issues, model output, and plugin m
 Never store credentials as ordinary memory. Exclude secrets from logs, event payloads, crash reports, and generated docs. Use scoped references and redaction. Minimize external transmission, isolate project/client scopes, and define retention/deletion behavior.
 
 ## 10. Execution isolation
-Use restricted workspaces and process boundaries. Apply filesystem allowlists, network controls, process restrictions, deadlines, CPU/RAM/output limits, and cancellation. Verify actual container/VM isolation on target OS. Prefer app APIs/accessibility interfaces over visual automation. Sensitive UI actions require confirmation.
+Use restricted workspaces and process boundaries. Apply filesystem allowlists, network controls, process restrictions, deadlines, CPU/RAM/output limits, and cancellation. Prefer app APIs/accessibility interfaces over visual automation. Sensitive UI actions require confirmation.
+
+**Verified containment ceiling (corrected 2026-11-08).** The previous text required verifying "actual container/VM isolation on target OS". No container or VM
+substrate exists on the target machine (no Docker, no WSL distribution, and Windows Sandbox or WDAC require elevation), so that requirement could not be met and
+was not a control. What has been measured is narrower and is stated here instead: a low-integrity process spawned through a restricted token is contained against
+nine of eleven tested escape classes — symbolic link, junction, hard link, case variant, alternate data stream, `\\?\`, `\\.\`, trailing dot and trailing space —
+with the remaining two classes **not testable** on this volume and therefore not claimed. Two limits are known and unmitigated: low-integrity enforcement bounds
+only objects of higher integrity, so a low-integrity process can still write other low-integrity locations, and low-to-medium UI/COM escalation is not addressed.
+Containers remain an optional, user-installed, non-default tier. No document may describe this system as containerised, sandboxed, or VM-isolated until a
+substrate that provides it is present and exercised.
 
 ## 11. Plugin/dependency security
 Inspect manifest, permissions, source, dependencies, and install scripts. Validate schemas and provenance. Test in isolation. Grant only approved capabilities. Pin/record versions. Support disable, revoke, and removal. Generated plugins remain untrusted until reviewed.
