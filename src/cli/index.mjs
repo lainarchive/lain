@@ -22,6 +22,7 @@ import { DEFAULT_RULES } from '../policy/rules.mjs';
 import { createRegistry } from '../tools/registry.mjs';
 import { createRunScriptTool } from '../tools/run-script.mjs';
 import { contractFromJson, createTaskRunner } from '../agent/task-runner.mjs';
+import { createJobControl } from '../exec/job.mjs';
 import { open as openEventStore } from '../store/index.mjs';
 import { isEntryPoint } from '../../tools/check/lib/report.mjs';
 import { approveCommand } from './commands/approve.mjs';
@@ -150,6 +151,14 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
         rules: DEFAULT_RULES,
         workspaceRoot: paths.workspaces,
         makeTool: (workspace) => createRunScriptTool({ workspace }),
+        // Without this the cascade has no way to signal anything: `jobControl` is a
+        // port, and until the CLI supplied it the port had no supplier, so a cancel
+        // reported `no_job_registered` while the tool kept running. What stopped it
+        // was this process exiting and taking the supervisor down with it — the
+        // right outcome reached by accident, which is why nobody noticed. With the
+        // handle wired, `terminate()` kills the job deliberately and does not
+        // return until the supervisor's pid is gone.
+        jobControl: createJobControl,
         // A `--allow` grant is recorded in the ledger like any other approval, so
         // the run leaves behind what it was granted and who granted it — a flag,
         // not a person. `path` is what makes the record outlive the process.
@@ -169,14 +178,31 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
       else printOutcome(log, outcome);
 
       if (!flags['keep-workspace'] && outcome.workspace) {
-        rmSync(outcome.workspace, { recursive: true, force: true });
-        // In JSON mode stdout must be exactly one JSON document: a consumer that
-        // pipes it into a parser must not have to strip a trailing line. The
-        // notice still goes somewhere — stderr — rather than nowhere.
-        if (flags.json) io.err(`workspace removed  ${outcome.workspace}`);
-        else log(`workspace removed  ${outcome.workspace}`);
+        // Best effort, and deliberately so: removing the workspace is tidying, and
+        // a failure here used to be an uncaught EPERM that killed the process
+        // after its JSON had been printed — a partial document on stdout and, for
+        // a cancelled run, a report that never mentioned the cancellation. A
+        // directory that will not go is worth a line on stderr, not the whole run.
+        try {
+          rmSync(outcome.workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+          // In JSON mode stdout must be exactly one JSON document: a consumer that
+          // pipes it into a parser must not have to strip a trailing line. The
+          // notice still goes somewhere — stderr — rather than nowhere.
+          if (flags.json) io.err(`workspace removed  ${outcome.workspace}`);
+          else log(`workspace removed  ${outcome.workspace}`);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          io.err(`workspace kept    ${outcome.workspace}  (${reason})`);
+        }
       }
-      return outcome.state === 'completed' ? EXIT.ok : EXIT.failed;
+      // A cancelled run is a refusal, not a failure: the tool did not fail, it was
+      // stopped, and a caller that treats exit 4 as "your task broke" must not be
+      // told that when the answer is "you stopped it". `cancel_failed` is the
+      // exception — there the cascade could not prove the tool died, which is a
+      // failure and is reported as one.
+      if (outcome.state === 'completed') return EXIT.ok;
+      if (outcome.state === 'cancelled') return EXIT.refused;
+      return EXIT.failed;
     } finally {
       taskStore.close();
       events.close();

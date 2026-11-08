@@ -360,6 +360,40 @@ test('AT-V2-JOB-05 control: a task with nothing in flight has no handle', () => 
   assert.equal(createJobControl('nothing-is-running'), null);
 });
 
+test('AT-V2-JOB-06 a sleeping tool is bounded by the wall clock, not by job_ms', { skip }, async () => {
+  // job_ms is charged in user-mode CPU time, so a tool that sleeps never spends
+  // it: a 4.05 s sleep under a 1000 ms job ceiling ran to completion. What binds
+  // a sleeping tool is the supervisor's own wall clock - and it has to report
+  // `timeout`, because a run nobody cancelled must not be counted as cancelled.
+  const result = await runInJob({
+    command: NODE,
+    args: ['-e', 'setInterval(() => {}, 1000);'],
+    cwd: ROOT,
+    limits: { job_ms: 60_000 },
+    supervisorMs: 2_000,
+  });
+
+  assert.equal(result.status, 'timeout');
+  assert.equal(result.killed_by, null, 'a wall clock running out is not a cancellation');
+  assert.equal(result.kill_reason, 'supervisor_ms');
+  assert.ok(result.duration_ms < 60_000, 'job_ms did not end this, the wall clock did');
+  assert.deepEqual(result.notifications, [], 'no ceiling fired; this was the backstop');
+});
+
+test('AT-V2-JOB-06 control: a run inside the same wall clock completes normally', { skip }, async () => {
+  const result = await runInJob({
+    command: NODE,
+    args: ['-e', 'setTimeout(() => console.log("woke"), 300);'],
+    cwd: ROOT,
+    limits: { job_ms: 60_000 },
+    supervisorMs: 2_000,
+  });
+
+  assert.equal(result.status, 'ok', `expected a clean run, got ${result.status}/${result.kill_reason}`);
+  assert.equal(result.exit_code, 0);
+  assert.equal(result.stdout.trim(), 'woke');
+});
+
 test('the ceiling table states the truth about every ceiling', () => {
   assert.deepEqual(CEILINGS.map((c) => c.name),
     ['max_processes', 'process_memory', 'job_time', 'output_bytes', 'tool_calls']);
