@@ -26,21 +26,35 @@ change, a large diff), so it is not something to slip into another commit. Until
 then, `npm run check:format-strict` shows exactly how many violations are
 outstanding.
 
-## Issue 2 — gitleaks is not installed (needs an install decision)
+## Issue 2 — CLOSED: gitleaks is installed, and the gate produced a real verdict
 
-**What is true.** `gitleaks` is absent. `npm run verify` therefore **fails**, by
-design, and `npm run check` reports `SKIP: gitleaks full scan` with the note
-"this is NOT a clean scan". A conservative nine-pattern scan runs instead and
-currently finds nothing.
+**What was true.** `gitleaks` was absent, so `npm run verify` failed by design and
+`npm run check` reported `SKIP: gitleaks full scan` with the note "this is NOT a
+clean scan". A conservative nine-pattern scan ran instead.
 
-**Why it matters.** The conservative scan does not read history and does not know
-gitleaks' rule set. A secret committed in an earlier commit would not be found by
-it. The distinction between "scanned and clean" and "not scanned" is the whole
-point of fail-closed reporting, so it must not be blurred in a status report.
+**What closed it.** The owner approved the install (D-P9, 2026-11-08). gitleaks
+**8.30.1** is installed via `winget` as `Gitleaks.Gitleaks`, and `npm run verify`
+now **exits 0 with `checks=8 pass=8 fail=0`** — the first time that gate has ever
+produced a verdict rather than a refusal.
 
-**What it needs.** Either an install of gitleaks (a single binary; not installed
-automatically by this build), or an explicit decision to accept the weaker gate
-and say so wherever verification is reported.
+**What it found, and what that taught.** Two findings, both on
+`test/store/redaction.test.mjs:70` in commit `e01dbb2`: the synthetic JWT fixture
+belonging to the test that proves secrets never reach the store. The M-1 author
+had stored that fixture as a base64 blob decoded at runtime, so the file would
+contain no secret text — and gitleaks found it anyway, because its `jwt-base64`
+rule **decodes base64 before matching**. The defence assumed a scanner that reads
+text; the real one decodes. The fixture is now built from its three segments at
+runtime (same 123-character token, no encoded blob in the file) and the store
+still redacts it as `redacted:jwt`.
+
+**What remains, and its limit.** The old blob is still in history, and
+`gitleaks detect` scans commits, so `.gitleaksignore` carries exactly two
+fingerprints naming those two findings on that one line. Nothing else is
+suppressed: a real secret added to that file or any other does not match, and if
+the fixture line changes the entries stop matching and the finding returns. The
+lesson is recorded rather than the symptom hidden — **a scanner that decodes
+defeats a defence that only obfuscates**, and "no leaks found" means no known
+pattern matched, not that the repository is proven clean.
 
 ## Issue 3 — The two `package.json` guarded checks are policy, not proof
 
