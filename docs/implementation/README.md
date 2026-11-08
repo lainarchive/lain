@@ -36,6 +36,11 @@ Test count at the time of writing: `npm test` → **153 tests, 153 pass, 0 fail*
 `node tools/verify.mjs` → `checks=8 pass=7 fail=0 skipped_or_untestable=1`, the
 skip being the advisory `secrets` check with gitleaks unavailable.
 
+**Updated 2026-11-08:** gitleaks is installed (D-P9 approved), so the advisory
+skip is gone: `npm run verify` → **`checks=8 pass=8 fail=0`**, exit 0. The first
+real scan found two historical findings on the redaction test's own JWT fixture;
+see `build-and-verification.md` §3a and `open-issues.md` Issue 2.
+
 Nothing in this directory is a claim about a capability. A capability is claimed
 only after a command has been run and the output recorded under
 `artifacts/verify/`.
