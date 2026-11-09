@@ -186,6 +186,62 @@ confinement that the read-isolation brief did not ask for, and it is stated as i
 answer because "the tool cannot read outside its workspace" reads weaker than what is
 actually true.
 
+## The filesystem matrix: eleven shapes, all refused, two controls that read
+
+`node tools/experiments/appcontainer-filesystem-matrix.mjs` (jobs-runner's) builds a
+granted workspace with an ungranted `secret/` beside it, plants every shape the brief
+names **inside the workspace**, and tries them all in one containerised run whose first
+line is a marker:
+
+```
+planted: {"hardlink":0,"junction":0,"symlink":0}  (0 = created)
+run: ok=true exit=0 fatal=
+stdout: MATRIX-MARKER
+  granted=READ:GRANTED-MARKER  traversal=EPERM/-4048  absolute=EPERM/-4048
+  hardlink=EPERM/-4048         junction=EPERM/-4048   symlink=EPERM/-4048
+  ads_outside=EPERM/-4048      ads_granted=READ:ADS-GRANTED
+  case_upper=EPERM/-4048       env_escape=EPERM/-4048 write_outside=EPERM/-4048
+planted file exists after the run: (nothing)
+```
+
+Every shape the brief names is refused with the same `EPERM` / `-4048`, and the two
+positive controls in the same run both read — `granted` and `ads_granted` — so the run
+demonstrably could have succeeded. Symlinks are creatable on this machine (Developer
+Mode), so the symlink row is a real denial rather than a fixture that failed to exist.
+
+**Hard links do not launder access, and the prediction was the other way round.**
+Jobs-runner expected a hard link inside the granted directory to be the hole, because
+it is the same file. It is refused, and `icacls` says why:
+
+```
+secret.txt   kirb\CodexSandboxUsers:(I)(RX)  SYSTEM:(F)  Administrators:(F)  kirb\lain:(F)
+ws\hard.txt  kirb\CodexSandboxUsers:(I)(RX)  SYSTEM:(F)  Administrators:(F)  kirb\lain:(F)
+ws\plain.txt S-1-15-2-4156793909-...-1640126254:(I)(M)   <-- the container SID
+```
+
+The hard link and its target **share one security descriptor**, and the container's
+ACE is not on it. The workspace grant works by **inheritance into the directory**, so
+it lands on files created there and not on files that merely acquire a second name
+there. A hard link is a name, not a copy, and the access check follows the file. The
+parent reads `SECRET-MARKER` as the control that the file was readable at all.
+
+That yields the sentence worth keeping: **the boundary is per-file and follows the
+file, not the path, so neither a link nor a second name moves a file inside it.**
+
+**ADS:** `ads_outside=EPERM`, `ads_granted=READ:ADS-GRANTED`. A stream is reached
+through its file's descriptor like any other path, so an ungranted file's stream is
+refused and a granted file's stream reads normally. **Case-insensitivity:**
+`C:\...\SECRET\SECRET.TXT` refused — the uppercased path is the same file and gets the
+same answer. **Environment variable pointing outside:** `env_escape=EPERM` — a path
+from the environment is still a path, and the environment is not a permission.
+
+**The honest headline, per the brief's instruction not to claim universal isolation:
+the eleven shapes measured are refused; that is a measurement of eleven shapes, not a
+proof of one.** Untested and named as such: UNC and network paths, `\\?\GLOBALROOT`
+device paths, and reparse points that are neither junctions nor symlinks — a **mount
+point** is the one most likely to behave differently, because it is a real directory
+redirect rather than a link to a file.
+
 ## What is not determined here
 
 - Whether `AssignProcessToJobObject` still applies to a container process, and
@@ -210,10 +266,11 @@ actually true.
   loopback, no DNS, with the internet case a hard `EACCES` at 0 ms rather than a
   timeout. What is still open is whether *inherited network handles* or a child
   process could reach the network by another route; neither was tested.
-- Hard links, alternate data streams, and already-open handles. Not tested. A hard link
-  created *before* the boundary existed points at the same object and the ACL that
-  denies the target denies the link, but that is reasoning, not a measurement, and it
-  is not claimed here.
+- Hard links, alternate data streams, and already-open handles. **Answered for the
+  first two** — see the matrix above: both refused, with the hard-link reasoning from
+  the shared security descriptor. **Already-open handles are still untested**, as are
+  UNC paths, `\\?\GLOBALROOT` device paths, and reparse points that are neither
+  junctions nor symlinks. A mount point is the shape most likely to differ.
 
 ## The honest summary
 
