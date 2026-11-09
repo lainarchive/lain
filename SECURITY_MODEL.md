@@ -41,6 +41,33 @@ Never store credentials as ordinary memory. Exclude secrets from logs, event pay
 ## 10. Execution isolation
 Use restricted workspaces and process boundaries. Apply filesystem allowlists, network controls, process restrictions, deadlines, CPU/RAM/output limits, and cancellation. Prefer app APIs/accessibility interfaces over visual automation. Sensitive UI actions require confirmation.
 
+**Read confinement (added 2026-11-08, V-3).** Reads were previously listed as an unmitigated limitation. They are now
+confined, by measurement rather than by policy: the tool process is launched into a Windows **AppContainer** whose SID is
+derived from a profile name, so the boundary is enforced by the object manager's ACL check and not by a path check in the
+runner. Measured from inside a live container with a positive control in the same run: a directory granted to the
+container SID **reads**; `C:\Users\frick`, `C:\Users\frick\.ssh`, `%TEMP%` and `C:\Program Files\nodejs` all fail with
+`EPERM` (errno `-4048`); `C:\Windows\win.ini` remains readable, because this is an ACL-shaped boundary rather than a
+blanket denial. The same run shows the job object still applies to a container process and that killing the supervisor
+still reaps the tree, so the two boundaries compose.
+
+Four limits belong beside that claim, and none of them is a footnote:
+
+- The launch needs grants, and a grant is read access. The workspace is granted `(OI)(CI)M` because a tool must be able to
+  create, rename and delete inside its own directory; the interpreters need read on a directory they can be copied into.
+  The system interpreter at `C:\Python315` **cannot** be granted — SYSTEM and Administrators own it and `icacls` refuses —
+  so Python is supported through a copied runtime under `%LOCALAPPDATA%\Lain\runtimes\`.
+- **The exemption covers only the first process.** The executable image is mapped with the supervisor's rights, so a tool
+  starts; anything that tool spawns is opened with the container's own rights and needs its own grant. A containerised tool
+  cannot spawn `node` until that directory is granted too.
+- `node <script.js>` cannot run inside the container at all, because resolving the main module walks to the volume root and
+  `lstat 'C:\'` is denied. Scripts are therefore passed as source rather than as a path, which imposes a command-line
+  length ceiling that is refused explicitly rather than truncated.
+- Network access is unchanged by any of this. It remains policy-only, and nothing here should be read as network isolation.
+
+The `kernel` read posture is **opt-in**; an unset posture refuses to start a tool process at all, and `declared` records an
+operator accepting unrestricted reads. A deployment that has not prepared a container therefore runs the declared path,
+which is the honest state and not a weaker claim in disguise. None of this makes Lain a sandbox.
+
 **Verified containment ceiling (corrected 2026-11-08).** The previous text required verifying "actual container/VM isolation on target OS". No container or VM
 substrate exists on the target machine (no Docker, no WSL distribution, and Windows Sandbox or WDAC require elevation), so that requirement could not be met and
 was not a control. What has been measured is narrower and is stated here instead: a low-integrity process spawned through a restricted token is contained against
