@@ -62,7 +62,21 @@ Four limits belong beside that claim, and none of them is a footnote:
 - `node <script.js>` cannot run inside the container at all, because resolving the main module walks to the volume root and
   `lstat 'C:\'` is denied. Scripts are therefore passed as source rather than as a path, which imposes a command-line
   length ceiling that is refused explicitly rather than truncated.
-- Network access is unchanged by any of this. It remains policy-only, and nothing here should be read as network isolation.
+- Network access is **also confined, and that was not the goal of V-3** — measured 2026-11-08 with the container and an
+  unconfined control running the identical command: `net.connect` to a public address fails `EACCES` in **0 ms** inside
+  the container, `net.connect` to a host loopback listener that the unconfined run reaches in **3 ms** times out inside
+  it, and `dns.lookup` fails `ENOTFOUND`. Zero elapsed time is what makes the first a denial rather than a packet that
+  left. The container declares no capabilities, so this is the capability model doing its job. **Not tested:** whether an
+  inherited network handle or a spawned child could reach the network by another route, so this is stated as a measurement
+  of three shapes rather than as an airtight network boundary.
+- Eleven filesystem shapes were tried inside one containerised run with two positive controls that both read: directory
+  traversal, an absolute path outside, a **hard link**, a **junction**, a **symlink**, an **alternate data stream** on an
+  ungranted file, an uppercased path, a path taken from an environment variable, and a write outside the workspace — all
+  refused `EPERM` / `-4048`. The hard-link result is the one worth understanding: the link and its target **share one
+  security descriptor**, the grant reaches files by inheritance into the granted directory, so a second name in the
+  workspace does not move the file inside the boundary. **Not tested:** UNC and network paths, `\\?\GLOBALROOT` device
+  paths, reparse points that are neither junctions nor symlinks, and already-open handles. Eleven shapes measured is a
+  measurement, not a proof.
 
 The `kernel` read posture is **opt-in**; an unset posture refuses to start a tool process at all, and `declared` records an
 operator accepting unrestricted reads. A deployment that has not prepared a container therefore runs the declared path,
