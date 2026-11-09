@@ -8,7 +8,8 @@
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -337,9 +338,11 @@ test('the allow-list carries LOCALAPPDATA only when a container is asked for', (
   const boxed = buildEnv({ workspace: 'W', temp: 'T', container: true });
 
   // A plain run must not be told where the profile lives. A containerised one
-  // has to be: CreateProcessW refuses the whole block without it.
+  // has to be: CreateProcessW refuses the whole block without it, and it has to
+  // be the real base, because that is where the AppContainer profile is looked
+  // up. It is a lookup path, not a grant - see buildEnv().
   assert.equal('LOCALAPPDATA' in plain, false);
-  assert.equal(boxed.LOCALAPPDATA, join('W', '.localappdata'));
+  assert.equal(boxed.LOCALAPPDATA, process.env.LOCALAPPDATA);
   assert.equal('USERPROFILE' in boxed, false);
   assert.equal(containerEntry({}).active, false);
   assert.equal(containerEntry({ container: CONTAINER_NAME }).node_entry, 'eval');
@@ -347,7 +350,7 @@ test('the allow-list carries LOCALAPPDATA only when a container is asked for', (
 
 test('AT-V2-JOB-09 a contained tool writes its workspace and cannot read the profile', { skip: containerSkip }, async () => {
   const workspace = createWorkspace({
-    root: join(ROOT, 'contained'), task_id: 'v3-contained', container: CONTAINER_NAME,
+    root: join(ROOT, 'contained'), task_id: 'v3-contained', container: SID.sid,
   });
   workspace.create();
   try {
@@ -404,6 +407,72 @@ test('AT-V2-JOB-10 a containerised run without LOCALAPPDATA refuses instead of s
   assert.equal(result.code ?? result.limits_refused?.[0]?.code, 'CONTAINER_ENV_INCOMPLETE');
   assert.equal(result.pid ?? null, null);
   assert.equal(readFileSync(resultPath, 'utf8').includes('ran anyway'), false);
+});
+
+test('AT-V2-JOB-11 a run that finishes by itself is never relabelled a cancellation', { skip }, async () => {
+  // The race is the point: the cancel arrives later each round, so the early
+  // rounds stop a live tool and the late ones arrive after it has already
+  // finished. Both answers are honest; a third one is not.
+  const rounds = 10;
+  /** @type {string[]} */
+  const seen = [];
+  for (let round = 0; round < rounds; round += 1) {
+    const taskId = `race-${round}`;
+    const pending = runInJob({
+      command: NODE,
+      args: ['-e', 'console.log("RACE-MARKER")'],
+      cwd: ROOT,
+      task_id: taskId,
+      limits: { job_ms: 20_000 },
+      supervisorMs: 20_000,
+    });
+
+    await new Promise((done) => setTimeout(done, round * 150));
+    const control = createJobControl(taskId);
+    if (control) await control.terminate();
+    const result = await pending;
+    seen.push(result.status);
+
+    if (result.status === 'killed_by_supervisor') {
+      assert.equal(result.killed_by, 'cancel', 'a kill has to say it was ours');
+    }
+    if (result.status === 'ok') {
+      // It said the tool ran to completion, so it may not also carry a kill.
+      assert.equal(result.exit_code, 0);
+      assert.match(result.stdout, /RACE-MARKER/);
+      assert.equal(result.killed_by, null, 'a completed run cannot also be a kill');
+    }
+    assert.equal(createJobControl(taskId), null, 'the handle must be released');
+  }
+
+  assert.equal(seen.every((state) => state === 'ok' || state === 'killed_by_supervisor'), true,
+    `unexpected outcomes: ${seen.join(', ')}`);
+  // If the ladder did not actually straddle the finish line, this test proves
+  // nothing about the race and says so instead of passing quietly.
+  assert.equal(seen.includes('killed_by_supervisor'), true,
+    `no round was cancelled in flight: ${seen.join(', ')}`);
+  assert.equal(seen.includes('ok'), true,
+    `no round finished on its own: ${seen.join(', ')}`);
+});
+
+test('the hash names the helper that actually ran, so a swapped one is visible', { skip }, async () => {
+  const digest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+  const helperPath = join(ROOT, 'job_host_copy.py');
+  copyFileSync(DEFAULT_HELPER, helperPath);
+  const plain = { command: NODE, args: ['-e', 'console.log("hash")'], cwd: ROOT, limits: { job_ms: 20_000 }, supervisorMs: 30_000 };
+
+  const shipped = await runInJob(plain);
+  assert.equal(shipped.helper_sha256, digest(DEFAULT_HELPER), 'the recorded hash is the file on disk');
+
+  const copied = await runInJob({ ...plain, helperPath });
+  assert.equal(copied.helper_sha256, shipped.helper_sha256, 'a byte-identical copy is the same program');
+
+  // The helper is a soft target: this does not stop the change, it makes it
+  // visible to whoever compares the hash against the one they recorded.
+  appendFileSync(helperPath, '\n# a line nobody wrote on purpose\n');
+  const tampered = await runInJob({ ...plain, helperPath });
+  assert.equal(tampered.helper_sha256, digest(helperPath), 'the hash follows the file it ran');
+  assert.notEqual(tampered.helper_sha256, shipped.helper_sha256, 'a changed helper cannot hash the same');
 });
 
 test('AT-V2-JOB-05 a run in flight is stoppable through the job handle', { skip }, async () => {
