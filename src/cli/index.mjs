@@ -22,7 +22,7 @@ import { DEFAULT_RULES } from '../policy/rules.mjs';
 import { createRegistry } from '../tools/registry.mjs';
 import { createRunScriptTool } from '../tools/run-script.mjs';
 import { contractFromJson, createTaskRunner } from '../agent/task-runner.mjs';
-import { createJobControl } from '../exec/job.mjs';
+import { containerSid, createJobControl } from '../exec/job.mjs';
 import { checkExecutionBoundary } from '../exec/boundary.mjs';
 import { open as openEventStore } from '../store/index.mjs';
 import { isEntryPoint } from '../../tools/check/lib/report.mjs';
@@ -136,6 +136,23 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
       }
       if (flags.json) io.err(`read boundary  ${boundary.posture}  ${boundary.code}`);
 
+      // The `kernel` posture is a claim that the tool is confined, so the run has
+      // to actually ask for the container. Resolving the SID here rather than
+      // deeper keeps the failure at the point where the operator can still be
+      // told: without an interpreter the helper cannot derive the SID, and a
+      // kernel run that cannot confine anything must refuse rather than proceed
+      // to run the tool with the user's own read rights.
+      let runContainerSid = null;
+      if (boundary.posture === 'kernel') {
+        const resolved = containerSid();
+        if (!resolved.ok) {
+          io.err(`refused: CONTAINER_UNAVAILABLE — ${resolved.detail}`);
+          return EXIT.refused;
+        }
+        runContainerSid = resolved.sid;
+        io.err(`container     ${runContainerSid}`);
+      }
+
       // `--cancel-after <ms>` asks for a stop that long after execution starts.
       // Validated here rather than passed through, because a typo like
       // `--cancel-after soon` must not quietly become "no cancellation" — a run
@@ -176,6 +193,7 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
         // handle wired, `terminate()` kills the job deliberately and does not
         // return until the supervisor's pid is gone.
         jobControl: createJobControl,
+        containerSid: runContainerSid,
         // A `--allow` grant is recorded in the ledger like any other approval, so
         // the run leaves behind what it was granted and who granted it — a flag,
         // not a person. `path` is what makes the record outlive the process.
