@@ -94,6 +94,10 @@ JOB_OBJECT_ASSOCIATE_COMPLETION_PORT_INFORMATION = 7
 
 EXIT_QUOTA_EXCEEDED = 0xC0000044
 
+# The job telling us it is empty. Nothing about this run can arrive after it, so
+# drain_port stops there rather than sleeping out its whole budget.
+MSG_ACTIVE_PROCESS_ZERO = 4
+
 MSG_NAMES = {
     1: "END_OF_JOB_TIME",
     2: "END_OF_PROCESS_TIME",
@@ -222,6 +226,8 @@ U.DeriveAppContainerSidFromAppContainerName.argtypes = [w.LPCWSTR, ctypes.POINTE
 U.DeriveAppContainerSidFromAppContainerName.restype = w.HRESULT
 A.ConvertSidToStringSidW.argtypes = [w.LPVOID, ctypes.POINTER(w.LPWSTR)]
 A.ConvertSidToStringSidW.restype = w.BOOL
+A.ConvertStringSidToSidW.argtypes = [w.LPCWSTR, ctypes.POINTER(w.LPVOID)]
+A.ConvertStringSidToSidW.restype = w.BOOL
 K.InitializeProcThreadAttributeList.argtypes = [
     w.LPVOID, w.DWORD, w.DWORD, ctypes.POINTER(ctypes.c_size_t)]
 K.UpdateProcThreadAttribute.argtypes = [
@@ -257,9 +263,23 @@ def container_sid(name: str) -> tuple[object, dict]:
     A None SID means the run must refuse. Falling through to a plain spawn would
     run the tool with no boundary while the result still claimed one, which is
     worse than not running it.
+
+    `name` may also be the SID itself, because the caller usually resolved the
+    profile already and handing the SID back to be resolved again is not the same
+    operation. Measured: `DeriveAppContainerSidFromAppContainerName` on a string
+    that is already a SID returns 0x80070057, so a workspace granted to A would
+    have tried to run as B.
     """
     report: dict = {}
     sid = w.LPVOID()
+    if name.startswith("S-1-15-2-"):
+        if not A.ConvertStringSidToSidW(name, ctypes.byref(sid)):
+            report["code"] = "CONTAINER_SID_INVALID"
+            report["detail"] = f"'{name}' is not a SID this process can convert"
+            return None, report
+        report["sid"] = sid_text(sid)
+        report["from_sid_string"] = True
+        return sid, report
     if name == CONTAINER_NAME:
         hr = U.CreateAppContainerProfile(
             name, "Lain tool runner", "runs Lain tool processes", None, 0, ctypes.byref(sid))
@@ -415,7 +435,14 @@ def set_limits(job, spec: dict) -> tuple[dict, list, list]:
 
 
 def drain_port(port, budget_s: float) -> list:
-    """Collect every job notification the completion port has queued."""
+    """Collect every job notification the completion port has queued.
+
+    ACTIVE_PROCESS_ZERO is the job saying it holds no process at all, and no
+    notification about this run can follow it, so the loop ends there. Waiting
+    out the budget instead cost 600 ms on every run - measured, a trivial
+    `node -e` took 863 ms of which the tool itself was 79 ms. The budget stays as
+    the bound for a job that never empties.
+    """
     out: list[dict] = []
     deadline = time.time() + budget_s
     while time.time() < deadline:
@@ -431,6 +458,8 @@ def drain_port(port, budget_s: float) -> list:
         value = int(code.value)
         out.append({"msg": value, "name": MSG_NAMES.get(value, f"UNKNOWN_{value}"),
                     "pid": int(key.value)})
+        if value == MSG_ACTIVE_PROCESS_ZERO:
+            break
     return out
 
 
