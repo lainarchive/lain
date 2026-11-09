@@ -257,8 +257,19 @@ export function buildHelperSpec(spec, supervisorMs) {
   if (limits.job_memory_bytes) out.job_memory_bytes = limits.job_memory_bytes;
   if (limits.job_ms) out.job_ms = limits.job_ms;
   // `container: true` means the default profile. A name is passed through so a
-  // caller can run against a profile it prepared itself.
-  if (spec.container) out.container = spec.container === true ? CONTAINER_NAME : spec.container;
+  // caller can run against a profile it prepared itself. A SID is translated back
+  // to the default profile name, because the helper resolves a container by
+  // profile name and a SID is not one: handing it the SID made it try to create a
+  // profile literally called `S-1-15-2-…`, fail, and refuse the whole run with
+  // CONTAINER_UNAVAILABLE. The SID is what the caller resolves and hands around;
+  // the name is what the helper needs to look it up. One translation, here, at the
+  // boundary between the two.
+  if (spec.container) {
+    const wanted = spec.container === true || /^S-1-15-2-/.test(String(spec.container))
+      ? CONTAINER_NAME
+      : spec.container;
+    out.container = wanted;
+  }
   if (spec.expectMarker) out.expect_marker = spec.expectMarker;
   return out;
 }

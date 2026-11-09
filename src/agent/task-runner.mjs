@@ -130,6 +130,7 @@ function flagGrant(approvals, question) {
  * @param {{allow?: string[], by?: string|null, path?: string}} [args.approvals] granted by a flag, never by a person
  * @param {() => number} [args.now]
  * @param {(task_id: string) => import('./cancel.mjs').JobControl|null} [args.jobControl] the execution layer's job handle
+ * @param {string|null} [args.containerSid] the AppContainer to launch tools into, or null for a declared run
  * @param {import('./cancel.mjs').Canceller} [args.canceller] use this cascade instead of building one
  * @param {number} [args.deadlineMs] how long a cancellation may take before a human is called
  * @param {(request: import('./cancel.mjs').CancelRequest) => void} [args.escalate]
@@ -158,6 +159,7 @@ export function createTaskRunner({
   canceller,
   deadlineMs,
   escalate,
+  containerSid = null,
 }) {
   // The cascade is built here so that the runner owns the whole lifecycle of the
   // task it created — including stopping it. A caller may inject one instead
@@ -392,9 +394,24 @@ export function createTaskRunner({
         return { task_id: taskId, state: beforeEffect, admission, invocation: null, result: null, workspace: null };
       }
 
-      const workspace = createWorkspace({ root: workspaceRoot, task_id: taskId, forbidden: rules.forbidden_paths, now });
+      const workspace = createWorkspace({
+        root: workspaceRoot,
+        task_id: taskId,
+        forbidden: rules.forbidden_paths,
+        now,
+        // The posture decides whether the tool is launched into an AppContainer.
+        // Without this the `kernel` posture would be a promise the run path never
+        // kept: the boundary check would pass, the task would complete, and the
+        // tool would have run with the user's own read rights the whole time.
+        // That is the exact failure this project keeps recording, so it is wired
+        // here rather than left to the CLI to remember.
+        container: containerSid ?? undefined,
+      });
       workspace.create();
-      record({ event_type: 'workspace.created', payload: { path: workspace.path } });
+      record({
+        event_type: 'workspace.created',
+        payload: { path: workspace.path, container: containerSid ? 'appcontainer' : 'none' },
+      });
 
       // Same race as admission, one effect closer, but the check here has to be
       // purely observational: awaiting an in-flight cascade would let a cancel

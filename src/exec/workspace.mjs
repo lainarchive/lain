@@ -43,10 +43,20 @@ export const SCRIPT_CAPABILITIES = ['workspace.write', 'process.spawn'];
  * AppContainer cannot be created from an environment block that lacks it:
  * `CreateProcessW` comes back ERROR_ENVVAR_NOT_FOUND (203) with the rest of this
  * list present and correct. Measured 2026-11-08 — the same list plus
- * LOCALAPPDATA starts, the same list alone does not. The system appends
- * `\Packages\<profile>\AC` to whatever base is given, so the base here is a
- * directory inside the workspace the container already owns, and the real
- * profile path never reaches the tool.
+ * LOCALAPPDATA starts, the same list alone does not.
+ *
+ * It has to be the REAL local app data base, not a directory inside the workspace.
+ * The first version pointed it at `<workspace>/.localappdata` on the theory that
+ * redirecting it kept the user's profile out of the tool, and that broke every
+ * containerised run: the AppContainer profile lives under the real base, so
+ * deriving it from a workspace path failed and the run refused with
+ * CONTAINER_UNAVAILABLE. Measured by handing the same spec a workspace-valued
+ * base (refused) and the inherited one (started).
+ *
+ * The value is not a grant. The container may read nothing under that base — it
+ * says where the profile is looked up, not what may be opened, and the ACL is what
+ * decides that. `TEMP` and `TMP` still point inside the workspace, so the tool
+ * still writes its scratch files where the boundary can see them.
  *
  * @param {{workspace: string, temp: string, container?: boolean}} args
  */
@@ -62,7 +72,7 @@ export function buildEnv({ workspace, temp, container = false }) {
     // Deliberately absent: USERPROFILE, APPDATA, HOME, SSH_AUTH_SOCK, AWS_*,
     // GITHUB_TOKEN, and every other variable that could carry a secret into a
     // tool process.
-    ...(container ? { LOCALAPPDATA: join(workspace, '.localappdata') } : {}),
+    ...(container && process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}),
   };
 }
 
@@ -168,10 +178,17 @@ export function createWorkspace(options) {
       mkdirSync(dir, { recursive: true });
       mkdirSync(temp, { recursive: true });
       if (options.container) {
-        const sid = containerSid();
-        if (!sid.ok) {
+        // The SID is used as handed over, not derived again. Calling the resolver
+        // here read as a second, independent check and was in fact the bug that
+        // made every containerised CLI run refuse with CONTAINER_UNAVAILABLE: the
+        // caller had already resolved it, and re-resolving through a spawn that
+        // the workspace's own call site could not complete turned a good SID into
+        // a fatal. One resolution, at the point where the operator can still be
+        // told, and this layer only checks the shape it was given.
+        if (!/^S-1-15-2-/.test(options.container)) {
           throw new WorkspaceError('CONTAINER_UNAVAILABLE',
-            'the workspace cannot be granted to the container, so no tool may run in it', { detail: sid.detail });
+            'the workspace was handed something that is not a container SID, so no tool may run in it',
+            { detail: String(options.container) });
         }
         // Modify, not Full: (OI)(CI)M is narrower than F and carries neither
         // WRITE_DAC nor WRITE_OWNER, so the tool cannot rewrite the very ACL
@@ -179,11 +196,11 @@ export function createWorkspace(options) {
         // delete inside its own workspace, which is what ordinary work needs -
         // a boundary that breaks that is a boundary someone gets told to turn
         // off. Granted on this one task directory, never on a shared parent.
-        const grant = spawnSync('icacls', [dir, '/grant', `*${sid.sid}:(OI)(CI)M`],
+        const grant = spawnSync('icacls', [dir, '/grant', `*${options.container}:(OI)(CI)M`],
           { encoding: 'utf8', windowsHide: true });
         if (grant.status !== 0) {
           throw new WorkspaceError('CONTAINER_GRANT_FAILED',
-            `icacls could not grant ${sid.sid} on the workspace`,
+            `icacls could not grant ${options.container} on the workspace`,
             { detail: (grant.stderr ?? '').trim() || `icacls exited ${grant.status}` });
         }
       }
