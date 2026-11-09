@@ -12,7 +12,7 @@
  * exactly as safe as that sentence sounds, which is why the capability is
  * explicit and the effect class is `local_reversible` rather than `read_only`.
  */
-import { join } from 'node:path';
+import { containerEntry, MAX_COMMAND_LINE, windowsCommandLine } from '../exec/job.mjs';
 import { ToolError } from './invoke.mjs';
 
 export const RUN_SCRIPT_ID = 'run_script';
@@ -48,26 +48,40 @@ export function createRunScriptTool({ workspace }) {
     spawns_processes: true,
 
     /**
-     * Deliberately not `async`. A refusal has to stay a synchronous throw —
-     * AT-V1-TOOL-11 asserts an empty script is rejected before anything is
-     * written, and `async` would turn that throw into a rejection instead. The
-     * run itself is asynchronous so `--cancel-after` can interrupt it; the
-     * spawnSync path held the event loop until the script was already over,
-     * which is why that flag could not shorten a run by a millisecond.
-     *
      * @param {Record<string, unknown>} args
      * @param {import('./registry.mjs').RunContext} ctx
-     * @returns {Promise<Record<string, unknown>>}
      */
     run(args, ctx) {
       const script = scriptText(args?.script);
       if (script.trim().length === 0) throw new ToolError('SCRIPT_EMPTY', 'run_script requires a non-empty script (a string, or an array of lines)');
       const name = typeof args?.name === 'string' && args.name.length > 0 ? args.name : 'task-script.mjs';
 
-      const written = workspace.write(name, script);
       const decision = workspace.resolve(name);
       if (!decision.ok || !decision.path) throw new ToolError(decision.code ?? 'INVALID_PATH', 'the script path is outside the workspace', decision.detail);
 
+      // Inside the container the program cannot be handed over as a file: node
+      // resolves the main module to canonical form, that walk reaches the volume
+      // root, and `lstat 'C:\'` is denied - so a granted script still dies with
+      // EPERM -4048. It goes on the command line instead, which is why the
+      // length is checked here, before anything is written. The argument list is
+      // the same in both worlds on purpose: process.argv[1] is the script and
+      // process.argv[2] is the workspace, so an author does not have to know
+      // which one they are in.
+      const entry = containerEntry({ container: workspace.container });
+      const argv = entry.node_entry === 'eval'
+        ? ['-e', script, decision.path, workspace.path]
+        : [decision.path, workspace.path];
+
+      if (entry.node_entry === 'eval') {
+        const length = windowsCommandLine([process.execPath, ...argv]).length;
+        if (length > MAX_COMMAND_LINE) {
+          throw new ToolError('SCRIPT_TOO_LONG',
+            `this script needs ${length} characters of command line and the limit is ${MAX_COMMAND_LINE}; `
+            + 'nothing was written and nothing ran');
+        }
+      }
+
+      const written = workspace.write(name, script);
       const timeoutMs = Math.min(
         typeof args?.timeout_ms === 'number' ? args.timeout_ms : ctx.budget.max_wall_ms,
         ctx.budget.max_wall_ms,
@@ -75,21 +89,29 @@ export function createRunScriptTool({ workspace }) {
 
       return workspace.runAsync({
         command: process.execPath,
-        args: [decision.path],
+        args: argv,
         timeoutMs,
         maxOutputBytes: ctx.budget.max_output_bytes,
         cwd: '.',
-      }).then((run) => ({
-        status: run.status === 'error' ? 'error' : 'ok',
-        script_path: written.path,
-        pid: run.pid,
-        exit_code: run.exit_code,
-        stdout: run.stdout,
-        stderr: run.stderr,
-        output_truncated: run.output_truncated,
-        duration_ms: run.duration_ms,
-        artifacts: workspace.contents().map((entry) => ({ path: entry.path, bytes: entry.bytes })),
-      }));
+      }).then((run) => {
+        const artifacts = workspace.contents().map((entry2) => ({ path: entry2.path, bytes: entry2.bytes }));
+        return {
+          status: run.status === 'error' ? 'error' : 'ok',
+          script_path: written.path,
+          exit_code: run.exit_code,
+          stdout: run.stdout,
+          stderr: run.stderr,
+          output_truncated: run.output_truncated,
+          duration_ms: run.duration_ms,
+          artifacts,
+          // Carried through so a refused boundary and a refused ceiling land in
+          // the same field the caller already reads.
+          pid: run.pid,
+          killed_by: run.killed_by,
+          limits_applied: run.limits_applied,
+          limits_refused: run.limits_refused,
+        };
+      });
     },
   };
 }
