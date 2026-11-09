@@ -25,6 +25,16 @@ result is recorded under `artifacts/verify/`.
 is not blocked by a scanner that is not installed yet, while the report still
 says `SKIP: gitleaks full scan` and "this is NOT a clean scan".
 
+**Run the tests the way the script runs them.** `npm test` expands the glob
+`test/**/*.test.mjs`, and that glob is load-bearing: `test/helpers/store-child.mjs`
+is a *fixture* that is meant to be spawned by the recovery tests, not executed by
+the runner. A bare `node --test` — or `node --test test/exec test/store`, which
+treats a directory as a single test — picks the fixture up, it fails on purpose,
+and the suite reports one red that has nothing to do with the code. Measured twice
+on 2026-11-08, once while investigating a genuine failure and once after. If a run
+shows exactly one failure and it is `test\helpers\store-child.mjs`, the command was
+wrong rather than the code.
+
 Every run writes an evidence log to `artifacts/verify/check-<timestamp>.log` or
 `self-test-<timestamp>.log`. `artifacts/` is a designated evidence directory: it
 is not committed, not secret-scanned, and not treated as project content.
