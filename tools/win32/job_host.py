@@ -17,17 +17,24 @@ tools/experiments/job-limit-probe.py):
     could never report what happened. Measured: assign=self with a 1000 ms
     ceiling killed the supervisor itself and no result was written at all.
 
-  * The tool is created CREATE_SUSPENDED and assigned to the job before it is
+  * The tool is created CREATE_SUSPENDED, assigned to the job, and only then
     resumed, so there is no window in which it could run - or spawn a
-    grandchild - outside the job. Resuming needs PROCESS_SUSPEND_RESUME in the
-    OpenProcess mask; without 0x0800 NtResumeProcess returns 0xC0000022
-    STATUS_ACCESS_DENIED and the child hangs forever with no error.
+    grandchild - outside the job. CreateProcessW hands back the thread handle,
+    so ResumeThread does this directly. V-2 launched with Popen, which keeps no
+    thread handle, and had to reach for NtResumeProcess; that needed
+    PROCESS_SUSPEND_RESUME (0x0800) in the OpenProcess mask or it returned
+    0xC0000022 STATUS_ACCESS_DENIED and hung the child with no error anywhere.
+
+The tool is also launched inside an AppContainer, so a read outside the granted
+directories fails at the kernel instead of being discouraged. Nothing in the
+result is taken from the tool's own account of itself: the exit code, the job's
+own limit notifications, and a marker the caller asked for are what decide.
 
 The result file is always written before this process exits, because exiting
 closes the job handle and that is what kills the tree.
 
-Lain is not a sandbox. This bounds resource use; it does not confine what a
-tool is able to do.
+Lain is not a sandbox. This bounds resource use and denies reads outside the
+granted directories; it does not confine what a tool is able to do.
 """
 
 from __future__ import annotations
@@ -39,12 +46,11 @@ import json
 import os
 import subprocess
 import sys
-import threading
+import tempfile
 import time
 import uuid
 
 K = ctypes.WinDLL("kernel32", use_last_error=True)
-NT = ctypes.WinDLL("ntdll")
 
 K.CreateJobObjectW.argtypes = [ctypes.c_void_p, w.LPCWSTR]
 K.CreateJobObjectW.restype = w.HANDLE
@@ -57,24 +63,23 @@ K.QueryInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p,
 K.QueryInformationJobObject.restype = w.BOOL
 K.TerminateJobObject.argtypes = [w.HANDLE, w.UINT]
 K.TerminateJobObject.restype = w.BOOL
-K.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
-K.OpenProcess.restype = w.HANDLE
 K.CloseHandle.argtypes = [w.HANDLE]
 K.CloseHandle.restype = w.BOOL
+K.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+K.TerminateProcess.restype = w.BOOL
+K.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+K.WaitForSingleObject.restype = w.DWORD
+K.GetExitCodeProcess.argtypes = [w.HANDLE, ctypes.POINTER(w.DWORD)]
+K.GetExitCodeProcess.restype = w.BOOL
 K.CreateIoCompletionPort.argtypes = [w.HANDLE, w.HANDLE, ctypes.c_size_t, w.DWORD]
 K.CreateIoCompletionPort.restype = w.HANDLE
 K.GetQueuedCompletionStatus.argtypes = [w.HANDLE, ctypes.POINTER(w.DWORD),
                                         ctypes.POINTER(ctypes.c_size_t),
                                         ctypes.POINTER(ctypes.c_void_p), w.DWORD]
 K.GetQueuedCompletionStatus.restype = w.BOOL
-NT.NtResumeProcess.argtypes = [w.HANDLE]
-NT.NtResumeProcess.restype = ctypes.c_long
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NO_WINDOW = 0x08000000
-PROCESS_TERMINATE = 0x0001
-PROCESS_SET_QUOTA = 0x0100
-PROCESS_SUSPEND_RESUME = 0x0800
 WAIT_TIMEOUT = 258
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
@@ -148,7 +153,190 @@ class ASSOCIATE_COMPLETION_PORT(ctypes.Structure):
     _fields_ = [("CompletionKey", ctypes.c_void_p), ("CompletionPort", w.HANDLE)]
 
 
+# --- the AppContainer half ----------------------------------------------------
+#
+# The tool is launched inside an AppContainer, which is what makes a read
+# outside the workspace fail instead of merely being discouraged.
+# CreateProcessW with a security-capabilities attribute needs no
+# SeIncreaseQuotaPrivilege; the whole CreateProcessAsUser family does, and that
+# family is dead on this machine (winerror 5 for every token shape).
+#
+# Measured, and it explains a failure that looks like a bug: the EXE image is
+# opened and mapped with the PARENT's rights, so a tool always starts. The
+# import DLLs are opened by the child in the container's context. node.exe is
+# self-contained and runs from an ungranted directory; python.exe needs
+# python315.dll beside it and exits 0xC0000135 STATUS_DLL_NOT_FOUND unless that
+# directory is granted to the container SID. C:\Python315 belongs to SYSTEM and
+# Administrators and cannot be granted by us, so the Python runtime is a copy we
+# own - see src/exec/runtime.mjs, which prepares it once and records the path.
+
+CONTAINER_NAME = "lain.tool.runner"
+ERROR_ALREADY_EXISTS = 183
+HRESULT_ALREADY_EXISTS = 0x80070000 | ERROR_ALREADY_EXISTS
+STATUS_DLL_NOT_FOUND = 0xC0000135
+
+EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+STARTF_USESTDHANDLES = 0x00000100
+CREATE_UNICODE_ENVIRONMENT = 0x00000400
+PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
+GENERIC_WRITE = 0x40000000
+FILE_SHARE_READ = 0x00000001
+CREATE_ALWAYS = 2
+
+
+class SID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("Sid", w.LPVOID), ("Attributes", w.DWORD)]
+
+
+class SECURITY_CAPABILITIES(ctypes.Structure):
+    _fields_ = [
+        ("AppContainerSid", w.LPVOID),
+        ("Capabilities", ctypes.POINTER(SID_AND_ATTRIBUTES)),
+        ("CapabilityCount", w.DWORD),
+        ("Reserved", w.DWORD),
+    ]
+
+
+class STARTUPINFOEXW(ctypes.Structure):
+    _fields_ = [("StartupInfo", ctypes.c_byte * 104), ("lpAttributeList", w.LPVOID)]
+
+
+class PROCESS_INFORMATION(ctypes.Structure):
+    _fields_ = [("hProcess", w.HANDLE), ("hThread", w.HANDLE),
+                ("dwProcessId", w.DWORD), ("dwThreadId", w.DWORD)]
+
+
+class SECURITY_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("nLength", w.DWORD), ("lpSecurityDescriptor", w.LPVOID),
+                ("bInheritHandle", w.BOOL)]
+
+
+U = ctypes.WinDLL("userenv", use_last_error=True)
+A = ctypes.WinDLL("advapi32", use_last_error=True)
+
+U.CreateAppContainerProfile.argtypes = [
+    w.LPCWSTR, w.LPCWSTR, w.LPCWSTR, ctypes.POINTER(SID_AND_ATTRIBUTES), w.DWORD,
+    ctypes.POINTER(w.LPVOID)]
+U.CreateAppContainerProfile.restype = w.HRESULT
+U.DeriveAppContainerSidFromAppContainerName.argtypes = [w.LPCWSTR, ctypes.POINTER(w.LPVOID)]
+U.DeriveAppContainerSidFromAppContainerName.restype = w.HRESULT
+A.ConvertSidToStringSidW.argtypes = [w.LPVOID, ctypes.POINTER(w.LPWSTR)]
+A.ConvertSidToStringSidW.restype = w.BOOL
+K.InitializeProcThreadAttributeList.argtypes = [
+    w.LPVOID, w.DWORD, w.DWORD, ctypes.POINTER(ctypes.c_size_t)]
+K.UpdateProcThreadAttribute.argtypes = [
+    w.LPVOID, w.DWORD, ctypes.c_size_t, w.LPVOID, ctypes.c_size_t, w.LPVOID,
+    ctypes.POINTER(ctypes.c_size_t)]
+K.CreateProcessW.argtypes = [
+    w.LPCWSTR, w.LPWSTR, w.LPVOID, w.LPVOID, w.BOOL, w.DWORD, w.LPVOID, w.LPCWSTR,
+    w.LPVOID, ctypes.POINTER(PROCESS_INFORMATION)]
+K.CreateProcessW.restype = w.BOOL
+K.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, w.LPVOID, w.DWORD, w.DWORD, w.HANDLE]
+K.CreateFileW.restype = w.HANDLE
+K.ResumeThread.argtypes = [w.HANDLE]
+K.ResumeThread.restype = w.DWORD
+
+
+def sid_text(sid) -> str | None:
+    out = w.LPWSTR()
+    if A.ConvertSidToStringSidW(sid, ctypes.byref(out)):
+        text = out.value
+        K.LocalFree(out)
+        return text
+    return None
+
+
+def container_sid(name: str) -> tuple[object, dict]:
+    """The AppContainer SID for `name`.
+
+    Lain creates exactly one profile - its own - and derives every other name.
+    Creating whatever name it was handed made a typo into a new, empty boundary
+    that still reported itself as a container, which is fail-open wearing the
+    right answer's clothes.
+
+    A None SID means the run must refuse. Falling through to a plain spawn would
+    run the tool with no boundary while the result still claimed one, which is
+    worse than not running it.
+    """
+    report: dict = {}
+    sid = w.LPVOID()
+    if name == CONTAINER_NAME:
+        hr = U.CreateAppContainerProfile(
+            name, "Lain tool runner", "runs Lain tool processes", None, 0, ctypes.byref(sid))
+        if hr == 0:
+            report["created"] = True
+            report["sid"] = sid_text(sid)
+            return sid, report
+
+        code = hr & 0xFFFFFFFF
+        report["create_hr"] = f"0x{code:08X}"
+        if code == HRESULT_ALREADY_EXISTS:
+            # Only a caller that got far enough to look can be told this.
+            report["already_existed"] = True
+        else:
+            signed = code - 0x100000000 if code >= 0x80000000 else code
+            report["create_message"] = ctypes.FormatError(signed).strip()
+    else:
+        report["derived_only"] = True
+
+    derived = w.LPVOID()
+    hr2 = U.DeriveAppContainerSidFromAppContainerName(name, ctypes.byref(derived))
+    if hr2 != 0:
+        report["derive_hr"] = f"0x{hr2 & 0xFFFFFFFF:08X}"
+        return None, report
+    report["sid"] = sid_text(derived)
+    return derived, report
+
+
+def attribute_list(sid) -> tuple[object, object, int]:
+    """A PROC_THREAD_ATTRIBUTE list carrying the security capabilities.
+
+    Returns (buffer, sec, 0) or (None, None, winerror). The caller must keep
+    `sec` alive until CreateProcessW has consumed it: the attribute list holds a
+    POINTER to it, and letting it be collected produces an access violation
+    inside CreateProcessW instead of an error anyone can read.
+    """
+    sec = SECURITY_CAPABILITIES()
+    sec.AppContainerSid = sid
+    sec.Capabilities = None
+    sec.CapabilityCount = 0
+    sec.Reserved = 0
+    size = ctypes.c_size_t(0)
+    K.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    if not size.value:
+        return None, None, ctypes.get_last_error()
+    buffer = ctypes.create_string_buffer(size.value)
+    if not K.InitializeProcThreadAttributeList(buffer, 1, 0, ctypes.byref(size)):
+        return None, None, ctypes.get_last_error()
+    if not K.UpdateProcThreadAttribute(
+            buffer, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            ctypes.byref(sec), ctypes.sizeof(sec), None, None):
+        return None, None, ctypes.get_last_error()
+    return buffer, sec, 0
+
+
+def output_handle(path: str) -> tuple[object, int]:
+    """A writable handle the child inherits.
+
+    The parent opens it, so the container's own ACL never enters into it: the
+    child writes through a handle that already carries the access. This is the
+    deliberate answer to the empty-pipe trap - an AppContainer cannot reach the
+    parent's pipe handles, so a piped child writes nothing and empty output
+    cannot be told apart from a child that never ran.
+    """
+    sa = SECURITY_ATTRIBUTES()
+    sa.nLength = ctypes.sizeof(sa)
+    sa.lpSecurityDescriptor = None
+    sa.bInheritHandle = True
+    handle = K.CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, ctypes.byref(sa),
+                           CREATE_ALWAYS, 0, None)
+    if handle == INVALID_HANDLE_VALUE:
+        return None, ctypes.get_last_error()
+    return handle, 0
+
+
 def set_limits(job, spec: dict) -> tuple[dict, list, list]:
+
     """Ask for each ceiling, then read back what the kernel actually holds.
 
     A BOOL from SetInformationJobObject is a claim; the query is the evidence.
@@ -246,30 +434,6 @@ def drain_port(port, budget_s: float) -> list:
     return out
 
 
-class Reader(threading.Thread):
-    """Drain one pipe, keeping at most `cap` bytes and flagging any overflow."""
-
-    def __init__(self, stream, cap: int):
-        super().__init__(daemon=True)
-        self.stream = stream
-        self.cap = cap
-        self.buf = bytearray()
-        self.truncated = False
-
-    def run(self) -> None:
-        while True:
-            chunk = self.stream.read(65536)
-            if not chunk:
-                break
-            room = self.cap - len(self.buf)
-            if room > 0:
-                self.buf.extend(chunk[:room])
-                if len(chunk) > room:
-                    self.truncated = True
-            else:
-                self.truncated = True
-
-
 def write_result(path: str, result: dict) -> None:
     """Write the result durably before anything can close the job handle."""
     tmp = f"{path}.tmp"
@@ -279,6 +443,180 @@ def write_result(path: str, result: dict) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+
+
+def build_env_block(env) -> object:
+    if not env:
+        return None
+    text = "".join(f"{key}={value}\0" for key, value in env.items()) + "\0"
+    return ctypes.create_unicode_buffer(text)
+
+
+def apply_env_for_container(env) -> None:
+    """Put `env` into our own environment block and hand the child nothing.
+
+    CreateProcessW refuses a caller-supplied environment for an AppContainer:
+    every non-NULL block comes back ERROR_ENVVAR_NOT_FOUND (203), even a single
+    dummy variable. Measured 2026-11-08: {A: B} and {SystemRoot: ...} both fail,
+    an empty block succeeds only because it is dropped to NULL.
+
+    With lpEnvironment NULL the child inherits THIS process's environment -
+    measured at 64 variables, including USERPROFILE, APPDATA and a variable set
+    only in the probe. So the allow-list is applied here, one step earlier:
+    clearing this process's block means the inherited one is the allow-list.
+    """
+    os.environ.clear()
+    os.environ.update({str(key): str(value) for key, value in env.items()})
+
+
+def wait_exit(handle, timeout_s: float = 0.0):
+    """The exit code once the process has finished, else None."""
+    if K.WaitForSingleObject(handle, int(timeout_s * 1000)) == WAIT_TIMEOUT:
+        return None
+    code = w.DWORD()
+    if not K.GetExitCodeProcess(handle, ctypes.byref(code)):
+        return None
+    return code.value
+
+
+def file_size(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def read_capped(path: str, cap: int) -> tuple[str, int]:
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "", 0
+    return data[:cap].decode("utf-8", errors="replace"), len(data)
+
+
+def spawn_tool(spec: dict, job, scratch: str) -> tuple[object, dict]:
+    """Create the tool suspended, put it in the job, then let it run.
+
+    Everything that can refuse does so before the tool is resumed, so a refusal
+    never leaves a running process behind and never leaves the caller believing
+    a boundary was applied when it was not.
+    """
+    out: dict = {"pid": None, "container": None}
+    sid = None
+    container = spec.get("container")
+    if container:
+        sid, report = container_sid(container)
+        out["container"] = report
+        if sid is None:
+            out["fatal"] = "the tool container could not be resolved"
+            out["code"] = "CONTAINER_UNAVAILABLE"
+            return None, out
+
+    buffers = None
+    sec = None
+    if sid is not None:
+        buffers, sec, winerror = attribute_list(sid)
+        if buffers is None:
+            out["fatal"] = f"UpdateProcThreadAttribute failed: {winerror}"
+            out["code"] = "CONTAINER_ATTRIBUTE_FAILED"
+            return None, out
+
+    stdout_path = os.path.join(scratch, "stdout.txt")
+    stderr_path = os.path.join(scratch, "stderr.txt")
+    out_handle, err_out = output_handle(stdout_path)
+    err_handle, err_err = output_handle(stderr_path)
+    if out_handle is None or err_handle is None:
+        if out_handle is not None:
+            K.CloseHandle(out_handle)
+        if err_handle is not None:
+            K.CloseHandle(err_handle)
+        out["fatal"] = f"the output files could not be opened: {err_out or err_err}"
+        out["code"] = "OUTPUT_FILE_FAILED"
+        return None, out
+
+    si = STARTUPINFOEXW()
+    ctypes.memset(ctypes.byref(si), 0, ctypes.sizeof(si))
+    # cb is the size of the whole STARTUPINFOEX when EXTENDED_STARTUPINFO_PRESENT
+    # is passed: 104 is sizeof(STARTUPINFO) on x64 plus the attribute pointer.
+    ctypes.cast(ctypes.byref(si), ctypes.POINTER(w.DWORD))[0] = ctypes.sizeof(si)
+    if buffers is not None:
+        si.lpAttributeList = ctypes.cast(buffers, w.LPVOID)
+    # The struct is opaque here, so the std handles are written at their x64
+    # offsets: dwFlags 60, hStdInput 80, hStdOutput 88, hStdError 96.
+    ctypes.cast(ctypes.byref(si, 60), ctypes.POINTER(w.DWORD))[0] = STARTF_USESTDHANDLES
+    ctypes.cast(ctypes.byref(si, 80), ctypes.POINTER(w.HANDLE))[0] = INVALID_HANDLE_VALUE
+    ctypes.cast(ctypes.byref(si, 88), ctypes.POINTER(w.HANDLE))[0] = out_handle
+    ctypes.cast(ctypes.byref(si, 96), ctypes.POINTER(w.HANDLE))[0] = err_handle
+
+    cmd = [spec["command"], *spec.get("args", [])]
+    cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(cmd))
+    env_block = build_env_block(spec.get("env"))
+    if sid is not None and spec.get("env") is not None:
+        if "LOCALAPPDATA" not in spec["env"]:
+            # Fail with the reason rather than with Windows' own wording, which
+            # reads as a typo in the block and sends the reader looking for one.
+            out["fatal"] = ("a containerised run needs LOCALAPPDATA: CreateProcessW "
+                            "rejects any environment block without it with "
+                            "ERROR_ENVVAR_NOT_FOUND (203), whatever else the block holds")
+            out["code"] = "CONTAINER_ENV_INCOMPLETE"
+            return None, out
+        apply_env_for_container(spec["env"])
+        env_block = None
+    flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT
+    if buffers is not None:
+        flags |= EXTENDED_STARTUPINFO_PRESENT
+    pi = PROCESS_INFORMATION()
+    created = K.CreateProcessW(
+        None, cmdline, None, None, True, flags,
+        ctypes.cast(env_block, w.LPVOID) if env_block is not None else None,
+        spec.get("cwd") or None, ctypes.byref(si), ctypes.byref(pi))
+    err = ctypes.get_last_error()
+    K.CloseHandle(out_handle)
+    K.CloseHandle(err_handle)
+    if not created:
+        out["spawn_error"] = ctypes.FormatError(err).strip()
+        # Keep the errno-shaped code the synchronous caller already reports, so
+        # a missing executable still reads as ENOENT rather than a new word.
+        out["spawn_error_code"] = "ENOENT" if err == 2 else "SPAWN_FAILED"
+        out["fatal"] = "the tool process could not be created"
+        if sid is not None and err == 2:
+            # DeriveAppContainerSidFromAppContainerName hashes the name and
+            # succeeds for a profile that does not exist, so the missing thing
+            # here is the profile's own storage and not the executable. Without
+            # this the run would refuse with no reason attached, and "nothing
+            # ran" is not the same report as "the boundary was not available".
+            out["code"] = "CONTAINER_PROFILE_MISSING"
+            out["fatal"] = f"the AppContainer profile {spec.get('container')!r} does not exist"
+        return None, out
+
+    out["pid"] = pi.dwProcessId
+    if not K.AssignProcessToJobObject(job, pi.hProcess):
+        assign_err = ctypes.get_last_error()
+        K.TerminateProcess(pi.hProcess, EXIT_QUOTA_EXCEEDED)
+        K.CloseHandle(pi.hThread)
+        K.CloseHandle(pi.hProcess)
+        out["fatal"] = f"AssignProcessToJobObject failed: {assign_err}"
+        out["code"] = "JOB_ASSIGN_FAILED"
+        return None, out
+
+    # Only now, with the tool already inside the job, is it allowed to run.
+    # CreateProcessW hands back the thread handle, which is what makes this
+    # possible; Popen keeps no such handle and V-2 had to resort to
+    # NtResumeProcess, which also needed PROCESS_SUSPEND_RESUME (0x0800) or it
+    # hung the child with STATUS_ACCESS_DENIED and no error anywhere.
+    if K.ResumeThread(pi.hThread) == 0xFFFFFFFF:
+        resume_err = ctypes.get_last_error()
+        K.TerminateProcess(pi.hProcess, EXIT_QUOTA_EXCEEDED)
+        K.CloseHandle(pi.hThread)
+        K.CloseHandle(pi.hProcess)
+        out["fatal"] = f"ResumeThread failed: {resume_err}"
+        return None, out
+
+    K.CloseHandle(pi.hThread)
+    out["stdout_path"] = stdout_path
+    out["stderr_path"] = stderr_path
+    return pi.hProcess, out
 
 
 def supervise(spec: dict) -> dict:
@@ -293,6 +631,7 @@ def supervise(spec: dict) -> dict:
         "stdout": "",
         "stderr": "",
         "output_truncated": False,
+        "output_unverified": False,
         "exit_code": None,
         "notifications": [],
         "kill_reason": None,
@@ -322,102 +661,68 @@ def supervise(spec: dict) -> dict:
     out["limits_applied"] = applied
     out["limits_refused"] = refused
 
-    cmd = [spec["command"], *spec.get("args", [])]
-    env = spec.get("env") or None
-    try:
-        child = subprocess.Popen(
-            cmd,
-            cwd=spec.get("cwd") or None,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=CREATE_SUSPENDED | CREATE_NO_WINDOW,
-        )
-    except OSError as exc:
-        out["spawn_error"] = f"{type(exc).__name__}: {exc}"
-        # Keep the errno-shaped code the synchronous caller already reports, so
-        # a missing executable still reads as ENOENT rather than a new word.
-        out["spawn_error_code"] = "ENOENT" if isinstance(exc, FileNotFoundError) else "SPAWN_FAILED"
-        out["fatal"] = "the tool process could not be created"
+    scratch = spec.get("scratch") or tempfile.mkdtemp(prefix="lain-job-")
+    process, spawn = spawn_tool(spec, job, scratch)
+    out["container"] = spawn.get("container")
+    if process is None:
+        out["spawn_error"] = spawn.get("spawn_error")
+        out["spawn_error_code"] = spawn.get("spawn_error_code")
+        out["fatal"] = spawn["fatal"]
+        if spawn.get("code"):
+            limit = "container" if spawn["code"].startswith("CONTAINER") else "job_membership"
+            out["limits_refused"].append(
+                {"limit": limit, "code": spawn["code"], "detail": spawn["fatal"]})
         out["duration_ms"] = int((time.time() - started) * 1000)
         return out
 
-    out["pid"] = child.pid
-
-    handle = K.OpenProcess(
-        PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME, False, child.pid)
-    if not handle:
-        err = ctypes.get_last_error()
-        child.kill()
-        out["fatal"] = f"OpenProcess failed: {err}"
-        out["duration_ms"] = int((time.time() - started) * 1000)
-        return out
-
-    assigned = K.AssignProcessToJobObject(job, handle)
-    if not assigned:
-        err = ctypes.get_last_error()
-        K.CloseHandle(handle)
-        child.kill()
-        out["fatal"] = f"AssignProcessToJobObject failed: {err}"
-        out["limits_refused"].append(
-            {"limit": "job_membership", "code": err,
-             "detail": "the tool was never placed in the job, so nothing was enforced"})
-        out["duration_ms"] = int((time.time() - started) * 1000)
-        return out
-
-    # Only now, with the tool already inside the job, is it allowed to run.
-    resume = int(NT.NtResumeProcess(handle))
-    K.CloseHandle(handle)
-    if resume != 0:
-        K.TerminateJobObject(job, EXIT_QUOTA_EXCEEDED)
-        out["fatal"] = (f"NtResumeProcess failed: 0x{resume & 0xFFFFFFFF:08X} "
-                        f"(PROCESS_SUSPEND_RESUME must be in the OpenProcess mask)")
-        out["duration_ms"] = int((time.time() - started) * 1000)
-        return out
-
+    out["pid"] = spawn["pid"]
     cap = int(spec.get("output_bytes") or 1_048_576)
-    readers = [Reader(child.stdout, cap), Reader(child.stderr, cap)]
-    for reader in readers:
-        reader.start()
-
     supervisor_ms = int(spec.get("supervisor_ms") or 300_000)
     deadline = started + supervisor_ms / 1000.0
     exit_code = None
     while True:
-        exit_code = child.poll()
+        exit_code = wait_exit(process)
         if exit_code is not None:
             break
-        if any(r.truncated for r in readers):
-            # The tool has already written more than the ceiling allows. Stop
-            # the whole job rather than let it keep producing into a discard.
+        # The tool has already written more than the ceiling allows. Stop the
+        # whole job rather than let it keep producing into a discard.
+        if file_size(spawn["stdout_path"]) > cap or file_size(spawn["stderr_path"]) > cap:
             out["kill_reason"] = "output_ceiling"
             K.TerminateJobObject(job, EXIT_QUOTA_EXCEEDED)
-            try:
-                exit_code = child.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                exit_code = child.poll()
+            exit_code = wait_exit(process, 10.0)
             break
         if time.time() > deadline:
             out["kill_reason"] = "supervisor_timeout"
             K.TerminateJobObject(job, EXIT_QUOTA_EXCEEDED)
-            try:
-                exit_code = child.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                exit_code = child.poll()
+            exit_code = wait_exit(process, 10.0)
             break
         time.sleep(0.01)
+    K.CloseHandle(process)
 
-    for reader in readers:
-        reader.join(timeout=5)
-
+    stdout_bytes_read, stdout_size = read_capped(spawn["stdout_path"], cap)
+    stderr_bytes_read, stderr_size = read_capped(spawn["stderr_path"], cap)
     out["exit_code"] = None if exit_code is None else exit_code & 0xFFFFFFFF
-    out["stdout"] = readers[0].buf.decode("utf-8", errors="replace")
-    out["stderr"] = readers[1].buf.decode("utf-8", errors="replace")
-    out["output_truncated"] = readers[0].truncated or readers[1].truncated
+    if out["exit_code"] == STATUS_DLL_NOT_FOUND:
+        # Almost always the interpreter's own DLLs being unreadable to the
+        # container, not a missing runtime.
+        out["exit_name"] = "STATUS_DLL_NOT_FOUND"
+    out["stdout"] = stdout_bytes_read
+    out["stderr"] = stderr_bytes_read
+    out["output_truncated"] = stdout_size > cap or stderr_size > cap
     out["notifications"] = drain_port(port, 0.6)
+
+    # A run that produced nothing is the failure that cost an hour: an
+    # AppContainer cannot reach the parent's pipe handles, so a piped child
+    # writes nothing, and "no output" then looks exactly like "no run". When the
+    # caller names a marker, a missing marker is reported, never quietly passed.
+    marker = spec.get("expect_marker")
+    if marker and marker not in out["stdout"]:
+        out["output_unverified"] = True
+        out["fatal"] = (f"the tool was expected to print {marker!r} and did not, so this run's "
+                        "output is not evidence that it ran")
+        out["duration_ms"] = int((time.time() - started) * 1000)
+        return out
+
     out["ok"] = True
     out["duration_ms"] = int((time.time() - started) * 1000)
     return out
@@ -425,14 +730,29 @@ def supervise(spec: dict) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="run one tool process inside a job object")
-    parser.add_argument("--spec", required=True, help="path to the spec JSON")
-    parser.add_argument("--result", required=True, help="where to write the result JSON")
+    parser.add_argument("--spec", help="path to the spec JSON")
+    parser.add_argument("--result", help="where to write the result JSON")
     parser.add_argument("--version", action="store_true", help="print the schema version and exit")
+    # The workspace needs this SID to grant itself to the container before any
+    # tool runs in it, and the SID is only knowable from here.
+    parser.add_argument("--print-container-sid", action="store_true",
+                        help="print the container SID, creating the profile if needed")
     args = parser.parse_args()
 
     if args.version:
         print("job_host/1")
         return 0
+
+    if args.print_container_sid:
+        sid, report = container_sid(CONTAINER_NAME)
+        if sid is None:
+            print(json.dumps(report), file=sys.stderr)
+            return 2
+        print(sid_text(sid))
+        return 0
+
+    if not args.spec or not args.result:
+        parser.error("--spec and --result are required unless --version or --print-container-sid is given")
 
     try:
         with open(args.spec, encoding="utf-8") as fh:

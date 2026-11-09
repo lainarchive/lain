@@ -35,6 +35,13 @@ export const DEFAULT_PYTHON = 'C:\\Python315\\python.exe';
 
 export const DEFAULT_HELPER = resolve(HERE, '..', '..', 'tools', 'win32', 'job_host.py');
 
+/**
+ * The AppContainer every tool runs in. The profile is created once by the
+ * supervisor and derived on every later run, so a missing profile is not a
+ * reason to fall back to an unconfined spawn.
+ */
+export const CONTAINER_NAME = 'lain.tool.runner';
+
 // The cancel path asks this layer for a job handle while a tool is still
 // running, so the supervisor pid is published the moment it exists. Handing it
 // back with the result would be useless for stopping anything.
@@ -127,6 +134,107 @@ export function resolvePython(spec = {}) {
   return { ok: true, candidate };
 }
 
+/** Resolved once per process: creating the profile is a first-run cost. */
+/** @type {{ok: boolean, sid: string|null, detail: string|null}|null} */
+let cachedContainerSid = null;
+
+/**
+ * The AppContainer SID, or the reason there is not one.
+ *
+ * Asked of the supervisor because the SID can only be derived there, and cached
+ * because creating the profile is a first-run cost rather than a per-run one. A
+ * refusal here is not a licence to run anyway: it is what stops a workspace
+ * being built that no confined tool would be able to write to.
+ */
+export function containerSid() {
+  if (cachedContainerSid !== null) return cachedContainerSid;
+  const python = resolvePython();
+  if (!python.ok) {
+    cachedContainerSid = { ok: false, sid: null, detail: `${python.reason}: ${python.candidate}` };
+    return cachedContainerSid;
+  }
+  const done = spawnSync(python.candidate, [DEFAULT_HELPER, '--print-container-sid'],
+    { encoding: 'utf8', windowsHide: true });
+  const sid = (done.stdout ?? '').trim();
+  cachedContainerSid = done.status === 0 && /^S-1-15-2-/.test(sid)
+    ? { ok: true, sid, detail: null }
+    : { ok: false, sid: null, detail: (done.stderr ?? '').trim() || 'the container SID could not be resolved' };
+  return cachedContainerSid;
+}
+
+/**
+ * How a tool has to be launched, in one place, so the tool and the supervisor
+ * cannot drift apart on it. Every value here was measured, not reasoned:
+ *
+ *   node_entry 'eval' - `node <script.js>` cannot run inside the container even
+ *     when the script is granted, because resolving the main module walks up to
+ *     the volume root and `lstat 'C:\\'` comes back EPERM -4048. `node -e`
+ *     runs, and process.argv then starts at the first argument after the source.
+ *   node_can_spawn_node false - an image is opened with the PARENT's rights
+ *     only for the process the supervisor creates. A nested CreateProcess opens
+ *     node.exe with the container's own rights and gets SPAWN_ERROR ENOENT, so
+ *     a tool that shells out to node needs the runtime directory granted first.
+ *   py_dll_adjacent true - python.exe loads python315.dll from beside itself and
+ *     cannot read C:\Python315, so the interpreter has to be a granted copy.
+ *
+ * @param {Record<string, any>} [spec]
+ */
+export function containerEntry(spec = {}) {
+  const active = Boolean(spec.container);
+  return Object.freeze({
+    active,
+    name: active ? (spec.container === true ? CONTAINER_NAME : spec.container) : null,
+    node_entry: active ? 'eval' : 'path',
+    node_can_spawn_node: !active,
+    py_dll_adjacent: true,
+  });
+}
+
+/**
+ * CreateProcessW refuses a command line longer than 32767 characters, and
+ * refuses it by truncating nothing - it fails. 32000 leaves the margin for the
+ * pieces a caller cannot measure from here.
+ */
+export const MAX_COMMAND_LINE = 32_000;
+
+/**
+ * The exact command line CreateProcessW will see for `args`.
+ *
+ * A cap on an inline script has to be arithmetic rather than a round number.
+ * Quoting doubles the backslashes that precede a quote, so a script can occupy
+ * more of the command line than it occupies in a file, and a round number that
+ * is merely large would not refuse a long script - it would cut it short and
+ * let the remainder run, which is the one outcome worth more trouble than this.
+ * The rule is the one Python's subprocess.list2cmdline uses, because that is
+ * what builds the real command line in tools/win32/job_host.py.
+ *
+ * @param {string[]} args
+ */
+export function windowsCommandLine(args) {
+  let out = '';
+  for (const arg of args) {
+    const text = String(arg);
+    if (out.length > 0) out += ' ';
+    const needQuote = text.length === 0 || /[ \t]/.test(text);
+    if (needQuote) out += '"';
+    let backslashes = 0;
+    for (const ch of text) {
+      if (ch === '\\') {
+        backslashes += 1;
+      } else if (ch === '"') {
+        out += '\\'.repeat(backslashes * 2 + 1) + '"';
+        backslashes = 0;
+      } else {
+        out += '\\'.repeat(backslashes) + ch;
+        backslashes = 0;
+      }
+    }
+    if (backslashes > 0) out += '\\'.repeat(needQuote ? backslashes * 2 : backslashes);
+    if (needQuote) out += '"';
+  }
+  return out;
+}
+
 /**
  * Build the spec the supervisor reads. Only ceilings that were actually asked
  * for are sent, so the helper never reports enforcing a limit nobody set.
@@ -148,6 +256,10 @@ export function buildHelperSpec(spec, supervisorMs) {
   if (limits.process_memory_bytes) out.process_memory_bytes = limits.process_memory_bytes;
   if (limits.job_memory_bytes) out.job_memory_bytes = limits.job_memory_bytes;
   if (limits.job_ms) out.job_ms = limits.job_ms;
+  // `container: true` means the default profile. A name is passed through so a
+  // caller can run against a profile it prepared itself.
+  if (spec.container) out.container = spec.container === true ? CONTAINER_NAME : spec.container;
+  if (spec.expectMarker) out.expect_marker = spec.expectMarker;
   return out;
 }
 
@@ -314,6 +426,25 @@ export function deriveOutcome({ result, supervisorExit, killedByCaller, timedOut
  * @param {Record<string, any>} run
  * @param {Record<string, any>} extra
  */
+/**
+ * A boundary that failed to apply is the same question to a caller as a ceiling
+ * that failed to apply - "is this run under the rules I asked for?" - so it is
+ * reported in the same field rather than folded into a tool error.
+ *
+ * @param {Record<string, any>|null|undefined} result
+ */
+function boundaryRefusals(result) {
+  if (!result || result.ok === true || !result.code) return [];
+  return [refusal('container', String(result.code),
+    String(result.fatal ?? 'the container boundary was not applied'))];
+}
+
+/**
+ * @param {Record<string, any>} prep
+ * @param {Record<string, any>} spec
+ * @param {Record<string, any>} run
+ * @param {Record<string, any>} extra
+ */
 function assemble(prep, spec, run, extra) {
   const result = run.result;
   const outcome = deriveOutcome({
@@ -328,10 +459,15 @@ function assemble(prep, spec, run, extra) {
     pid: result?.pid ?? null,
     job_name: result?.job_name ?? 'lain-tool-unstarted',
     limits_applied: result?.limits_applied ?? [],
-    limits_refused: [...prep.refusals, ...(result?.limits_refused ?? [])],
+    limits_refused: [...prep.refusals, ...(result?.limits_refused ?? []), ...boundaryRefusals(result)],
     stdout: result?.stdout ?? '',
     stderr: result?.stderr || extra.supervisorStderr || '',
     output_truncated: result?.output_truncated ?? false,
+    // Set when the caller asked for a marker and the run produced it nowhere.
+    // Empty output and a silent child look identical, so the run is reported as
+    // unverified rather than as a pass.
+    output_unverified: result?.output_unverified === true,
+    container: result?.container ?? null,
     exit_code: result?.exit_code ?? null,
     status: outcome.status,
     killed_by: outcome.killed_by,
