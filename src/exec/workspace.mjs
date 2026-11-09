@@ -13,10 +13,11 @@
  * The scrub exists to stop *careless* writes, and it is written so that a
  * refusal is a recorded outcome rather than an exception nobody sees.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { LainError } from '../core/errors.mjs';
-import { runInJob, runInJobSync } from './job.mjs';
+import { containerSid, runInJob, runInJobSync } from './job.mjs';
 
 export class WorkspaceError extends LainError {
   /**
@@ -38,9 +39,18 @@ export const SCRIPT_CAPABILITIES = ['workspace.write', 'process.spawn'];
  * an inherited environment would hand the tool every credential the user's shell
  * happens to hold, which is exactly what the threat model says must not happen.
  *
- * @param {{workspace: string, temp: string}} args
+ * LOCALAPPDATA is the one exception, and only for a containerised run. An
+ * AppContainer cannot be created from an environment block that lacks it:
+ * `CreateProcessW` comes back ERROR_ENVVAR_NOT_FOUND (203) with the rest of this
+ * list present and correct. Measured 2026-11-08 — the same list plus
+ * LOCALAPPDATA starts, the same list alone does not. The system appends
+ * `\Packages\<profile>\AC` to whatever base is given, so the base here is a
+ * directory inside the workspace the container already owns, and the real
+ * profile path never reaches the tool.
+ *
+ * @param {{workspace: string, temp: string, container?: boolean}} args
  */
-export function buildEnv({ workspace, temp }) {
+export function buildEnv({ workspace, temp, container = false }) {
   return {
     PATH: process.env.PATH ?? '',
     SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
@@ -49,9 +59,10 @@ export function buildEnv({ workspace, temp }) {
     TEMP: temp,
     TMP: temp,
     LAIN_WORKSPACE: workspace,
-    // Deliberately absent: USERPROFILE, APPDATA, LOCALAPPDATA, HOME,
-    // SSH_AUTH_SOCK, AWS_*, GITHUB_TOKEN, and every other variable that could
-    // carry a secret into a tool process.
+    // Deliberately absent: USERPROFILE, APPDATA, HOME, SSH_AUTH_SOCK, AWS_*,
+    // GITHUB_TOKEN, and every other variable that could carry a secret into a
+    // tool process.
+    ...(container ? { LOCALAPPDATA: join(workspace, '.localappdata') } : {}),
   };
 }
 
@@ -94,8 +105,11 @@ export function scrubPath(workspace, candidate, opts = {}) {
  * missing supervisor, a missing interpreter - without breaking this one. They
  * are how the fail-closed path is exercised rather than assumed.
  *
+ * `container` names the AppContainer every run from this workspace is launched
+ * into. Absent means the older shape: a job object with no read boundary.
+ *
  * @param {{root: string, task_id: string, forbidden?: string[], now?: () => number,
- *   helperPath?: string, python?: string}} options
+ *   helperPath?: string, python?: string, container?: string}} options
  * @returns {import('../core/types.mjs').WorkspaceHandle}
  */
 export function createWorkspace(options) {
@@ -111,13 +125,14 @@ export function createWorkspace(options) {
     cwd,
     outputBytes: spec.maxOutputBytes,
     supervisorMs: spec.timeoutMs,
-    env: buildEnv({ workspace: dir, temp }),
+    env: buildEnv({ workspace: dir, temp, container: Boolean(options.container) }),
     limits: { job_ms: spec.timeoutMs },
     // Registered against this, so the cancel path can find the supervisor
     // while the tool is still running.
     task_id: options.task_id,
     helperPath: options.helperPath,
     python: options.python,
+    container: options.container,
   });
 
   /** @param {Record<string, any>} spec @param {string} cwd @param {Record<string, any>} result */
@@ -152,6 +167,26 @@ export function createWorkspace(options) {
     create() {
       mkdirSync(dir, { recursive: true });
       mkdirSync(temp, { recursive: true });
+      if (options.container) {
+        const sid = containerSid();
+        if (!sid.ok) {
+          throw new WorkspaceError('CONTAINER_UNAVAILABLE',
+            'the workspace cannot be granted to the container, so no tool may run in it', { detail: sid.detail });
+        }
+        // Modify, not Full: (OI)(CI)M is narrower than F and carries neither
+        // WRITE_DAC nor WRITE_OWNER, so the tool cannot rewrite the very ACL
+        // that confines it. It is still enough to create, append, rename and
+        // delete inside its own workspace, which is what ordinary work needs -
+        // a boundary that breaks that is a boundary someone gets told to turn
+        // off. Granted on this one task directory, never on a shared parent.
+        const grant = spawnSync('icacls', [dir, '/grant', `*${sid.sid}:(OI)(CI)M`],
+          { encoding: 'utf8', windowsHide: true });
+        if (grant.status !== 0) {
+          throw new WorkspaceError('CONTAINER_GRANT_FAILED',
+            `icacls could not grant ${sid.sid} on the workspace`,
+            { detail: (grant.stderr ?? '').trim() || `icacls exited ${grant.status}` });
+        }
+      }
       return dir;
     },
 
@@ -192,6 +227,14 @@ export function createWorkspace(options) {
       }
       return { path: target, bytes: Buffer.byteLength(contents, 'utf8') };
     },
+
+    /**
+     * The AppContainer this workspace's runs are launched into, or null. A tool
+     * reads this rather than guessing, because inside a container a script has
+     * to be handed over `-e` - see containerEntry() in ./job.mjs, which is the
+     * one place that decides it.
+     */
+    container: options.container ?? null,
 
     /**
      * Run one process inside a Windows job object, through src/exec/job.mjs and

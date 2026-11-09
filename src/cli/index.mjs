@@ -23,6 +23,7 @@ import { createRegistry } from '../tools/registry.mjs';
 import { createRunScriptTool } from '../tools/run-script.mjs';
 import { contractFromJson, createTaskRunner } from '../agent/task-runner.mjs';
 import { createJobControl } from '../exec/job.mjs';
+import { checkExecutionBoundary } from '../exec/boundary.mjs';
 import { open as openEventStore } from '../store/index.mjs';
 import { isEntryPoint } from '../../tools/check/lib/report.mjs';
 import { approveCommand } from './commands/approve.mjs';
@@ -119,6 +120,22 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
     const events = openEventStore({ path: paths.log, producer: 'cli' });
     const taskStore = openTaskStore({ path: paths.tasks });
     try {
+      // State the read boundary before anything else happens, and refuse when it
+      // cannot be stated. This is the check that keeps "never silently execute an
+      // unrestricted child process" a property of the code rather than a sentence
+      // in a design document: an unset LAIN_READ_POSTURE stops here, with no task
+      // record, no workspace and no tool process.
+      const boundary = checkExecutionBoundary({
+        workspaceRoot: paths.workspaces,
+        stateBase: paths.base,
+        env,
+      });
+      if (!boundary.ok) {
+        io.err(`refused: ${boundary.code} — ${boundary.message}`);
+        return EXIT.refused;
+      }
+      if (flags.json) io.err(`read boundary  ${boundary.posture}  ${boundary.code}`);
+
       // `--cancel-after <ms>` asks for a stop that long after execution starts.
       // Validated here rather than passed through, because a typo like
       // `--cancel-after soon` must not quietly become "no cancellation" — a run

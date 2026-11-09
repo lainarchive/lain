@@ -14,10 +14,12 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import {
-  createJobControl, DEFAULT_HELPER, deriveOutcome, EXIT_QUOTA_EXCEEDED, resolvePython, runInJob,
+  CONTAINER_NAME, createJobControl, DEFAULT_HELPER, deriveOutcome, EXIT_QUOTA_EXCEEDED, containerEntry,
+  containerSid, resolvePython, runInJob,
 } from '../../src/exec/job.mjs';
 import { CEILINGS, describeCeilings, renderCeiling, unenforcedCeilings } from '../../src/exec/limits.mjs';
-import { createWorkspace } from '../../src/exec/workspace.mjs';
+import { buildEnv, createWorkspace } from '../../src/exec/workspace.mjs';
+import { createRunScriptTool } from '../../src/tools/run-script.mjs';
 
 const PYTHON = resolvePython();
 const skip = PYTHON.ok ? false : `no interpreter at ${PYTHON.candidate}`;
@@ -325,6 +327,83 @@ test('the helper records a hash and never searches PATH for the interpreter', { 
     'a bare program name is not an absolute path and must be refused');
   assert.equal(resolvePython({ python: 'C:\\nope\\python.exe' }).ok, false);
   assert.equal(resolvePython({ python: PYTHON.candidate }).ok, true);
+});
+
+const SID = containerSid();
+const containerSkip = SID.ok ? false : `no container profile: ${SID.detail}`;
+
+test('the allow-list carries LOCALAPPDATA only when a container is asked for', () => {
+  const plain = buildEnv({ workspace: 'W', temp: 'T' });
+  const boxed = buildEnv({ workspace: 'W', temp: 'T', container: true });
+
+  // A plain run must not be told where the profile lives. A containerised one
+  // has to be: CreateProcessW refuses the whole block without it.
+  assert.equal('LOCALAPPDATA' in plain, false);
+  assert.equal(boxed.LOCALAPPDATA, join('W', '.localappdata'));
+  assert.equal('USERPROFILE' in boxed, false);
+  assert.equal(containerEntry({}).active, false);
+  assert.equal(containerEntry({ container: CONTAINER_NAME }).node_entry, 'eval');
+});
+
+test('AT-V2-JOB-09 a contained tool writes its workspace and cannot read the profile', { skip: containerSkip }, async () => {
+  const workspace = createWorkspace({
+    root: join(ROOT, 'contained'), task_id: 'v3-contained', container: CONTAINER_NAME,
+  });
+  workspace.create();
+  try {
+    const tool = createRunScriptTool({ workspace });
+    const script = [
+      "const fs = require('node:fs');",
+      'const ws = process.argv[2];',
+      `const home = ${JSON.stringify(process.env.USERPROFILE ?? 'C:\\Users\\nobody')};`,
+      'const out = [];',
+      "try { fs.writeFileSync(ws + '\\\\wrote.txt', 'WROTE-OK'); out.push('write=OK'); }",
+      "catch (e) { out.push('write=' + e.code); }",
+      "try { fs.readdirSync(home); out.push('profile=LISTED'); }",
+      "catch (e) { out.push('profile=' + e.code + '/' + e.errno); }",
+      "console.log(out.join(' | '));",
+    ];
+    const run = await tool.run({ script }, { budget: { max_wall_ms: 30_000, max_output_bytes: 65_536 } });
+
+    assert.equal(run.status, 'ok', `expected a clean run, got ${run.status} ${JSON.stringify(run.limits_refused)}`);
+    assert.equal(run.exit_code, 0);
+    // The positive control and the denial come out of the SAME run, because an
+    // empty result cannot be told apart from a child that never started.
+    assert.match(run.stdout, /write=OK/);
+    assert.match(run.stdout, /profile=EPERM\/-4048/);
+    assert.deepEqual(run.limits_refused, []);
+  } finally {
+    workspace.destroy();
+  }
+});
+
+test('AT-V2-JOB-10 a containerised run without LOCALAPPDATA refuses instead of spawning', { skip: containerSkip }, () => {
+  const specPath = join(ROOT, 'no-lad.spec.json');
+  const resultPath = join(ROOT, 'no-lad.result.json');
+  writeFileSync(specPath, JSON.stringify({
+    command: NODE,
+    args: ['-e', 'console.log("ran anyway")'],
+    cwd: ROOT,
+    container: CONTAINER_NAME,
+    env: { PATH: process.env.PATH ?? '', SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' },
+    output_bytes: 65_536,
+    supervisor_ms: 20_000,
+  }));
+
+  // The helper exits non-zero for a refused run; the refusal itself is in the
+  // result file, which is the only thing a caller reads.
+  const run = spawnSync(PYTHON.candidate,
+    [DEFAULT_HELPER, '--spec', specPath, '--result', resultPath],
+    { encoding: 'utf8', windowsHide: true });
+  assert.notEqual(run.status, 0, 'a refusal should not exit 0');
+
+  const result = JSON.parse(readFileSync(resultPath, 'utf8'));
+  assert.equal(result.ok, false);
+  // The code rides in the refusal list, which is where a caller looks for a
+  // boundary that could not be applied.
+  assert.equal(result.code ?? result.limits_refused?.[0]?.code, 'CONTAINER_ENV_INCOMPLETE');
+  assert.equal(result.pid ?? null, null);
+  assert.equal(readFileSync(resultPath, 'utf8').includes('ran anyway'), false);
 });
 
 test('AT-V2-JOB-05 a run in flight is stoppable through the job handle', { skip }, async () => {

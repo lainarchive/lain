@@ -22,11 +22,25 @@ import { fileURLToPath } from 'node:url';
 const CLI = fileURLToPath(new URL('../../src/cli/index.mjs', import.meta.url));
 const EXAMPLE = fileURLToPath(new URL('../../examples/hello-task.json', import.meta.url));
 
-/** Run the CLI as a real process against a temporary LAIN_HOME. */
-function lain(args, home) {
+/**
+ * Run the CLI as a real process against a temporary LAIN_HOME.
+ *
+ * `LAIN_READ_POSTURE: 'declared'` is set here on purpose, not to make a test pass.
+ * Since V-3 the CLI refuses to start a tool process when nothing confines its reads
+ * and the deployment has not said so, and these tests exercise the declared path —
+ * the repository's own test environment is not a prepared AppContainer. The refusal
+ * itself is a test of its own, below.
+ */
+function lain(args, home, extraEnv = {}) {
   const result = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, LAIN_HOME: home, LAIN_DISABLE_GPU_PROBE: '1' },
+    env: {
+      ...process.env,
+      LAIN_HOME: home,
+      LAIN_DISABLE_GPU_PROBE: '1',
+      LAIN_READ_POSTURE: 'declared',
+      ...extraEnv,
+    },
     timeout: 60_000,
   });
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
