@@ -146,25 +146,45 @@ file the supervisor opened, which is a fact, not an absence.** That is the diffe
 between "the tool produced nothing" and "the wire never worked", and it is the only
 reason a bounded-output claim is checkable at all.
 
-## Network: UNMEASURED, and why that is the report
+## Network: MEASURED, and the container has none — including loopback
 
-`tools/experiments/appcontainer-network-probe.py` was written to answer whether a
-contained tool can reach the network. It was rewritten twice and it did **not** produce
-a trustworthy answer.
+`tools/experiments/appcontainer-network-probe.mjs` (jobs-runner's, which drives the
+real supervisor with a real spec twice — plain, then with
+`container: 'lain.tool.runner'`). The program is handed over `-e` so no file has to be
+readable for the run to start, every case prints `NET-MARKER` first, and the spec
+carries `expect_marker`, so an empty output is a refusal rather than a silent pass.
+That closes the pipe trap at the seam instead of inside the probe.
 
-Its own control run — the identical command, unrestricted — returned `exit_code 0`
-with **empty output**, so the container result is **INCONCLUSIVE rather than evidence
-of denial**. That is the same trap as the pipe finding, and the probe says so in its
-own `verdict` field rather than leaving a reader to infer it. The third version drives
-the shipped supervisor instead of a hand-rolled `CreateProcessW`, which is the right
-design, but its result had not been produced when this was written.
+```
+--- plain: ok exit=0 ---
+NET-MARKER
+loopback=CONNECTED in 3ms | internet-ip=TIMEOUT in 4001ms | dns=RESOLVED:104.20.23.154
+--- container: ok exit=0 ---
+NET-MARKER
+loopback=ERROR:ETIMEDOUT in 306ms | internet-ip=ERROR:EACCES in 0ms | dns=ERROR:ENOTFOUND
+```
 
-What is known and is **not** a measurement: the container declares
-`CapabilityCount = 0`, so it holds neither `internetClient` nor
-`privateNetworkClientServer`, and Windows is documented to block outbound sockets for
-such a container. Documented is not measured, and the brief is explicit that a task
-lacking a network capability is not the same fact as a network the OS refuses.
-**Until the probe produces output from both runs, network behaviour is UNMEASURED.**
+Both runs `ok`, both exit 0, both with the marker present, so both results are facts
+rather than absences. Reading them with the three categories kept apart:
+
+- **OS-enforced denial:** `internet-ip=ERROR:EACCES in 0ms`. Refused by the operating
+  system at zero elapsed time — a denial, not a timeout, and the **0 ms is what
+  distinguishes them**. A timed-out connection would mean the packet left.
+- **The control that makes it a measurement:** `loopback=CONNECTED in 3ms` plain
+  against `ERROR:ETIMEDOUT in 306ms` in the container. A listener on this machine is
+  reachable without the container and is not reachable with it, so the harness can
+  demonstrably observe a success and the container demonstrably cannot produce one.
+- **DNS:** `RESOLVED:104.20.23.154` plain, `ERROR:ENOTFOUND` in the container — name
+  resolution fails rather than resolving and then failing to connect.
+- **Not a Lain result, and not to be quoted as one:** the plain run's
+  `internet-ip=TIMEOUT in 4001ms` is this machine's own egress being filtered. The
+  control that matters is the loopback line.
+
+So the AppContainer has **no network at all — not the internet, not loopback, not
+DNS** — and the internet case is a hard `EACCES` rather than a hang. This is a second
+confinement that the read-isolation brief did not ask for, and it is stated as its own
+answer because "the tool cannot read outside its workspace" reads weaker than what is
+actually true.
 
 ## What is not determined here
 
@@ -186,7 +206,10 @@ lacking a network capability is not the same fact as a network the OS refuses.
   narrower than `F` because it excludes `WRITE_DAC` and `WRITE_OWNER`, so the tool
   cannot change the ACL that confines it. `(RX,W)` was rejected because a tool that
   cannot rename its own temporary file is broken rather than confined.
-- Network behaviour under the container — see the section above. **UNMEASURED.**
+- Network behaviour under the container — **answered above**: no internet, no
+  loopback, no DNS, with the internet case a hard `EACCES` at 0 ms rather than a
+  timeout. What is still open is whether *inherited network handles* or a child
+  process could reach the network by another route; neither was tested.
 - Hard links, alternate data streams, and already-open handles. Not tested. A hard link
   created *before* the boundary existed points at the same object and the ACL that
   denies the target denies the link, but that is reasoning, not a measurement, and it
