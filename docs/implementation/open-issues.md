@@ -181,25 +181,41 @@ encodes "no person answered". A prompted answer reads `human:<name>`. That disti
 was a finding from the same stream: the runner had been synthesizing a granted status
 for `--allow`, which made a flag indistinguishable from a person in the log.
 
-## Issue 11 — Reads are unrestricted and the network is policy-only
+## Issue 11 — Reads are confined when the kernel posture is prepared, and unrestricted otherwise
 
-**What is true.** Inside its workspace a task process can read any file the
-running user can read, and it can reach the network. Neither is restricted by any
-mechanism; both are stated as limitations in `SECURITY_MODEL.md` §10 and in
-`task-execution.md`.
+**What was true.** Inside its workspace a task process could read any file the
+running user could read, and it could reach the network. Neither was restricted by
+any mechanism; both were stated as limitations in `SECURITY_MODEL.md` §10.
 
-**Why it matters.** The containment claim is about *writes* and about a process
-tree a controller can terminate. A task that reads a credential file and writes
-its contents into the workspace is not prevented by anything, and the redaction
-layer protects the log rather than the process. This is the largest gap between
-what Lain's design intends and what it currently enforces.
+**What changed (V-3, commit `347e013` and the container work that follows).** The
+tool now runs inside a Windows **AppContainer**, so the read boundary is an ACL check
+performed by the object manager rather than a path check in the runner. Measured
+from inside a live container, positive control in the same run: a granted directory
+reads; `C:\Users\frick`, `C:\Users\frick\.ssh`, `%TEMP%` and `C:\Program Files\nodejs`
+all fail with `EPERM` (errno `-4048`); `C:\Windows\win.ini` stays readable. The
+denial code matters: `EPERM` and not `ENOENT`, so a tool cannot report "no such file"
+where the truth is "you may not read this".
 
-**What it needs.** A measured mechanism, not a policy statement: closing reads
-needs a tool that does not exist yet, and closing the network needs either an
-AppContainer/LPAC experiment (Tier 2, unmeasured) or a documented acceptance that
-v0.1 cannot do it. Recorded as D-P3's declared out-of-scope items. V-2 did not
-change this: its ceilings are about process lifetime and memory, not about what a
-process may read or reach.
+**What is still open, and it is the honest half of the issue.**
+
+- **Reads are only confined under the `kernel` read posture.** An unset posture
+  refuses to run at all; `declared` records that reads are unrestricted. A deployment
+  that has not prepared a container therefore still has the V-1 behaviour, on purpose
+  and on the record.
+- **The grants are read access.** Every directory a confined tool must read is a
+  directory it can read, so the boundary is a list, and the list is the security
+  argument. `C:\Windows` is on it by necessity.
+- **A tool that spawns something needs that thing granted too.** The image exemption
+  covers the process the supervisor creates and nothing below it.
+- **Network access is unchanged.** It is policy-only, as before; the container was not
+  measured for network behaviour and nothing here should be read as network isolation.
+- **The container is not a sandbox.** `SECURITY_MODEL.md` §10 carries the four limits
+  beside the claim, and the sentence that survives every measurement in V-3 is still
+  "Lain is not a sandbox."
+
+**What it still needs.** Network isolation, investigated separately as the V-3 brief
+required rather than folded in. And the mechanism needs to survive a machine where
+the profile cannot be prepared — which must be a refusal, and is tested as one.
 
 ## Issue 12 — CLOSED for what a job object can actually enforce
 
