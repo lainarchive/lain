@@ -47,15 +47,27 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
 
 ## Current position
 
-**M-1 is complete, V-1 (One Authorized Task) is complete, and V-2 (Contained Execution) is implemented and committed.** The local history ends
-`98e52d0` → `d2f152a` → `a6911bf` → `be1b501` → `9ba13a7`, and `main` is **5 commits ahead of `origin/main`**; the published tip is still
-`c204604a91d51b2d4b792f3be25cca19efeaeb1f`, so nothing from V-2 is off-machine yet.
+**M-1, V-1 (One Authorized Task), V-2 (Contained Execution) and V-3 (Read Isolation) are implemented and committed.** The local history ends
+`ec166c7` → `0e0e69e`, and `main` is **19 commits ahead of `origin/main`**; the published tip is still `c204604a91d51b2d4b792f3be25cca19efeaeb1f`, so nothing
+from V-2 or V-3 is off-machine. The working tree is clean at `0e0e69ede3f2cfe6f9b7e8270e5689ce399335cd`.
 
-**V-2 closed the three V-1 gaps it was written for, and the milestone test now passes for real.** `lain task run --cancel-after 200` against a 3-second blocking
+**V-2 closed the three V-1 gaps it was written for, and the milestone test passes for real.** `lain task run --cancel-after 200` against a 3-second blocking
 script is stopped in **591 ms** and settles `cancelled`; before the tool runner went asynchronous the same command ran **3996 ms and completed**. Resource ceilings are
 enforced by a job object through `tools/win32/job_host.py`, and the approval surface has a real prompt, `lain approve`, with the answer bound to the request digest.
-Measured at `9ba13a7`: **211 tests, 211 pass, 0 fail**; `node tools/verify.mjs` and `npm run verify` both **`checks=8 pass=8 fail=0`**; `--self-test` 8 of 8; `tsc`
-0 errors; `owned_violations: 0`.
+
+**V-3 confines reads with an operating-system boundary, and the run path now actually uses it.** The tool is launched into a Windows **AppContainer** whose SID is
+derived from the profile name `lain.tool.runner`; `LAIN_READ_POSTURE=kernel` selects it, and the CLI **refuses to run at all** when no posture is stated. Measured
+through the shipped CLI on a file planted outside the workspace and on the user's `.ssh`: both `EPERM` (errno `-4048`), while a world-readable system file still reads
+and the tool's own workspace write succeeds. The network is confined too, as a side effect rather than a goal: `EACCES` in **0 ms** for a public address, loopback
+timed out where an unconfined control reached it in 3 ms, DNS `ENOTFOUND`. Eleven filesystem shapes are refused — traversal, absolute paths, hard links, junctions,
+symlinks, ADS, case variants, an environment escape, a write outside — and the hard-link result is the one worth keeping: the boundary is **per-file and follows the
+file, not the path**.
+
+**A defect this milestone found in its own reporting.** Until `a7c532a`, a `kernel` run **passed the boundary check and then launched the tool with the user's own
+read rights**: the SID the CLI resolved was handed to the helper as a profile *name*, deriving from a string that was already a SID returned `0x80070057`, and the
+run failed closed with `CONTAINER_UNAVAILABLE` rather than running unconfinement — but the posture was, for that period, a promise the run path did not keep. The
+correct fix is in two places on purpose: `src/exec/job.mjs` translates a SID back to the profile name, and `job_host.py` also accepts a literal SID through
+`ConvertStringSidToSidW`, because either side working alone is a boundary that depends on the other never changing.
 
 **Five ceilings are stated rather than implied.** `CEILINGS` carries one row per ceiling with `enforced_by` of `job_object`, `timer`, `buffer`, `counter` or `none`.
 Three are `none` and say why: `max_processes`, because `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` counts the process doing the spawning and a limit of 1 fails its first
@@ -67,7 +79,8 @@ overshoot is load-dependent — measured between 2.07 s and 8.13 s for a 1000 ms
 implementation. The pass removed comments that restated the code and kept every measured fact and reasoned decision; a comment-stripping diff proved the code lines
 identical in each file it touched.
 
-**Every gate is green.** `npm run verify` passes with the secret scan required; there is no advisory skip left in any check.
+**Every gate is green.** `npm test` 232 of 232, `node tools/verify.mjs` `checks=8 pass=8 fail=0`, `--self-test` 8 of 8, `type_errors: 0`, `owned_violations: 0`, and
+`npm run verify` passes with the secret scan required; there is no advisory skip left in any check.
 
 **Correction, 2026-11-08 evening: the model was never missing.** This record and the M-2 preflight both said the ollama daemon was not listening and no model was
 pulled. The daemon was indeed down, but the model — `qwen3-4b-instruct-2507:latest`, digest `1a2c1c9c3f3b02803c567e3b720166f6391eea1c0d5759e32c3655ba97355137`,
