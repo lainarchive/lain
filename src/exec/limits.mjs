@@ -38,10 +38,14 @@ export const CEILINGS = [
       'JOB_OBJECT_LIMIT_PROCESS_MEMORY (0x100) on the tool\'s job. It bounds commit, so the allocation FAILS rather '
       + 'than the kernel terminating the process: the interpreter dies on its own, MemoryError and exit 1. The job '
       + 'then posts PROCESS_MEMORY_LIMIT (message 9), and that notification and not the exit code is the evidence a '
-      + 'kill was ours - a tool that exits non-zero for its own reasons must not be logged as a job kill.',
+      + 'kill was ours - a tool that exits non-zero for its own reasons must not be logged as a job kill. '
+      + 'JOB_OBJECT_LIMIT_JOB_MEMORY (0x200) is the same shape over the whole job and posts JOB_MEMORY_LIMIT '
+      + '(message 10); contract 1 does not expose it, so nothing sets it today.',
     measured:
       '64 x 8 MiB buffers against a 256 MiB ceiling: PROCESS_MEMORY_LIMIT posted, MemoryError on stderr, exit 1, no '
-      + 'completion output; 2 x 8 MiB under the same ceiling: exit 0 (AT-V2-JOB-01).',
+      + 'completion output; 2 x 8 MiB under the same ceiling: exit 0 (AT-V2-JOB-01). The whole-job limit behaves the '
+      + 'same way and posts its own code: 512 MiB against a 256 MiB job_memory_bytes gave JOB_MEMORY_LIMIT, exit 1, '
+      + 'and no PROCESS_MEMORY_LIMIT in the log at all (AT-V2-JOB-08).',
   },
   {
     name: 'job_time',
