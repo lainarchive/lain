@@ -13,7 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { createJobControl, EXIT_QUOTA_EXCEEDED, resolvePython, runInJob, DEFAULT_HELPER } from '../../src/exec/job.mjs';
+import {
+  createJobControl, DEFAULT_HELPER, deriveOutcome, EXIT_QUOTA_EXCEEDED, resolvePython, runInJob,
+} from '../../src/exec/job.mjs';
 import { CEILINGS, describeCeilings, renderCeiling, unenforcedCeilings } from '../../src/exec/limits.mjs';
 import { createWorkspace } from '../../src/exec/workspace.mjs';
 
@@ -392,6 +394,143 @@ test('AT-V2-JOB-06 control: a run inside the same wall clock completes normally'
   assert.equal(result.status, 'ok', `expected a clean run, got ${result.status}/${result.kill_reason}`);
   assert.equal(result.exit_code, 0);
   assert.equal(result.stdout.trim(), 'woke');
+});
+
+test("AT-V2-JOB-07 the supervisor's own wall clock stops a sleeping tool", { skip }, async () => {
+  // Two mechanisms can report a timeout and neither stands in for the other.
+  // AT-V2-JOB-06 covers Node's timer, which kills the supervisor before it can
+  // write anything. This is the helper reaching its own supervisor_ms first: it
+  // terminates the job itself and still writes a result.
+  const dir = mkdtempSync(join(ROOT, 'host-'));
+  const specPath = join(dir, 'spec.json');
+  const resultPath = join(dir, 'result.json');
+  writeFileSync(specPath, JSON.stringify({
+    command: NODE,
+    args: ['-e', 'setInterval(() => {}, 1000);'],
+    cwd: dir,
+    supervisor_ms: 1500,
+    output_bytes: 65_536,
+  }));
+
+  const started = Date.now();
+  const host = spawnSync(PYTHON.candidate,
+    [DEFAULT_HELPER, '--spec', specPath, '--result', resultPath],
+    { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  const elapsed = Date.now() - started;
+
+  assert.equal(host.status, 0, `the helper still exits cleanly: ${host.stderr}`);
+  const written = JSON.parse(readFileSync(resultPath, 'utf8'));
+  assert.equal(written.kill_reason, 'supervisor_timeout');
+  assert.equal(written.ok, true, 'it terminated the job and reported anyway');
+  assert.ok(elapsed < 30_000, 'the backstop must be what ended it, not the test timeout');
+  // Terminating the job is what actually killed it, so the tool carries the
+  // job's exit code rather than a clean one.
+  assert.equal(written.exit_code, EXIT_QUOTA_EXCEEDED);
+  assert.ok(await waitFor(() => pidAlive(written.pid) === false, 10_000),
+    `tool ${written.pid} outlived its own backstop`);
+});
+
+test('AT-V2-JOB-07 control: the same helper spec lets a tool finish inside the backstop', { skip }, () => {
+  const dir = mkdtempSync(join(ROOT, 'host-ok-'));
+  const specPath = join(dir, 'spec.json');
+  const resultPath = join(dir, 'result.json');
+  writeFileSync(specPath, JSON.stringify({
+    command: NODE,
+    args: ['-e', 'console.log("done")'],
+    cwd: dir,
+    supervisor_ms: 20_000,
+    output_bytes: 65_536,
+  }));
+
+  const host = spawnSync(PYTHON.candidate,
+    [DEFAULT_HELPER, '--spec', specPath, '--result', resultPath],
+    { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+
+  assert.equal(host.status, 0);
+  const written = JSON.parse(readFileSync(resultPath, 'utf8'));
+  assert.equal(written.kill_reason ?? null, null);
+  assert.equal(written.exit_code, 0);
+  assert.equal(written.stdout.trim(), 'done');
+});
+
+test('AT-V2-JOB-08 a job_memory ceiling is enforced, and posts its own notification', { skip }, () => {
+  // Contract 1 does not expose job_memory_bytes, so this drives the helper the
+  // way the ceiling would be used if it ever were: the whole-job commit limit,
+  // which is a different limit from the per-process one and posts a different
+  // notification. That difference is the only reason to have both.
+  const dir = mkdtempSync(join(ROOT, 'jmem-'));
+  const specPath = join(dir, 'spec.json');
+  const resultPath = join(dir, 'result.json');
+  writeFileSync(specPath, JSON.stringify({
+    command: NODE,
+    args: ['-e', ALLOC_OVER],
+    cwd: dir,
+    job_memory_bytes: 256 * 1024 * 1024,
+    supervisor_ms: 20_000,
+    output_bytes: 65_536,
+  }));
+
+  const host = spawnSync(PYTHON.candidate,
+    [DEFAULT_HELPER, '--spec', specPath, '--result', resultPath],
+    { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  assert.equal(host.status, 0, `the helper still exits cleanly: ${host.stderr}`);
+
+  const written = JSON.parse(readFileSync(resultPath, 'utf8'));
+  assert.deepEqual(written.limits_applied, ['job_memory']);
+  assert.deepEqual(written.limits_refused, []);
+  const names = written.notifications.map((note) => note.name);
+  assert.ok(names.includes('JOB_MEMORY_LIMIT'), `expected JOB_MEMORY_LIMIT, got ${JSON.stringify(names)}`);
+  assert.equal(names.includes('PROCESS_MEMORY_LIMIT'), false, 'these ceilings must not be confused');
+  assert.equal(written.stdout.includes('allocated'), false, 'the tool should not have finished');
+});
+
+test('AT-V2-JOB-08 control: a run under the same job_memory ceiling completes', { skip }, () => {
+  const dir = mkdtempSync(join(ROOT, 'jmem-ok-'));
+  const specPath = join(dir, 'spec.json');
+  const resultPath = join(dir, 'result.json');
+  writeFileSync(specPath, JSON.stringify({
+    command: NODE,
+    args: ['-e', ALLOC_UNDER],
+    cwd: dir,
+    job_memory_bytes: 256 * 1024 * 1024,
+    supervisor_ms: 20_000,
+    output_bytes: 65_536,
+  }));
+
+  const host = spawnSync(PYTHON.candidate,
+    [DEFAULT_HELPER, '--spec', specPath, '--result', resultPath],
+    { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+
+  assert.equal(host.status, 0);
+  const written = JSON.parse(readFileSync(resultPath, 'utf8'));
+  assert.equal(written.exit_code, 0);
+  assert.equal(written.stdout.trim(), 'allocated 2');
+  assert.equal(written.notifications.some((note) => note.name === 'JOB_MEMORY_LIMIT'), false);
+});
+
+test('both timeout shapes report timeout, and neither borrows the word cancel', () => {
+  const base = { supervisorExit: 0, killedByCaller: false, timedOut: false };
+
+  // Node's timer got there first, so there is no result to read.
+  assert.deepEqual(deriveOutcome({ ...base, result: null, wallClockExpired: true }),
+    { status: 'timeout', killed_by: null, kill_reason: 'supervisor_ms' });
+
+  // The helper got there first and wrote its own account.
+  assert.deepEqual(deriveOutcome({ ...base, result: { ok: true, kill_reason: 'supervisor_timeout' } }),
+    { status: 'timeout', killed_by: null, kill_reason: 'supervisor_timeout' });
+
+  // A real cancellation still says so - this is the difference the labels exist
+  // to keep, because cancel.mjs counts a `cancel` as a tool this process
+  // stopped and must not count a timeout as one.
+  assert.deepEqual(deriveOutcome({ ...base, result: null, killedByCaller: true }),
+    { status: 'killed_by_supervisor', killed_by: 'cancel', kill_reason: 'cancel' });
+
+  // A kernel notification outranks the helper's own account of itself, and it
+  // outranks it even when the helper also recorded a timeout.
+  assert.deepEqual(deriveOutcome({
+    ...base,
+    result: { ok: true, kill_reason: 'supervisor_timeout', notifications: [{ name: 'PROCESS_MEMORY_LIMIT' }] },
+  }), { status: 'killed_by_job', killed_by: 'process_memory', kill_reason: 'job_notification:process_memory' });
 });
 
 test('the ceiling table states the truth about every ceiling', () => {
