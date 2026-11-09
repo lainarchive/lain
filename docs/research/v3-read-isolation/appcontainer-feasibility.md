@@ -130,19 +130,67 @@ once. The lesson is not "use a file instead of a pipe"; it is that **every probe
 needs its positive control in the same run**, because a boundary that denies
 everything and a probe that works on nothing produce identical output.
 
+## Standard streams: files, not pipes
+
+The supervisor opens an output **file** with `CreateFileW` (GENERIC_WRITE,
+`FILE_SHARE_READ`, an explicit security descriptor) and passes that handle as
+`hStdOutput` and `hStdError` in the `STARTUPINFOEX` buffer, at the documented x64
+offsets — dwFlags 60, `hStdInput` 80, `hStdOutput` 88, `hStdError` 96, with the
+attribute-list pointer after the 104-byte `STARTUPINFO`.
+
+That choice is forced by the pipe finding above and it pays twice. There is no parent
+pipe handle for the container to be denied, so the child's output arrives; and there
+is no backpressure, so a tool that writes heavily cannot deadlock against a supervisor
+that is not reading. **A child that exits without writing leaves an empty file — a
+file the supervisor opened, which is a fact, not an absence.** That is the difference
+between "the tool produced nothing" and "the wire never worked", and it is the only
+reason a bounded-output claim is checkable at all.
+
+## Network: UNMEASURED, and why that is the report
+
+`tools/experiments/appcontainer-network-probe.py` was written to answer whether a
+contained tool can reach the network. It was rewritten twice and it did **not** produce
+a trustworthy answer.
+
+Its own control run — the identical command, unrestricted — returned `exit_code 0`
+with **empty output**, so the container result is **INCONCLUSIVE rather than evidence
+of denial**. That is the same trap as the pipe finding, and the probe says so in its
+own `verdict` field rather than leaving a reader to infer it. The third version drives
+the shipped supervisor instead of a hand-rolled `CreateProcessW`, which is the right
+design, but its result had not been produced when this was written.
+
+What is known and is **not** a measurement: the container declares
+`CapabilityCount = 0`, so it holds neither `internetClient` nor
+`privateNetworkClientServer`, and Windows is documented to block outbound sockets for
+such a container. Documented is not measured, and the brief is explicit that a task
+lacking a network capability is not the same fact as a network the OS refuses.
+**Until the probe produces output from both runs, network behaviour is UNMEASURED.**
+
 ## What is not determined here
 
 - Whether `AssignProcessToJobObject` still applies to a container process, and
-  whether `KILL_ON_JOB_CLOSE` still reaps the tree under it. **This is the load-bearing
-  unknown**: read isolation is worthless if it lets a tool escape the job that
-  cancels it, and until it is measured the two boundaries are not known to compose.
-- The setup cost of launching into a container, in milliseconds.
-- The failure mode when the profile cannot be resolved — which must be a refusal, and
-  must be tested rather than reasoned about.
-- Whether a granted workspace lets the tool *write* as well as read, and which right
-  is the narrowest that works.
-- Network behaviour under the container. Not attempted in V-3; the brief asked for it
-  to be investigated and proposed separately rather than folded in.
+  whether `KILL_ON_JOB_CLOSE` still reaps the tree under it. **Answered since this was
+  written**: every container run posts `NEW_PROCESS x2`, `EXIT_PROCESS x2` and
+  `ACTIVE_PROCESS_ZERO`, and `taskkill /F /PID <supervisor>` with **no** `/T` reaps the
+  containerised tool (`AT-V2-JOB-03`). The two boundaries compose.
+- The setup cost of launching into a container, in milliseconds. **Answered for the
+  trivial case**: 4 runs of the same `node -e` gave plain 704/735/737/718 ms (avg
+  723.5) and contained 732/730/718/728 ms (avg 727), so **+3.5 ms**. A tool that loads
+  more libraries may cost more; one measurement is one measurement.
+- The failure mode when the profile cannot be resolved. **Answered**: it refuses with
+  `CONTAINER_UNAVAILABLE` / `the AppContainer profile ... does not exist`, before the
+  tool is resumed, and `AT-V2-JOB-10` covers the sibling case of a containerised run
+  with no `LOCALAPPDATA`.
+- Whether a granted workspace lets the tool *write* as well as read, and which right is
+  the narrowest that works. **Answered**: `(OI)(CI)M`. `RX` cannot write; `M` is
+  narrower than `F` because it excludes `WRITE_DAC` and `WRITE_OWNER`, so the tool
+  cannot change the ACL that confines it. `(RX,W)` was rejected because a tool that
+  cannot rename its own temporary file is broken rather than confined.
+- Network behaviour under the container — see the section above. **UNMEASURED.**
+- Hard links, alternate data streams, and already-open handles. Not tested. A hard link
+  created *before* the boundary existed points at the same object and the ACL that
+  denies the target denies the link, but that is reasoning, not a measurement, and it
+  is not claimed here.
 
 ## The honest summary
 
