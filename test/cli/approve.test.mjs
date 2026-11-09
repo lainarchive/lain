@@ -43,7 +43,7 @@ const QUESTION = {
 function lain(args, home) {
   const result = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, LAIN_HOME: home, LAIN_DISABLE_GPU_PROBE: '1' },
+    env: { ...process.env, LAIN_HOME: home, LAIN_DISABLE_GPU_PROBE: '1', LAIN_READ_POSTURE: 'declared' },
     timeout: 30_000,
   });
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };

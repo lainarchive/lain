@@ -138,6 +138,7 @@
  * @property {(spec: {command: string, args?: string[], timeoutMs: number, maxOutputBytes: number, cwd?: string}) => Promise<Record<string, unknown>>} runAsync
  * @property {() => ArtifactRef[]} contents
  * @property {() => {removed: string, exists: boolean}} destroy
+ * @property {string|null} container
  *
  * @typedef {object} Registry
  * @property {(definition: import('../tools/registry.mjs').ToolDefinition) => import('../tools/registry.mjs').ToolDefinition} register
