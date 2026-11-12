@@ -29,6 +29,7 @@ millisecond too late is not counted as a cancel.
 | --- | --- | --- |
 | before the tool starts | `createJobControl(id)` called in the same tick as `runInJob` | `killed_by_supervisor`, `killed_by: 'cancel'` — the supervisor is alive, so the kill is real |
 | while the tool runs | 6 s blocking script, `--cancel-after 1500` | supervisor died at 1747 ms, exactly at the cancel; `STARTED=True FINISHED=False` |
+| while the output ceiling is being enforced | `ceiling_hold_ms` window + note-file barrier, then kill the supervisor inside it | `killed_by_supervisor` / `killed_by: 'cancel'`; the note proves the cap was already breached; supervisor, tool and the tool's child all gone |
 | with descendants | `taskkill /F /PID <supervisor>` with no `/T` | grandchild `powershell.exe Start-Sleep 60` was alive before the kill and gone after it |
 | with descendants, containerised | same, tool launched in `lain.tool.runner` | `grandchild_pid: 3444 alive_before_kill: True` → `grandchild_alive_after_kill: False` |
 | racing normal exit | `AT-V2-JOB-11`, ten rounds with the cancel arriving later each time | every round landed on `ok` or `killed_by_supervisor`; both were seen |
@@ -39,6 +40,21 @@ The descendant phases are the ones that justify the whole shape: killing the
 supervisor reaps the tree because the job was created with `KILL_ON_JOB_CLOSE`
 and the supervisor is the only holder of that handle. Node kills one pid and the
 kernel does the rest.
+
+The ceiling phase is synced on a file, not on a clock. `job_host.py` polls the
+output files every 10 ms and, the moment either is past the cap, writes
+`{"at": "ceiling_breached", "stdout_bytes": …, "stderr_bytes": …, "cap": …,
+"hold_ms": …}` to `ceiling_note_path` and then waits `ceiling_hold_ms` in 5 ms
+steps - still watching for a natural exit - before it calls
+`TerminateJobObject`. `test/exec/cancel-ceiling.test.mjs` waits for that note,
+then kills the supervisor, so the cancel lands provably after truncation began
+and before the hold could have expired by itself; the claim is the measured
+`settled_ms < hold_ms`, not a sleep. Both keys are read only from a spec and are
+absent from every spec the CLI builds. `buildHelperSpec` does not forward them -
+a test hook has no business on the production path - so the test spawns the
+helper with the same `--spec`/`--result` arguments the seam uses and gives the
+resulting evidence to the same `deriveOutcome`, rather than inventing a
+classification of its own.
 
 ## What the result may say
 
@@ -83,11 +99,17 @@ inside the same run rather than beside it.
 
 ## Not determined
 
-- The task-level phase count. The brief names seven; this measures six shapes at
-  the execution layer and does not claim to be the same set.
-- Cancellation during output collection for a tool that is producing output
-  faster than the cap: the truncation path kills the job and sets
-  `kill_reason: 'output_ceiling'`, which is reported as `killed_by_supervisor`
-  but is not a cancel, and no test drives that path concurrently with a cancel.
+- The task-level phase count. The brief names seven; this measures seven shapes
+  at the execution layer and does not claim to be the same set.
+- What a cancelled run can say about truncation. The cancel does not lose the
+  classification - a landed kill outranks the helper's account, and the
+  cancelled arm reports `killed_by_supervisor` / `killed_by: 'cancel'` - but it
+  loses the account itself: the helper dies in the hold before it writes a
+  result, so the seam reports `output_truncated: false` with empty output even
+  though the note proves the cap was breached. The control run shows what is
+  missing: the same tool and the same ceiling, left alone, reports
+  `output_truncated: true` and `kill_reason: 'output_ceiling'`. No change to the
+  layer recovers the flag on the cancelled arm; the evidence died with the
+  supervisor.
 - Whether `terminate()`'s 5 s poll is long enough on a machine under load. It has
   never timed out here.
