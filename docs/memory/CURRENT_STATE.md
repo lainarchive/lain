@@ -60,8 +60,13 @@ derived from the profile name `lain.tool.runner`; `LAIN_READ_POSTURE=kernel` sel
 through the shipped CLI on a file planted outside the workspace and on the user's `.ssh`: both `EPERM` (errno `-4048`), while a world-readable system file still reads
 and the tool's own workspace write succeeds. The network is confined too, as a side effect rather than a goal: `EACCES` in **0 ms** for a public address, loopback
 timed out where an unconfined control reached it in 3 ms, DNS `ENOTFOUND`. Eleven filesystem shapes are refused — traversal, absolute paths, hard links, junctions,
-symlinks, ADS, case variants, an environment escape, a write outside — and the hard-link result is the one worth keeping: the boundary is **per-file and follows the
-file, not the path**.
+symlinks, ADS, case variants, an environment escape, a write outside. The hard-link row was reported wrong for a day and the correction is a **defect, not a clearance**: the
+matrix compared `icacls` on `hard.txt` with `icacls` on `plain.txt`, which are different files (`mklink /H ws\hard.txt secret\secret.txt` makes `hard.txt` a second name for
+the file *outside* the workspace), so the comparison proved nothing. A link and its target genuinely are one file with one security descriptor — proven by mutation, not by
+comparing two renderings — and that is exactly why a link planted in the workspace before the grant is enough for the grant to write the container's own inheritable ACE onto
+the object the link names, in a directory protected from inheritance and never granted, after which the object reads by its own path. The exposure in the shipped runner is
+narrow — the CLI grants the workspace right after creating it, and a fresh workspace cannot hold a pre-existing link — and it is **documented rather than fixed**, with
+`AT-V3-HL-05` asserting the behaviour as it exists so it cannot regress into a claim.
 
 **A defect this milestone found in its own reporting.** Until `a7c532a`, a `kernel` run **passed the boundary check and then launched the tool with the user's own
 read rights**: the SID the CLI resolved was handed to the helper as a profile *name*, deriving from a string that was already a SID returned `0x80070057`, and the
