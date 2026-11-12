@@ -715,7 +715,26 @@ def supervise(spec: dict) -> dict:
             break
         # The tool has already written more than the ceiling allows. Stop the
         # whole job rather than let it keep producing into a discard.
-        if file_size(spawn["stdout_path"]) > cap or file_size(spawn["stderr_path"]) > cap:
+        over = file_size(spawn["stdout_path"]) > cap or file_size(spawn["stderr_path"]) > cap
+        if over and spec.get("ceiling_hold_ms"):
+            # Test hook, and only reachable from a spec: after the ceiling is known
+            # to be breached and before anything is terminated, hold the run open
+            # for a bounded window. The truncation-then-cancel interaction is a real
+            # state -- a caller can ask for a stop at any moment, including this one
+            # -- and without a window it can only be reached by timing luck, which
+            # is not a test. `ceiling_hold_ms` never lengthens a normal run: it is
+            # read once, here, and absent from every spec the CLI builds.
+            hold_note = {"at": "ceiling_breached", "stdout_bytes": file_size(spawn["stdout_path"]),
+                         "stderr_bytes": file_size(spawn["stderr_path"]), "cap": cap,
+                         "hold_ms": int(spec["ceiling_hold_ms"])}
+            note_path = spec.get("ceiling_note_path")
+            if note_path:
+                with open(note_path, "w", encoding="utf-8") as fh:
+                    json.dump(hold_note, fh)
+            deadline_hold = time.time() + int(spec["ceiling_hold_ms"]) / 1000.0
+            while time.time() < deadline_hold and wait_exit(process) is None:
+                time.sleep(0.005)
+        if over:
             out["kill_reason"] = "output_ceiling"
             K.TerminateJobObject(job, EXIT_QUOTA_EXCEEDED)
             exit_code = wait_exit(process, 10.0)
