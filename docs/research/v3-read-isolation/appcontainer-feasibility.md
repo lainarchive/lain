@@ -209,9 +209,10 @@ positive controls in the same run both read — `granted` and `ads_granted` — 
 demonstrably could have succeeded. Symlinks are creatable on this machine (Developer
 Mode), so the symlink row is a real denial rather than a fixture that failed to exist.
 
-**Hard links do not launder access, and the prediction was the other way round.**
-Jobs-runner expected a hard link inside the granted directory to be the hole, because
-it is the same file. It is refused, and `icacls` says why:
+**Hard links: the first reading of this row was wrong, and the correction matters.**
+Jobs-runner expected a hard link inside the granted directory to be the hole, because it
+is the same file. The matrix shows it refused, and the `icacls` output that was offered
+as the reason does not say what it was read as saying:
 
 ```
 secret.txt   kirb\CodexSandboxUsers:(I)(RX)  SYSTEM:(F)  Administrators:(F)  kirb\lain:(F)
@@ -219,14 +220,48 @@ ws\hard.txt  kirb\CodexSandboxUsers:(I)(RX)  SYSTEM:(F)  Administrators:(F)  kir
 ws\plain.txt S-1-15-2-4156793909-...-1640126254:(I)(M)   <-- the container SID
 ```
 
-The hard link and its target **share one security descriptor**, and the container's
-ACE is not on it. The workspace grant works by **inheritance into the directory**, so
-it lands on files created there and not on files that merely acquire a second name
-there. A hard link is a name, not a copy, and the access check follows the file. The
-parent reads `SECRET-MARKER` as the control that the file was readable at all.
+`ws\hard.txt` is not a second name for `ws\plain.txt`. The matrix plants
+`mklink /H ws\hard.txt secret\secret.txt`, so the two names are `secret.txt` and
+`hard.txt`, and `plain.txt` is a different file that the grant created an ACE on. Measured
+with `GetFileInformationByHandle`: `secret.txt` and `hard.txt` are both file id
+`001D000000083DA6` with `nlink 2`, `plain.txt` is `001A000000083DA7` with `nlink 1`. Two
+different files having different ACLs is not a finding, and the sentence that was drawn
+from it — that the grant cannot reach a file that merely acquires a second name in the
+granted directory — is false.
 
-That yields the sentence worth keeping: **the boundary is per-file and follows the
-file, not the path, so neither a link nor a second name moves a file inside it.**
+What is true, and was measured separately: **a link and its target are one file with one
+security descriptor**, and changing either one's ACL is visible through the other. The
+descriptor read back through both names is byte-identical (`sd_sha256 d0eb9364…`), and
+granting a right through one name changes the bytes read back through the other. A digest
+comparison alone does not prove this, because two different files inheriting from one
+parent produce identical bytes; the proof is the mutation, which is what
+`test/exec/path-shapes.test.mjs` AT-V3-HL-03 asserts.
+
+**The defect, which the corrected reading exposes.** A link inside the granted directory
+is enough for `icacls <workspace> /grant *<container-sid>:(OI)(CI)M` to write the
+container's inheritable ACE onto the object the link names, in a directory protected from
+inheritance (`/inheritance:r`) and never granted:
+
+```
+no link, before/after grant   the object carries no container ACE
+link present, after grant     the object carries the container ACE
+file created after the grant  no container ACE (ordinary inheritance still behaves)
+```
+
+Once that ACE is there the object reads from inside the container, **by its own path and
+not only through the link**, because the ACE is the container's own. So the grant is not
+purely a property of the directory, and the write lands in the ACL of a file outside the
+workspace. It is not a read bypass for an unprivileged party: the ACE names the container,
+so what changes is that an object the container was refused becomes one it may read — the
+container's own authority, extended to a file nobody granted it. Within the shipped
+runner the exposure is narrow, because the CLI grants the workspace immediately after
+creating it and a fresh workspace cannot contain a pre-existing link; a link would have to
+be planted before that grant. It is recorded here as a documented defect rather than
+fixed, because a fix is a design decision about grants and links rather than a repair
+inside this milestone, and because the honest sentence for the boundary as shipped is the
+narrower one: **the grant follows a link out of the workspace and writes the container's
+own ACE onto the object it names.** `test/exec/path-shapes.test.mjs` AT-V3-HL-05 asserts
+this behaviour as it exists, named `DEFECT:`, so it cannot regress silently into a claim.
 
 **ADS:** `ads_outside=EPERM`, `ads_granted=READ:ADS-GRANTED`. A stream is reached
 through its file's descriptor like any other path, so an ungranted file's stream is
@@ -267,17 +302,31 @@ redirect rather than a link to a file.
   timeout. What is still open is whether *inherited network handles* or a child
   process could reach the network by another route; neither was tested.
 - Hard links, alternate data streams, and already-open handles. **Answered for the
-  first two** — see the matrix above: both refused, with the hard-link reasoning from
-  the shared security descriptor. **Already-open handles are still untested**, as are
-  UNC paths, `\\?\GLOBALROOT` device paths, and reparse points that are neither
-  junctions nor symlinks. A mount point is the shape most likely to differ.
+  first two, and the hard-link answer is a defect rather than a clearance** — see the
+  corrected section above: an ordinary hard link is refused, but a link planted in the
+  workspace *before* the grant is enough for the grant to write the container's own
+  inheritable ACE onto the object it names, after which that object reads. ADS behave
+  as ordinary streams: an ungranted file's stream is refused, a granted file's stream
+  reads. **Already-open handles are still untested**, as are UNC paths,
+  `\\?\GLOBALROOT` device paths, and reparse points that are neither junctions nor
+  symlinks. A mount point is the shape most likely to differ.
 
 ## The honest summary
 
-**Kernel-enforced read isolation is achievable on this machine without administrator
-rights, through AppContainer, for Node and for a copied Python.** It was not
-achievable through restricted tokens, and the reason is a privilege the account does
-not hold and cannot acquire.
+**Kernel-enforced read confinement is achievable on this machine without administrator
+rights, through AppContainer, for Node and for a copied Python, and it was measured
+rather than reasoned**: a granted workspace reads, `C:\Users\frick`, `.ssh`, `%TEMP%`,
+`C:\Python315` and `C:\Program Files\nodejs` all refuse with `EPERM` / `-4048`, and an
+ungranted object inside a granted directory refuses too. It was not achievable through
+restricted tokens, and the reason is a privilege the account does not hold and cannot
+acquire.
+
+It is also **narrower than "reads are confined"**, in ways that are each measured above
+or named here as unmeasured. The grant follows a hard link out of the workspace and
+writes the container's own ACE onto the object it names. The container reads
+`C:\Windows`. It needs read grants on interpreter directories to start at all, and what
+those grants expose transitively has not been measured. Network and read behaviour are
+denials by capability and by ACL rather than a designed least-privilege surface.
 
 What that does **not** mean: it does not make Lain a sandbox. The workspace is still
 the only write boundary, network is still policy-only, `C:\Windows` remains readable,
