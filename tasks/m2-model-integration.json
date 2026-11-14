@@ -1,0 +1,7 @@
+{
+  "id": "M2-001",
+  "title": "Scaffold Model Integration",
+  "owner": "Gemini",
+  "status": "pending",
+  "dependencies": ["v3.2-hardlink-edge"]
+}
