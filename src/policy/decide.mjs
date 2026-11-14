@@ -78,6 +78,7 @@ const REASONS = Object.freeze({
   BUDGET_EXCEEDED: 'the request exceeds the task budget',
   EFFECT_CLASS_REQUIRES_APPROVAL: 'this effect class requires explicit approval',
   POLICY_EVALUATION_INCOMPLETE: 'the policy context is incomplete, so the request cannot be decided',
+  CAPABILITY_NOT_GRANTED: 'the task does not hold the capability this action requires',
   READ_ONLY_WITHIN_GRANT: 'read-only action within the granted capability set',
   REVERSIBLE_WITHIN_WORKSPACE: 'reversible action within the granted capability set',
   EVALUATION_ERROR: 'policy evaluation failed; refusing by default',

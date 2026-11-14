@@ -62,3 +62,10 @@ Future integration work, without changing the existing foundation milestone:
 - Orchestration: collaboration records, independent review, dispute escalation, and bounded blocker handling.
 - Extensibility: Mods integrated through the existing extension contracts, registry, isolation, and lifecycle.
 - Intelligence and evaluation: capability effectiveness and artifact-quality evaluation shared across engineering, Creator Engine, and Labs.
+
+## Milestone status
+
+| Milestone | Status | Started | Notes |
+| --- | --- | --- | --- |
+| V-3.1 / V-3.2 — hard-link grant escape found, gated, edge cases closed | Done | 2026-11-14 | Commit `14e6d1b`, tag `v3.2-hardlink-edge`, pushed to `origin/main`. Evidence: `docs/research/v3-read-isolation/hardlink-investigation.md`. |
+| M-2 — Model Integration (first Phase 2 slice) | In-Progress | 2026-11-14 | Mock model behind the Policy Engine: `model.invoke` is a read-only rule-set row, `runTask` decides before it selects or invokes. No provider, no network, $0. M-3 moves the effect class to `external`. |
