@@ -20,6 +20,7 @@ import { buildContext } from '../policy/rules.mjs';
 import { toolRule } from '../policy/rules.mjs';
 import { createApprovalLedger } from '../policy/approvals.mjs';
 import { createWorkspace } from '../exec/workspace.mjs';
+import { checkWorkspaceContainment } from '../exec/boundary.mjs';
 import { createInvoker } from '../tools/invoke.mjs';
 import { createCanceller } from './cancel.mjs';
 import '../core/types.mjs';
@@ -412,6 +413,35 @@ export function createTaskRunner({
         event_type: 'workspace.created',
         payload: { path: workspace.path, container: containerSid ? 'appcontainer' : 'none' },
       });
+
+      // The gate in createWorkspace scanned for hard links around the grant, but
+      // a link planted after the grant and before this point lands no ACE — and
+      // it does not have to: the workspace's value is that a fresh task directory
+      // holds exactly what Lain put in it, and a second name for an outside file
+      // breaks that invariant whether or not it is exploitable yet. This is also
+      // the check that makes the junction refusal real: until V-3.2 the per-task
+      // containment walk existed but no caller passed a task id, so a junction
+      // planted inside the workspace would have gone unrefused end to end.
+      const containment = checkWorkspaceContainment({ workspaceRoot, taskId });
+      if (!containment.ok) {
+        disarm();
+        const stateNow = taskStore.get(taskId).state;
+        if (stateNow === 'admitted') {
+          taskStore.transition(taskId, 'failed', { reason: `${containment.code}: ${containment.message}` });
+          record({
+            event_type: 'task.failed',
+            payload: { reason_code: containment.code, containment: containment.facts.containment },
+          });
+        } else {
+          // A cancel slipped in while the walk ran; the cascade owns the task.
+          record({
+            event_type: 'task.run.abandoned',
+            payload: { expected: 'admitted', observed: stateNow, reason_code: containment.code },
+          });
+        }
+        workspace.destroy();
+        return { task_id: taskId, state: taskStore.get(taskId).state, admission, invocation: null, result: null, workspace: null };
+      }
 
       // Same race as admission, one effect closer, but the check here has to be
       // purely observational: awaiting an in-flight cascade would let a cancel
