@@ -78,6 +78,28 @@ Four limits belong beside that claim, and none of them is a footnote:
   paths, reparse points that are neither junctions nor symlinks, and already-open handles. Eleven shapes measured is a
   measurement, not a proof.
 
+**Hard-link grant escape (found and mitigated 2026-11-14, V-3.1).** The shape above is refused when the container plants
+the link, but the grant itself is exploitable: `icacls <workspace> /grant *<sid>:(OI)(CI)M` rewrites security descriptors
+through every name referencing the same file ID, so a hard link planted in the workspace **before** the grant lands the
+container ACE on the outside object, which the container then reads by its own path. The container cannot create that
+link itself (`CreateHardLink` requires WRITE on the source; every unreadable target refused `EPERM`/`-4048`), but a
+separate process holding the user's rights wins the mkdir→grant race **20/20** (grant window 9.51–18.89 ms over 20
+trials), so the earlier "fresh workspace cannot hold a pre-existing link" exposure claim held only against a passive
+attacker. Mitigation, implemented in `src/exec/hardlink-defect-remediation.mjs` and wired into `createWorkspace`: the
+workspace is scanned for hard links before the grant (lstat-based; ACL denies do not blind it) and again after it; a
+pre-grant link refuses the grant (`WORKSPACE_HARD_LINK_PRE_GRANT`), a link that lands during the grant is detected and
+its container ACE stripped from the outside object (`/inheritance:d` then `/remove` — a bare `/remove` through the link
+reports success while the ACE is inherited straight back) and the run refuses (`WORKSPACE_HARD_LINK_GRANT_ESCAPED`).
+Measurements and reproduction steps: `docs/research/v3-read-isolation/hardlink-investigation.md`. Hardened 2026-11-14,
+V-3.2: the edge cases were probed and closed — UNC (`\\?\UNC\`) and `\\?\GLOBALROOT` link targets are refused at creation
+for the user and the container alike, a mount-point junction planted before the grant propagates no ACE and is refused at
+run time, a file held open `FILE_SHARE_NONE` neither hides its link count nor blocks the ACE cleanup, and a link planted
+**after** the grant lands no ACE and cannot be read. The runner now refuses a workspace whose containment is broken
+(`WORKSPACE_LINK_ESCAPES` for a junction, `WORKSPACE_HARD_LINK_PRESENT` for a second name) before any tool runs — the
+junction refusal had existed in `checkExecutionBoundary` but no production caller ever passed a task id, so it had never
+fired. Residual exposure: a local process holding the user's rights can still race the containment check itself, the same
+privilege that could read the outside file directly.
+
 The `kernel` read posture is **opt-in**; an unset posture refuses to start a tool process at all, and `declared` records an
 operator accepting unrestricted reads. A deployment that has not prepared a container therefore runs the declared path,
 which is the honest state and not a weaker claim in disguise. None of this makes Lain a sandbox.
