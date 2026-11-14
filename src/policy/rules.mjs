@@ -31,6 +31,10 @@ export const DEFAULT_RULES = Object.freeze({
     'run_script': { tool_effect_class: 'local_reversible', requires: ['workspace.write', 'process.spawn'] },
     'read_file': { tool_effect_class: 'read_only', requires: ['workspace.read'] },
     'write_file': { tool_effect_class: 'local_reversible', requires: ['workspace.write'] },
+    // M-2: the model integration is read-only for now — the mock changes
+    // nothing and reaches nothing. A real provider in M-3 must move to
+    // `external`, which lands in A5 and asks a human before it runs.
+    'model.invoke': { tool_effect_class: 'read_only', requires: ['model.invoke'] },
   },
   forbidden_paths: [
     '.lain-audit',
