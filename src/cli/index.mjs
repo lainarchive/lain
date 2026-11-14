@@ -12,6 +12,7 @@
  *   lain task show <task_id> [--json]
  *   lain store verify [--json]
  *   lain approve <approval_id> [--list] [--answer granted|denied --by <name> --digest <hex>] [--json]
+  lain model run <task.json>
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -27,6 +28,7 @@ import { checkExecutionBoundary } from '../exec/boundary.mjs';
 import { open as openEventStore } from '../store/index.mjs';
 import { isEntryPoint } from '../../tools/check/lib/report.mjs';
 import { approveCommand } from './commands/approve.mjs';
+import { modelCommand } from './commands/model.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -297,6 +299,12 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
       io,
       approvalsPath: paths.approvals,
     });
+  }
+
+  if (group === 'model') {
+    // `lain model run <file>` — the M-2 mock integration. The command handler
+    // owns its own exit codes and prints exactly one JSON document on success.
+    return modelCommand({ command, positional, flags, io });
   }
 
   io.err(USAGE);
