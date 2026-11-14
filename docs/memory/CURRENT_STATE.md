@@ -68,6 +68,18 @@ the object the link names, in a directory protected from inheritance and never g
 narrow — the CLI grants the workspace right after creating it, and a fresh workspace cannot hold a pre-existing link — and it is **documented rather than fixed**, with
 `AT-V3-HL-05` asserting the behaviour as it exists so it cannot regress into a claim.
 
+**V-3.1/V-3.2 hard-link hardening is implemented and verified, uncommitted pending owner review.** The grant-time defect is fixed at the source: `createWorkspace` runs
+the container grant inside a hard-link gate (`src/exec/hardlink-defect-remediation.mjs`) that scans the workspace before the grant (refusing
+`WORKSPACE_HARD_LINK_PRE_GRANT`) and again after it, stripping any container ACE that landed through a link and refusing `WORKSPACE_HARD_LINK_GRANT_ESCAPED`; the strip
+is `/inheritance:d` then `/remove`, because a bare `/remove` through the link reports success while the ACE is inherited straight back. The race is real — a watcher
+process won it **20/20** against the ungated code (grant window 9.51–18.89 ms) — so the "narrow exposure" claim above held only against a passive attacker. V-3.2
+closed the remaining edge cases: UNC (`\\?\UNC\`) and `\\?\GLOBALROOT` link targets are refused at creation for the user and the container alike, a junction planted
+before the grant propagates no ACE and is refused at run time, a `FILE_SHARE_NONE` lock neither hides the link count from the scan nor blocks the ACE cleanup, and a
+link planted after the grant lands no ACE and reads `EPERM` through both names. The runner now refuses a workspace with broken containment (`WORKSPACE_LINK_ESCAPES`
+for a junction, `WORKSPACE_HARD_LINK_PRESENT` for a second name) before any tool runs — the task-id branch of `checkExecutionBoundary` existed but no production caller
+passed one, so the junction refusal had never fired. Gates: `npm test` 255/255 (239 → 248 → 255), `npm run verify` 8/8, no new TODO markers. Evidence, verdict
+(Partially Secure, mitigated) and reproduction steps: `docs/research/v3-read-isolation/hardlink-investigation.md`.
+
 **A defect this milestone found in its own reporting.** Until `a7c532a`, a `kernel` run **passed the boundary check and then launched the tool with the user's own
 read rights**: the SID the CLI resolved was handed to the helper as a profile *name*, deriving from a string that was already a SID returned `0x80070057`, and the
 run failed closed with `CONTAINER_UNAVAILABLE` rather than running unconfinement — but the posture was, for that period, a promise the run path did not keep. The

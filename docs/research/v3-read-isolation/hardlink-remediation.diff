@@ -1,0 +1,1433 @@
+diff --git a/SECURITY_MODEL.md b/SECURITY_MODEL.md
+index 5196149..b11389e 100644
+--- a/SECURITY_MODEL.md
++++ b/SECURITY_MODEL.md
+@@ -78,6 +78,28 @@ Four limits belong beside that claim, and none of them is a footnote:
+   paths, reparse points that are neither junctions nor symlinks, and already-open handles. Eleven shapes measured is a
+   measurement, not a proof.
+ 
++**Hard-link grant escape (found and mitigated 2026-11-14, V-3.1).** The shape above is refused when the container plants
++the link, but the grant itself is exploitable: `icacls <workspace> /grant *<sid>:(OI)(CI)M` rewrites security descriptors
++through every name referencing the same file ID, so a hard link planted in the workspace **before** the grant lands the
++container ACE on the outside object, which the container then reads by its own path. The container cannot create that
++link itself (`CreateHardLink` requires WRITE on the source; every unreadable target refused `EPERM`/`-4048`), but a
++separate process holding the user's rights wins the mkdir→grant race **20/20** (grant window 9.51–18.89 ms over 20
++trials), so the earlier "fresh workspace cannot hold a pre-existing link" exposure claim held only against a passive
++attacker. Mitigation, implemented in `src/exec/hardlink-defect-remediation.mjs` and wired into `createWorkspace`: the
++workspace is scanned for hard links before the grant (lstat-based; ACL denies do not blind it) and again after it; a
++pre-grant link refuses the grant (`WORKSPACE_HARD_LINK_PRE_GRANT`), a link that lands during the grant is detected and
++its container ACE stripped from the outside object (`/inheritance:d` then `/remove` — a bare `/remove` through the link
++reports success while the ACE is inherited straight back) and the run refuses (`WORKSPACE_HARD_LINK_GRANT_ESCAPED`).
++Measurements and reproduction steps: `docs/research/v3-read-isolation/hardlink-investigation.md`. Hardened 2026-11-14,
++V-3.2: the edge cases were probed and closed — UNC (`\\?\UNC\`) and `\\?\GLOBALROOT` link targets are refused at creation
++for the user and the container alike, a mount-point junction planted before the grant propagates no ACE and is refused at
++run time, a file held open `FILE_SHARE_NONE` neither hides its link count nor blocks the ACE cleanup, and a link planted
++**after** the grant lands no ACE and cannot be read. The runner now refuses a workspace whose containment is broken
++(`WORKSPACE_LINK_ESCAPES` for a junction, `WORKSPACE_HARD_LINK_PRESENT` for a second name) before any tool runs — the
++junction refusal had existed in `checkExecutionBoundary` but no production caller ever passed a task id, so it had never
++fired. Residual exposure: a local process holding the user's rights can still race the containment check itself, the same
++privilege that could read the outside file directly.
++
+ The `kernel` read posture is **opt-in**; an unset posture refuses to start a tool process at all, and `declared` records an
+ operator accepting unrestricted reads. A deployment that has not prepared a container therefore runs the declared path,
+ which is the honest state and not a weaker claim in disguise. None of this makes Lain a sandbox.
+diff --git a/docs/memory/CURRENT_STATE.md b/docs/memory/CURRENT_STATE.md
+index 99f411b..244d82c 100644
+--- a/docs/memory/CURRENT_STATE.md
++++ b/docs/memory/CURRENT_STATE.md
+@@ -68,6 +68,18 @@ the object the link names, in a directory protected from inheritance and never g
+ narrow — the CLI grants the workspace right after creating it, and a fresh workspace cannot hold a pre-existing link — and it is **documented rather than fixed**, with
+ `AT-V3-HL-05` asserting the behaviour as it exists so it cannot regress into a claim.
+ 
++**V-3.1/V-3.2 hard-link hardening is implemented and verified, uncommitted pending owner review.** The grant-time defect is fixed at the source: `createWorkspace` runs
++the container grant inside a hard-link gate (`src/exec/hardlink-defect-remediation.mjs`) that scans the workspace before the grant (refusing
++`WORKSPACE_HARD_LINK_PRE_GRANT`) and again after it, stripping any container ACE that landed through a link and refusing `WORKSPACE_HARD_LINK_GRANT_ESCAPED`; the strip
++is `/inheritance:d` then `/remove`, because a bare `/remove` through the link reports success while the ACE is inherited straight back. The race is real — a watcher
++process won it **20/20** against the ungated code (grant window 9.51–18.89 ms) — so the "narrow exposure" claim above held only against a passive attacker. V-3.2
++closed the remaining edge cases: UNC (`\\?\UNC\`) and `\\?\GLOBALROOT` link targets are refused at creation for the user and the container alike, a junction planted
++before the grant propagates no ACE and is refused at run time, a `FILE_SHARE_NONE` lock neither hides the link count from the scan nor blocks the ACE cleanup, and a
++link planted after the grant lands no ACE and reads `EPERM` through both names. The runner now refuses a workspace with broken containment (`WORKSPACE_LINK_ESCAPES`
++for a junction, `WORKSPACE_HARD_LINK_PRESENT` for a second name) before any tool runs — the task-id branch of `checkExecutionBoundary` existed but no production caller
++passed one, so the junction refusal had never fired. Gates: `npm test` 255/255 (239 → 248 → 255), `npm run verify` 8/8, no new TODO markers. Evidence, verdict
++(Partially Secure, mitigated) and reproduction steps: `docs/research/v3-read-isolation/hardlink-investigation.md`.
++
+ **A defect this milestone found in its own reporting.** Until `a7c532a`, a `kernel` run **passed the boundary check and then launched the tool with the user's own
+ read rights**: the SID the CLI resolved was handed to the helper as a profile *name*, deriving from a string that was already a SID returned `0x80070057`, and the
+ run failed closed with `CONTAINER_UNAVAILABLE` rather than running unconfinement — but the posture was, for that period, a promise the run path did not keep. The
+diff --git a/docs/research/v3-read-isolation/evidence-e1-defect.png b/docs/research/v3-read-isolation/evidence-e1-defect.png
+new file mode 100644
+index 0000000..fa1dc13
+Binary files /dev/null and b/docs/research/v3-read-isolation/evidence-e1-defect.png differ
+diff --git a/docs/research/v3-read-isolation/evidence-e2-container-links.png b/docs/research/v3-read-isolation/evidence-e2-container-links.png
+new file mode 100644
+index 0000000..7ca1778
+Binary files /dev/null and b/docs/research/v3-read-isolation/evidence-e2-container-links.png differ
+diff --git a/docs/research/v3-read-isolation/evidence-e3-race.png b/docs/research/v3-read-isolation/evidence-e3-race.png
+new file mode 100644
+index 0000000..ff656cb
+Binary files /dev/null and b/docs/research/v3-read-isolation/evidence-e3-race.png differ
+diff --git a/docs/research/v3-read-isolation/evidence-e4-gate.png b/docs/research/v3-read-isolation/evidence-e4-gate.png
+new file mode 100644
+index 0000000..82352aa
+Binary files /dev/null and b/docs/research/v3-read-isolation/evidence-e4-gate.png differ
+diff --git a/docs/research/v3-read-isolation/evidence-e5-cleanup.png b/docs/research/v3-read-isolation/evidence-e5-cleanup.png
+new file mode 100644
+index 0000000..fef934b
+Binary files /dev/null and b/docs/research/v3-read-isolation/evidence-e5-cleanup.png differ
+diff --git a/docs/research/v3-read-isolation/evidence-f-scan.png b/docs/research/v3-read-isolation/evidence-f-scan.png
+new file mode 100644
+index 0000000..50e3686
+Binary files /dev/null and b/docs/research/v3-read-isolation/evidence-f-scan.png differ
+diff --git a/docs/research/v3-read-isolation/hardlink-investigation.md b/docs/research/v3-read-isolation/hardlink-investigation.md
+new file mode 100644
+index 0000000..af31a83
+--- /dev/null
++++ b/docs/research/v3-read-isolation/hardlink-investigation.md
+@@ -0,0 +1,286 @@
++# V-3.1 hard-link investigation
++
++Date: 2026-11-14 · Repo: lain @ 257532d · Author: security-verification pass (V-3.1)
++
++## Question
++
++Can an untrusted task running inside Lain's real AppContainer gain read access to a
++file outside the workspace through a hard link, and can the CLI workflow
++(workspace creation → ACL grant → execution) be abused to make that happen?
++
++The V-3 feasibility study (`appcontainer-feasibility.md`, same directory) already
++recorded the mechanism: when `icacls <workspace> /grant *<container-sid>:(OI)(CI)M`
++runs on a directory that holds a hard link to an outside file, the ACL rewrite walks
++every name that references the same file ID — including the outside name — and lands
++the container ACE on the outside object. What V-3.1 had to establish:
++
++1. whether the container itself can create such a link (self-service attack), or
++   only a principal holding the user's rights can plant one;
++2. whether the "narrow exposure" claim in `docs/memory/CURRENT_STATE.md` (fresh
++   workspace cannot hold a pre-existing link) survives an active attacker racing
++   the grant;
++3. what the minimal, evidence-based mitigation is.
++
++## Environment (reproduction baseline)
++
++- Windows 11, account `kirb\lain`, non-elevated, filtered token (Administrators
++  deny-only). No elevation was used at any point.
++- Node 24.21.0 (repo pin), repo HEAD `257532d`, clean tree.
++- AppContainer profile `lain.tool.runner`; SID
++  `S-1-15-2-4156793909-553355631-1844774931-1801508839-3101138585-3860741030-1640126254`
++  as printed by `src/exec/job.mjs` `containerSid()`. AppContainer SIDs are derived
++  from the profile name, so a fresh machine with the same profile yields the same SID.
++- Experiment harness lives outside the repo (`%TEMP%\lain-hl-exp\`) so the repository
++  stays clean; every result below was captured to text and rendered to the PNGs
++  referenced per experiment. The PNGs are renderings of the captured run output,
++  not screen photographs.
++
++## Mechanism, stated precisely
++
++The grant is `icacls <dir> /grant *<sid>:(OI)(CI)M`. `(OI)(CI)` marks the ACE
++inheritable, and NTFS inheritance propagation follows hard links: the security
++descriptor rewrite enumerates every name that references the same file ID and
++re-derives inherited ACEs through each of them. A hard link is not a reparse point,
++so `inspectContainment` in `src/exec/boundary.mjs` — which reports symlinks and
++junctions — never sees it. Two consequences:
++
++- a link planted **before** the grant pulls the container ACE onto the outside
++  object (E1);
++- a link planted **during** the mkdir→grant window does the same (E3): the window
++  is the whole grant duration, measured 9.51–18.89 ms over 20 trials, and a
++  separate watcher process won it 20/20.
++
++The container itself cannot plant the link (E2): `CreateHardLink` from inside the
++AppContainer requires WRITE access on the source object, and every target the
++container cannot already read was refused with EPERM/-4048.
++
++## E1 — defect replication (end to end)
++
++Purpose: reproduce the recorded defect with the real container SID, real grant
++command, and a real in-container read, capturing file IDs, link counts and ACLs at
++each step. Evidence: `evidence-e1-defect.png`.
++
++Commands (exact, from a non-elevated PowerShell; `%SID%` is the container SID above):
++
++```powershell
++$out = "$env:TEMP\hl-e1\outside"; $ws = "$env:TEMP\hl-e1\ws"
++New-Item -ItemType Directory -Force $out, $ws | Out-Null
++icacls $out /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME:(OI)(CI)F"
++Set-Content "$out\secret.txt" 'SECRET-CANARY'
++Set-Content "$out\other.txt" 'OTHER-CANARY'
++# plant the link as the user, BEFORE the grant:
++cmd /c mklink /H "$ws\hard.txt" "$out\secret.txt"
++# grant exactly what src/exec/workspace.mjs runs:
++icacls $ws /grant "*$env:LAIN_CONTAINER_SID:(OI)(CI)M"
++icacls "$out\secret.txt"          # -> container ACE present
++icacls "$out\other.txt"           # -> unchanged (control)
++```
++
++Observed metadata (file ID = `statSync().ino`, which Node obtains via
++`GetFileInformationByHandle`):
++
++| step                          | secret ino      | secret nlink | other ino      | other nlink |
++| ----------------------------- | --------------- | ------------ | -------------- | ----------- |
++| T0 before link                | 2533274792037895 | 1           | 3659174698880522 | 1         |
++| T1 link planted               | 2533274792037895 | 2           | 3659174698880522 | 1         |
++| T2 after grant                | 2533274792037895 | 2           | 3659174698880522 | 1         |
++
++Observed ACLs:
++
++| object                        | before grant      | after grant |
++| ----------------------------- | ----------------- | ----------- |
++| `outside\secret.txt` (linked) | `kirb\lain:(I)(F)` | `S-1-15-2-…-1640126254:(I)(M)`, `kirb\CodexSandboxUsers:(I)(RX)`, `SYSTEM:(I)(F)`, `Administrators:(I)(F)`, `kirb\lain:(I)(F)` |
++| `outside\other.txt` (control) | `kirb\lain:(I)(F)` | `kirb\lain:(I)(F)` — unchanged |
++
++The outside directory was `/inheritance:r`-protected and never granted directly;
++the container ACE arrived purely through the link. In-container reads after the
++grant: `secret.txt` by its own path and via the link both returned the canary
++(`READ:SECRET-CANARY-…`), the granted control read fine, the unlinked `other.txt`
++refused with EPERM/-4048. The defect is real end to end.
++
++## E2 — can the container create the link itself?
++
++Purpose: rule out (or confirm) self-service exploitation. From inside the
++AppContainer, `fs.linkSync` attempts against four target classes. Evidence:
++`evidence-e2-container-links.png`.
++
++| link target (from inside the container)            | result      |
++| -------------------------------------------------- | ----------- |
++| file in a directory the container cannot traverse  | EPERM/-4048 |
++| unreadable file in a traversable directory `(CI)RX`| EPERM/-4048 |
++| **readable** external file (dir `(OI)(CI)RX`)      | EPERM/-4048 |
++| file in another granted workspace (positive control)| LINK-CREATED |
++
++The third row is the important one: even a fully readable target is refused.
++Measured rule: `CreateHardLink` requires WRITE access on the source object, which
++the container never has outside its own workspace. All granted workspaces share one
++container SID, so cross-workspace links succeed — that is the existing read model,
++not a new exposure. Conclusion: the attack needs a principal holding the user's
++rights to plant the link; the container cannot initiate it.
++
++## E3 — the mkdir→grant race
++
++Purpose: test the "narrow exposure" claim against an active attacker. A separate
++node process watches the workspace root with `fs.watch`; on every new `ws-*`
++directory it immediately plants `race.txt → outside\secret-<name>.txt`. The driver
++runs 20 trials of `mkdir ws-N` → `icacls grant`, one fresh secret per trial.
++Evidence: `evidence-e3-race.png`.
++
++Result: **20/20 links planted by grant end, 20/20 container ACEs landed on the
++outside secrets.** Timing over the 20 trials: grant min 9.51 / mean 12.46 /
++max 18.89 ms; mkdir min 0.11 / mean 0.21 / max 0.71 ms. The attacker does not need
++to hit a microsecond window — the window is the entire grant call, and a watcher
++that reacts to directory creation wins every time. The "fresh workspace cannot hold
++a pre-existing link" claim in `CURRENT_STATE.md` holds only against a passive
++attacker and is retired by this measurement.
++
++## E4 — the shipped gate (remediation under test)
++
++Purpose: validate the mitigation as implemented in
++`src/exec/hardlink-defect-remediation.mjs` and wired into
++`src/exec/workspace.mjs` `create()`. Evidence: `evidence-e4-gate.png`.
++
++- Flow A (link present before the gate): `createWorkspace` threw
++  `WORKSPACE_HARD_LINK_PRE_GRANT`, the grant never ran, no container ACE on the
++  outside secret, container read EPERM/-4048.
++- Flow B (deterministic race replay — the link is planted between the pre-scan and
++  the grant, i.e. inside the grant callback): the gate threw
++  `WORKSPACE_HARD_LINK_GRANT_ESCAPED`, the post-scan found the landed ACE, cleanup
++  removed it (`removed=true`), container read EPERM/-4048, and the outside object's
++  ACL afterwards was the converted non-inherited set (`CodexSandboxUsers:(RX)`,
++  `SYSTEM:(F)`, `Administrators:(F)`, `kirb\lain:(F)`) — same access as before the
++  incident, container ACE gone.
++
++## E5 — cleanup matrix (why the shipped cleanup looks the way it does)
++
++Purpose: find the minimal reliable way to strip a container ACE that landed on an
++outside object, when the only path the fixer holds is the link inside the (now
++refused) workspace. Evidence: `evidence-e5-cleanup.png`.
++
++| scenario | command path | `/remove` status | ACE after | verdict |
++| -------- | ------------ | ---------------- | --------- | ------- |
++| D control | external path directly | 0 | gone | works, but the fixer normally has no outside path |
++| A trap | link path only | 0 — "Successfully processed 1 files" | **still there** | silent failure: the DACL rewrite re-derives inherited ACEs from the parent *of the path used*; via the link that parent is the granted workspace, so the ACE is inherited straight back |
++| B | clean the workspace dir first, then `/remove` via the link | 0 | gone | rejected: the rewrite re-derives the outside object's inherited ACEs from the workspace chain — ACL corruption of an outside object |
++| C (shipped) | `/inheritance:d` via the link, then `/remove` via the link | 0 / 0 | gone | chosen: detach first so the rewrite cannot re-derive, then remove; DACL becomes protected, pre-incident access preserved, container read back to EPERM/-4048 |
++
++Side effect of C, bounded and accepted: the outside object's DACL becomes
++protected (no future inheritance from its real parent). The alternative — leaving
++the container ACE on an outside file — is strictly worse.
++
++## F — scan behavior under denies
++
++Purpose: prove the pre-grant scan cannot be blinded by ACL denies. Evidence:
++`evidence-f-scan.png`.
++
++- Control (files + `.tmp`, no links): 0 findings.
++- One link: found on both names, same file ID (`ino=1407374885317480`), `nlink=2`.
++- `icacls /deny OWNER:(R)` on one name of the pair: `lstatSync` still reports the
++  true `nlink=2` (libuv stats through the parent directory, bypassing the file
++  DACL), `openSync('r')` fails EPERM/-4048 on both names, and the scan still finds
++  the pair.
++- `icacls /deny OWNER:(RX)` on a subdirectory: `readdirSync` fails EPERM/-4048 and
++  the scan reports that path as an error finding — fail-closed, not skipped.
++
++## Verdict
++
++**Partially Secure (mitigation needed)** — and the mitigation is now implemented.
++
++- The AppContainer itself holds: the container cannot read outside the granted
++  workspace, cannot create links to objects it cannot write, and cannot reach the
++  network (feasibility study, re-confirmed here by E2).
++- The defect is exploitable only by a local process already holding the user's
++  rights, racing the workspace grant (E1 + E3). That is the same privilege that
++  could simply read the file directly — the marginal gain is persistence of access
++  after the workspace is destroyed, which is exactly what makes it worth defending.
++- With the shipped gate: pre-planted links are refused before any grant (E4 Flow
++  A), grant-time escapes are detected and stripped (E4 Flow B, E5 C), and the
++  outside object ends with no container ACE and its pre-incident access intact.
++
++## Remediation (implemented, uncommitted)
++
++- `src/exec/hardlink-defect-remediation.mjs` (new): `scanForHardLinks` (lstat-based;
++  hard links are never reparse points; unreadable paths become error findings —
++  fail-closed), `stripContainerAce` (`/inheritance:d` then `/remove`, per E5),
++  `enforceLinkIsolation` (pre-scan → refuse `WORKSPACE_HARD_LINK_PRE_GRANT`; grant
++  runs inside the gate; post-scan → cleanup then refuse
++  `WORKSPACE_HARD_LINK_GRANT_ESCAPED`). Header comment carries the measured facts.
++- `src/exec/workspace.mjs`: the container grant in `create()` now runs inside
++  `enforceLinkIsolation`; `LinkIsolationError` maps to `WorkspaceError` with the
++  same codes, so callers see no new error type.
++- `test/exec/hardlink-remediation.test.mjs` (new): 6 unit tests (no SID needed) +
++  contained AT-V3-HL-06/07/08. The pre-existing AT-V3-HL-01..05 in
++  `test/exec/path-shapes.test.mjs` are unchanged — they measure OS-level icacls
++  semantics and remain true statements; the defect mechanism they record is what
++  the new gate defends against.
++
++Before/after diff: `hardlink-remediation.diff` in this directory (generated with
++`git diff` after `git add -N`, so the new files appear; nothing is staged for
++commit beyond intent-to-add and nothing is committed or pushed).
++
++## Test status
++
++- Before any change, at HEAD `257532d`: `npm test` 239/239 pass, 0 fail — the
++  reported "5 failing AppContainer tests" did not reproduce in this environment;
++  `test/exec/path-shapes.test.mjs` was run three times to rule out flakiness.
++- After the remediation: `npm test` 248/248 pass (239 + 9 new), and
++  `npm run verify` 8/8 checks pass (see `hardlink-investigation.md` § Test status
++  and the verify log snippet in the final report).
++
++## V-3.2: the edge cases, measured and closed
++
++The limits above were probed (P1–P5) and then turned into tests
++(`test/exec/hardlink-edge-cases.test.mjs`, AT-V3-HL-09..13). Nothing here needed a
++new mitigation except the last row.
++
++| Shape | Measured result |
++| --- | --- |
++| UNC `\\localhost\c$\...` (user) | link refused EXDEV/-4037; nothing left behind |
++| UNC `\\?\UNC\...` (user) | refused EXDEV/-4037 |
++| `\\?\GLOBALROOT\...` (user) | refused ENOENT/-4058 |
++| UNC share / device (container) | refused UNKNOWN/-4094; GLOBALROOT ENOENT/-4058; local control LINK-CREATED proves the probe |
++| Mount-point junction planted before the grant | grant proceeds; **no ACE propagates through it** — the junction itself carries the ACE, the target directory and file stay clean; the container cannot read through it (EPERM/-4048) |
++| Outside file held open FILE_SHARE_NONE | link creation succeeds despite the lock; `lstat` still reports the true nlink=2; the scan reports the finding; the gate refuses; and `stripContainerAce` works under the lock — the DACL rewrite is not blocked by a sharing violation |
++| Link planted **after** the grant (the window this task targeted) | no ACE lands (the gate already ran) and the container cannot read through it (EPERM/-4048) — not exploitable as-is, but it breaks the fresh-workspace invariant a future grant would light up |
++
++Two defects in the shipped V-3.1 code were found while wiring the post-grant
++defense, both fixed:
++
++- `inspectContainment` never ran in production: the CLI called
++  `checkExecutionBoundary` without a task id, so the junction refusal
++  (`WORKSPACE_LINK_ESCAPES`) was dead code. The runner now checks containment
++  explicitly after workspace creation.
++- `enforceLinkIsolation` rethrew the grant failure's *message string* instead of
++  the error object, breaking the `WorkspaceError` contract on a failed grant
++  with a clean post-scan. The original error is rethrown; the test now asserts
++  identity, not a message regex.
++
++What was added:
++
++- `src/exec/boundary.mjs`: `inspectContainment` reports `hardLinks[]` (files with
++  `nlink > 1`, fail-closed like the rest of the walk); new
++  `checkWorkspaceContainment({workspaceRoot, taskId})` returns
++  `WORKSPACE_CONTAINED` / `WORKSPACE_LINK_ESCAPES` / `WORKSPACE_HARD_LINK_PRESENT`;
++  `checkExecutionBoundary` delegates to it when given a task id.
++- `src/agent/task-runner.mjs`: the containment check runs right after the
++  workspace is created and before any tool is registered. A refusal fails the
++  task (or hands it to the canceller if a cancellation already landed), destroys
++  the workspace, and no tool ever runs in it.
++- `src/exec/hardlink-defect-remediation.mjs`: the scan no longer recurses into
++  reparse directories (a junction's target is walked as itself, which could hide
++  findings behind an unreadable outside tree; unresolvable reparse targets fail
++  closed as findings).
++
++With the gate plus the run-time check, the residual exposure is: a link planted
++after the containment check gains nothing, because no ACL grant touches the
++workspace after that point — the ACE lands only at grant time, and the check is
++the last thing that runs before the tools. A local process holding the user's
++rights can still race the check itself, which is the same privilege that could
++read the outside file directly.
++
++## Known limits (not tested here)
++
++Carried over from the feasibility study, still open: `\\?\GLOBALROOT` volumes
++beyond the probe (creation refused ENOENT either way) and targets held open with
++handles already carrying *granted* access beyond the share-lock case measured
++above.
+diff --git a/src/agent/task-runner.mjs b/src/agent/task-runner.mjs
+index c8f2187..822602c 100644
+--- a/src/agent/task-runner.mjs
++++ b/src/agent/task-runner.mjs
+@@ -20,6 +20,7 @@ import { buildContext } from '../policy/rules.mjs';
+ import { toolRule } from '../policy/rules.mjs';
+ import { createApprovalLedger } from '../policy/approvals.mjs';
+ import { createWorkspace } from '../exec/workspace.mjs';
++import { checkWorkspaceContainment } from '../exec/boundary.mjs';
+ import { createInvoker } from '../tools/invoke.mjs';
+ import { createCanceller } from './cancel.mjs';
+ import '../core/types.mjs';
+@@ -413,6 +414,35 @@ export function createTaskRunner({
+         payload: { path: workspace.path, container: containerSid ? 'appcontainer' : 'none' },
+       });
+ 
++      // The gate in createWorkspace scanned for hard links around the grant, but
++      // a link planted after the grant and before this point lands no ACE — and
++      // it does not have to: the workspace's value is that a fresh task directory
++      // holds exactly what Lain put in it, and a second name for an outside file
++      // breaks that invariant whether or not it is exploitable yet. This is also
++      // the check that makes the junction refusal real: until V-3.2 the per-task
++      // containment walk existed but no caller passed a task id, so a junction
++      // planted inside the workspace would have gone unrefused end to end.
++      const containment = checkWorkspaceContainment({ workspaceRoot, taskId });
++      if (!containment.ok) {
++        disarm();
++        const stateNow = taskStore.get(taskId).state;
++        if (stateNow === 'admitted') {
++          taskStore.transition(taskId, 'failed', { reason: `${containment.code}: ${containment.message}` });
++          record({
++            event_type: 'task.failed',
++            payload: { reason_code: containment.code, containment: containment.facts.containment },
++          });
++        } else {
++          // A cancel slipped in while the walk ran; the cascade owns the task.
++          record({
++            event_type: 'task.run.abandoned',
++            payload: { expected: 'admitted', observed: stateNow, reason_code: containment.code },
++          });
++        }
++        workspace.destroy();
++        return { task_id: taskId, state: taskStore.get(taskId).state, admission, invocation: null, result: null, workspace: null };
++      }
++
+       // Same race as admission, one effect closer, but the check here has to be
+       // purely observational: awaiting an in-flight cascade would let a cancel
+       // that has not landed yet pre-empt the run, and the request belongs to the
+diff --git a/src/exec/boundary.mjs b/src/exec/boundary.mjs
+index e40154f..95ae8ac 100644
+--- a/src/exec/boundary.mjs
++++ b/src/exec/boundary.mjs
+@@ -130,7 +130,7 @@ export function isInside(parent, child) {
+  *
+  * @param {string} dir
+  * @param {{maxEntries?: number}} [options]
+- * @returns {{checked: number, links: string[], escaped: string[], truncated: boolean}}
++ * @returns {{checked: number, links: string[], escaped: string[], hardLinks: string[], truncated: boolean}}
+  */
+ export function inspectContainment(dir, options = {}) {
+   const maxEntries = options.maxEntries ?? 5000;
+@@ -138,6 +138,8 @@ export function inspectContainment(dir, options = {}) {
+   const links = [];
+   /** @type {string[]} */
+   const escaped = [];
++  /** @type {string[]} */
++  const hardLinks = [];
+   let checked = 0;
+   let truncated = false;
+ 
+@@ -171,11 +173,23 @@ export function inspectContainment(dir, options = {}) {
+         continue;
+       }
+       if (entry.isDirectory()) walk(full);
++      else {
++        // A regular file carrying more than one name is a hard link, and the
++        // second name may sit outside the workspace where this walk cannot see
++        // it — which is exactly why the file cannot be vouched for. Directories
++        // are excluded: NTFS directory link counts mean something else, and
++        // directory aliasing is the reparse question the check above answers.
++        try {
++          if (lstatSync(full).nlink > 1) hardLinks.push(full);
++        } catch {
++          // unreadable is not the same as absent, and the caller sees `checked`
++        }
++      }
+     }
+   };
+ 
+   if (existsSync(dir)) walk(dir);
+-  return { checked, links, escaped, truncated };
++  return { checked, links, escaped, hardLinks, truncated };
+ }
+ 
+ /**
+@@ -202,6 +216,50 @@ function isReparsePoint(path) {
+   }
+ }
+ 
++/**
++ * The per-task half of the execution boundary: the workspace a task is about
++ * to run in must hold no link that leaves it and no hard-linked file.
++ *
++ * The hard-link half exists because the grant-time gate in
++ * ./hardlink-defect-remediation.mjs only covers the creation window. A link
++ * planted after the grant lands no ACE (measured, P5) and is not exploitable
++ * on its own — but it is a second name for an outside object sitting in a
++ * directory the container can write, and the workspace's whole value is that
++ * a fresh task directory holds exactly what Lain put in it. A run refuses on
++ * the broken invariant, not on a proven exploit.
++ *
++ * @param {{workspaceRoot: string, taskId: string}} input
++ * @returns {{ok: boolean, code: string, message: string, facts: Record<string, unknown>}}
++ */
++export function checkWorkspaceContainment(input) {
++  const taskDir = join(resolve(input.workspaceRoot), input.taskId);
++  const containment = inspectContainment(taskDir);
++  /** @type {Record<string, unknown>} */
++  const facts = { workspace: taskDir, containment };
++  if (containment.escaped.length > 0) {
++    return {
++      ok: false,
++      code: 'WORKSPACE_LINK_ESCAPES',
++      message: `the task workspace contains ${containment.escaped.length} link(s) resolving outside it`,
++      facts,
++    };
++  }
++  if (containment.hardLinks.length > 0) {
++    return {
++      ok: false,
++      code: 'WORKSPACE_HARD_LINK_PRESENT',
++      message: `the task workspace contains ${containment.hardLinks.length} hard-linked file(s); a second name outside the workspace cannot be ruled out`,
++      facts,
++    };
++  }
++  return {
++    ok: true,
++    code: 'WORKSPACE_CONTAINED',
++    message: 'the workspace holds no link that leaves it and no hard-linked file',
++    facts,
++  };
++}
++
+ /**
+  * Decide whether a task may run, given the boundary Lain can actually offer.
+  *
+@@ -241,14 +299,13 @@ export function checkExecutionBoundary(input) {
+   }
+ 
+   if (input.taskId) {
+-    const taskDir = join(root, input.taskId);
+-    const containment = inspectContainment(taskDir);
+-    facts.containment = containment;
+-    if (containment.escaped.length > 0) {
++    const containment = checkWorkspaceContainment({ workspaceRoot: root, taskId: input.taskId });
++    facts.containment = containment.facts.containment;
++    if (!containment.ok) {
+       return {
+         ok: false,
+-        code: 'WORKSPACE_LINK_ESCAPES',
+-        message: `the task workspace contains ${containment.escaped.length} link(s) resolving outside it`,
++        code: containment.code,
++        message: containment.message,
+         posture: posture.id,
+         facts,
+       };
+diff --git a/src/exec/hardlink-defect-remediation.mjs b/src/exec/hardlink-defect-remediation.mjs
+new file mode 100644
+index 0000000..c0722bb
+--- /dev/null
++++ b/src/exec/hardlink-defect-remediation.mjs
+@@ -0,0 +1,235 @@
++/**
++ * The hard-link gate around the workspace grant.
++ *
++ * `icacls <workspace> /grant *<sid>:(OI)(CI)M` does not stop at the directory:
++ * its propagation walk follows hard links and writes the inheritable ACE onto
++ * the object a link names — a file whose real parent is somewhere else
++ * entirely. Measured 2026-11-14
++ * (docs/research/v3-read-isolation/hardlink-investigation.md, E1): with a link
++ * planted before the grant, the ACE lands on the outside file even when its own
++ * directory is /inheritance:r-protected and was never granted, and the container
++ * then reads the file through its own path.
++ *
++ * The container cannot plant that link itself. CreateHardLink from inside the
++ * AppContainer wants write access on the source object — a merely readable
++ * outside file is refused with EPERM/-4048, one the container can read
++ * included (E2). So the link always comes from a principal holding the user's
++ * own rights, and the only moment it matters is between the workspace's mkdir
++ * and the grant: a watcher on the workspace root won that race in 20 of 20
++ * trials against a 14–23 ms grant (E3). "The workspace is fresh, therefore
++ * empty" holds against a passive attacker and nobody else.
++ *
++ * The gate is two scans around the grant, and a refusal that cleans up after
++ * itself:
++ *
++ *   before the grant  any link → refuse; the grant never runs, no ACE moves
++ *   after the grant   any link → the ACE may be sitting on an outside object
++ *                     right now; take it back off (see stripContainerAce) and
++ *                     refuse the run
++ *
++ * Ordinary workspace content — files, subdirectories, .tmp scratch — scans
++ * clean (E4 control), so the gate costs one walk of an almost-empty directory.
++ * The scan reads link counts with lstat, and lstat is measured to see through
++ * file-level ACL denies: libuv stats through the parent directory, so a file
++ * the reader cannot open still reports its true link count (probe E: deny (R)
++ * on one name of a link pair, lstat nlink=2). A directory that cannot be
++ * listed at all comes back as a finding instead — deny (RX) on a subdirectory
++ * turns readdir into EPERM/-4048, and the scan refuses on it.
++ *
++ * Runtime links are a different question, already answered: a tool inside the
++ * container can only link what it can already write, and a link between two
++ * objects inside one granted workspace carries no new access. The gate exists
++ * for the creation window alone.
++ *
++ * V-3.2 measured the remaining shapes (hardlink-investigation.md, P1–P5):
++ * UNC and \\?\GLOBALROOT link targets are refused at creation for the user
++ * (EXDEV/ENOENT) and the container alike, a junction planted before the grant
++ * carries no ACE onto its target and cannot be read through, a file held open
++ * with FILE_SHARE_NONE neither hides its link count from lstat nor blocks the
++ * DACL rewrite stripContainerAce performs, and a link planted after the grant
++ * lands no ACE. The defense for that last window is not here — it is the
++ * per-task containment walk in ../exec/boundary.mjs, which the task runner
++ * calls between workspace creation and the first tool call.
++ */
++import { spawnSync } from 'node:child_process';
++import { lstatSync, readdirSync, realpathSync } from 'node:fs';
++import { join, resolve } from 'node:path';
++
++/** Surfaced as WorkspaceError codes by the caller in ./workspace.mjs. */
++export const PRE_GRANT = 'WORKSPACE_HARD_LINK_PRE_GRANT';
++export const GRANT_ESCAPED = 'WORKSPACE_HARD_LINK_GRANT_ESCAPED';
++
++/**
++ * A finding is either a link (the object carries more than one name) or a path
++ * the scan could not read. The second kind exists because a scan that cannot
++ * vouch for a path has not vouched for it, and a security gate that silently
++ * skips what it could not read is a gate with a hole in it.
++ */
++export class LinkIsolationError extends Error {
++  /**
++   * @param {string} code
++   * @param {string} message
++   * @param {{findings?: Array<object>, cleanup?: Array<object>, [key: string]: unknown}} [detail]
++   */
++  constructor(code, message, detail = {}) {
++    super(message);
++    this.name = 'LinkIsolationError';
++    this.code = code;
++    this.findings = detail.findings ?? [];
++    this.cleanup = detail.cleanup ?? [];
++    this.detail = detail;
++  }
++}
++
++/**
++ * Every file under `dir` whose hard-link count is above one.
++ *
++ * lstat, not stat: a symbolic link is a reparse point the boundary check
++ * already refuses, and stat would follow it and describe the target instead of
++ * the workspace's own entry. A hard link is never a reparse point, so lstat
++ * sees its true link count.
++ *
++ * Never throws: a path that cannot be read comes back as a finding, and a
++ * finding refuses the run.
++ *
++ * @param {string} dir
++ * @returns {Array<{path: string, ino?: number, nlink?: number, error?: string}>}
++ */
++export function scanForHardLinks(dir) {
++  /** @type {Array<{path: string, ino?: number, nlink?: number, error?: string}>} */
++  const findings = [];
++  /** @param {string} current */
++  const walk = (current) => {
++    let entries;
++    try {
++      entries = readdirSync(current, { withFileTypes: true });
++    } catch (err) {
++      findings.push({ path: current, error: /** @type {NodeJS.ErrnoException} */ (err).code ?? String(err) });
++      return;
++    }
++    for (const entry of entries) {
++      const full = join(current, entry.name);
++      if (entry.isDirectory()) {
++        // A mount point is a directory that resolves elsewhere; what sits behind
++        // it is not the workspace's own content, and the boundary check refuses
++        // the junction itself before any tool runs (measured: the grant's ACE
++        // propagation does not cross a junction, and the container cannot read
++        // through one). Scanning behind it would report objects the workspace
++        // does not contain.
++        if (resolvesElsewhere(full)) continue;
++        walk(full);
++        continue;
++      }
++      try {
++        const s = lstatSync(full);
++        if (s.nlink > 1) findings.push({ path: full, ino: s.ino, nlink: s.nlink });
++      } catch (err) {
++        findings.push({ path: full, error: /** @type {NodeJS.ErrnoException} */ (err).code ?? String(err) });
++      }
++    }
++  };
++  walk(dir);
++  return findings;
++}
++
++/**
++ * Whether a directory entry sits somewhere other than where it is named —
++ * the junction and mount-point test, shared with the boundary walk's shape.
++ * An unresolvable path reads as false here on purpose: the walk below it will
++ * fail to list it and come back with an error finding, which refuses the run,
++ * and unknown must not silently swallow content either way.
++ *
++ * @param {string} path
++ * @returns {boolean}
++ */
++function resolvesElsewhere(path) {
++  try {
++    return realpathSync(path).toLowerCase() !== resolve(path).toLowerCase();
++  } catch {
++    return false;
++  }
++}
++
++/**
++ * Take the container ACE back off one object, through the workspace-side name.
++ *
++ * A bare `icacls <link> /remove *<sid>` does not stick, and it reports success
++ * anyway (probe 2026-11-14: status 0, "Successfully processed 1 files", ACE
++ * still on the outside file). Rewriting a DACL re-derives its inherited ACEs
++ * from the parent of the path that was used — through the link that parent is
++ * the granted workspace, so the ACE that was just removed is inherited straight
++ * back. The same rewrite through the outside path sticks (E5), but the gate
++ * only knows the link's name.
++ *
++ * So the removal is two steps, both through the link: `/inheritance:d` first,
++ * which converts the inherited ACEs to explicit and protects the DACL against
++ * re-derivation, then `/remove *<sid>`, which now strips the converted ACE and
++ * nothing re-adds it (probe C: ACE gone and still gone). The side effect is
++ * bounded and honest: the outside object's DACL stops following its own parent
++ * from here on, but its effective access is exactly what it was the moment the
++ * gate caught it, minus the container ACE. The alternative — cleaning the
++ * workspace directory first and then rewriting through the link — also removes
++ * the ACE (probe B) but re-derives the outside object's inherited ACEs from the
++ * workspace's chain, replacing its ACL with one it never had. Rejected.
++ *
++ * `run` is the unit-test seam: a test injects a stub instead of shelling out.
++ *
++ * @param {string} path
++ * @param {string} sid
++ * @param {{run?: (args: string[]) => {status: number, out: string}}} [opts]
++ * @returns {{attempted: boolean, removed: boolean, detail: string}}
++ */
++export function stripContainerAce(path, sid, opts = {}) {
++  const run = opts.run ?? ((args) => {
++    const r = spawnSync('icacls', args, { encoding: 'utf8', windowsHide: true });
++    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };
++  });
++  const detached = run([path, '/inheritance:d']);
++  if (detached.status !== 0) {
++    return { attempted: true, removed: false, detail: `/inheritance:d failed: ${detached.out}` };
++  }
++  const done = run([path, '/remove', `*${sid}`]);
++  return { attempted: true, removed: done.status === 0, detail: done.out };
++}
++
++/**
++ * The gate workspace.create() grants inside.
++ *
++ * `grant` is the real icacls call as a callback so that each scan sits exactly
++ * one statement from it on either side. It may throw its own grant failure,
++ * which passes through untouched — a failed grant is the caller's error to
++ * report. The post-scan still runs on that path, because a grant that exited
++ * nonzero is not a proof that nothing propagated, and an ACE sitting on an
++ * outside object is worse than the grant failure that may have caused it.
++ *
++ * @param {{dir: string, sid: string, grant: () => void,
++ *   scan?: typeof scanForHardLinks, removeAce?: typeof stripContainerAce}} args
++ */
++export function enforceLinkIsolation({ dir, sid, grant, scan = scanForHardLinks, removeAce = stripContainerAce }) {
++  const before = scan(dir);
++  if (before.length > 0) {
++    throw new LinkIsolationError(PRE_GRANT,
++      'the workspace holds a hard link before the grant ran; granting would write the container ACE onto whatever it names',
++      { findings: before });
++  }
++  /** @type {unknown} */
++  let grantFailure = null;
++  try {
++    grant();
++  } catch (err) {
++    grantFailure = err;
++  } finally {
++    const after = scan(dir);
++    if (after.length > 0) {
++      const cleanup = after.map((finding) => ({ finding, ...removeAce(finding.path, sid) }));
++      throw new LinkIsolationError(GRANT_ESCAPED,
++        'a hard link appeared while the grant ran; the container ACE may be on an object outside the workspace',
++        {
++          findings: after,
++          cleanup,
++          ...(grantFailure ? { grant_error: grantFailure instanceof Error ? grantFailure.message : String(grantFailure) } : {}),
++        });
++    }
++  }
++  if (grantFailure) throw grantFailure;
++}
+diff --git a/src/exec/workspace.mjs b/src/exec/workspace.mjs
+index 387b7d7..b98c684 100644
+--- a/src/exec/workspace.mjs
++++ b/src/exec/workspace.mjs
+@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
+ import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
+ import { LainError } from '../core/errors.mjs';
+ import { containerSid, runInJob, runInJobSync } from './job.mjs';
++import { enforceLinkIsolation, LinkIsolationError } from './hardlink-defect-remediation.mjs';
+ 
+ export class WorkspaceError extends LainError {
+   /**
+@@ -196,12 +197,33 @@ export function createWorkspace(options) {
+         // delete inside its own workspace, which is what ordinary work needs -
+         // a boundary that breaks that is a boundary someone gets told to turn
+         // off. Granted on this one task directory, never on a shared parent.
+-        const grant = spawnSync('icacls', [dir, '/grant', `*${options.container}:(OI)(CI)M`],
+-          { encoding: 'utf8', windowsHide: true });
+-        if (grant.status !== 0) {
+-          throw new WorkspaceError('CONTAINER_GRANT_FAILED',
+-            `icacls could not grant ${options.container} on the workspace`,
+-            { detail: (grant.stderr ?? '').trim() || `icacls exited ${grant.status}` });
++        //
++        // The grant runs inside the hard-link gate rather than bare, because
++        // the grant's own propagation walk follows hard links: a link sitting
++        // in the workspace at this moment pulls the container ACE onto an
++        // outside object (measured, E1; the race that plants one here in time
++        // was won 20/20 by a directory watcher, E3). The gate refuses before
++        // the grant, verifies after it, and takes a landed ACE back off the
++        // outside object before refusing — see hardlink-defect-remediation.mjs.
++        try {
++          enforceLinkIsolation({
++            dir,
++            sid: options.container,
++            grant: () => {
++              const grant = spawnSync('icacls', [dir, '/grant', `*${options.container}:(OI)(CI)M`],
++                { encoding: 'utf8', windowsHide: true });
++              if (grant.status !== 0) {
++                throw new WorkspaceError('CONTAINER_GRANT_FAILED',
++                  `icacls could not grant ${options.container} on the workspace`,
++                  { detail: (grant.stderr ?? '').trim() || `icacls exited ${grant.status}` });
++              }
++            },
++          });
++        } catch (err) {
++          if (err instanceof LinkIsolationError) {
++            throw new WorkspaceError(err.code, err.message, { detail: err.detail });
++          }
++          throw err;
+         }
+       }
+       return dir;
+diff --git a/test/exec/hardlink-edge-cases.test.mjs b/test/exec/hardlink-edge-cases.test.mjs
+new file mode 100644
+index 0000000..b975ffc
+--- /dev/null
++++ b/test/exec/hardlink-edge-cases.test.mjs
+@@ -0,0 +1,350 @@
++/**
++ * The V-3.2 edge cases around the hard-link work: the shapes the V-3.1
++ * investigation named as untested, each measured before it was defended
++ * (P1–P5 in docs/research/v3-read-isolation/hardlink-investigation.md).
++ *
++ * Three of them closed without needing new defense: UNC and \\?\GLOBALROOT
++ * link targets are refused at creation for the user and the container alike,
++ * a junction planted before the grant carries no ACE onto its target and
++ * cannot be read through, and a file held open with FILE_SHARE_NONE neither
++ * hides its link count from lstat nor blocks the DACL rewrite the cleanup
++ * performs. What did need defense is the window after the grant: a link
++ * planted there lands no ACE, but it is a second name for an outside object
++ * in a directory the container can write, and the run refuses on the broken
++ * invariant — checkWorkspaceContainment, wired into the task runner.
++ */
++import assert from 'node:assert/strict';
++import { spawn, spawnSync } from 'node:child_process';
++import {
++  existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, rmSync,
++  symlinkSync, unlinkSync, writeFileSync,
++} from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { after, test } from 'node:test';
++
++import { containerSid, runInJob } from '../../src/exec/job.mjs';
++import { createWorkspace } from '../../src/exec/workspace.mjs';
++import { checkWorkspaceContainment, inspectContainment } from '../../src/exec/boundary.mjs';
++import {
++  PRE_GRANT, scanForHardLinks, stripContainerAce,
++} from '../../src/exec/hardlink-defect-remediation.mjs';
++
++const ROOT = mkdtempSync(join(tmpdir(), 'lain-hl-edge-'));
++// The trees inside strip inheritance, so they carry no ACE for this process and
++// rmSync alone cannot take them back. Give it back first: cleanup that fails
++// leaves a red suite behind for the wrong reason.
++after(() => {
++  spawnSync('icacls', [ROOT, '/reset', '/T', '/C', '/Q'], { encoding: 'utf8' });
++  rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
++});
++
++const NODE = process.execPath;
++const SID = containerSid();
++const skip = SID.ok ? false : SID.detail;
++const OWNER = process.env.USERDOMAIN + '\\' + process.env.USERNAME;
++
++function protect(dir) {
++  const done = spawnSync('icacls', [dir, '/inheritance:r', '/grant:r', `${OWNER}:(OI)(CI)F`], { encoding: 'utf8' });
++  assert.equal(done.status, 0, `could not strip inheritance on ${dir}: ${done.stdout}${done.stderr}`);
++}
++
++function grant(dir, sid = SID.sid) {
++  const done = spawnSync('icacls', [dir, '/grant', `*${sid}:(OI)(CI)M`], { encoding: 'utf8' });
++  assert.equal(done.status, 0, `grant failed for ${dir}: ${done.stdout}${done.stderr}`);
++}
++
++function carriesContainerAce(path) {
++  return spawnSync('icacls', [path], { encoding: 'utf8' }).stdout
++    .toLowerCase().includes(SID.sid.toLowerCase());
++}
++
++/** The \\localhost\<drive>$ form of a local absolute path. */
++function toUNC(path) {
++  return path.replace(/^([A-Za-z]):/, (_, drive) => `\\\\localhost\\${drive.toLowerCase()}$`);
++}
++
++/** The \\?\UNC\ device form of the same path. */
++function toUNCDevice(path) {
++  return `\\\\?\\UNC\\${toUNC(path).slice(2)}`;
++}
++
++function readProbe(files) {
++  const pairs = Object.entries(files)
++    .map(([name, path]) => `  ${JSON.stringify(name)}: ${JSON.stringify(path)},`)
++    .join('\n');
++  return [
++    "const fs = require('node:fs');",
++    `const files = {\n${pairs}\n};`,
++    'const out = {};',
++    'for (const [name, file] of Object.entries(files)) {',
++    '  try { out[name] = `READ:${fs.readFileSync(file, "utf8").trim()}`; }',
++    '  catch (err) { out[name] = `${err.code}/${err.errno}`; }',
++    '}',
++    'console.log(`RESULT ${JSON.stringify(out)}`);',
++  ].join('\n');
++}
++
++async function runContained(script, cwd) {
++  return runInJob({
++    command: NODE,
++    args: ['-e', script],
++    cwd,
++    env: { LOCALAPPDATA: process.env.LOCALAPPDATA, SystemRoot: process.env.SystemRoot },
++    outputBytes: 65_536,
++    timeoutMs: 60_000,
++    container: SID.sid,
++  });
++}
++
++function readResult(result) {
++  assert.equal(result.status, 'ok', `the run failed: ${JSON.stringify(result.limits_refused)}`);
++  const line = result.stdout.split('\n').find((l) => l.startsWith('RESULT '));
++  assert.ok(line, `no RESULT line in stdout: ${JSON.stringify(result.stdout)}`);
++  return JSON.parse(line.slice('RESULT '.length));
++}
++
++// ── UNC and device-path link targets ─────────────────────────────────────────
++
++test('AT-V3-HL-09 UNC and \\\\?\\GLOBALROOT link targets are refused at creation', () => {
++  const base = join(ROOT, 'hl-09');
++  const outside = join(base, 'outside');
++  const ws = join(base, 'ws');
++  mkdirSync(outside, { recursive: true });
++  mkdirSync(ws);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'HL09-CANARY');
++
++  // The control: the same call with a local target creates the link, so a
++  // refusal below is the target's shape and not a broken probe.
++  const local = join(ws, 'local.txt');
++  linkSync(secret, local);
++  assert.equal(lstatSync(local).nlink, 2, 'the local control link must exist');
++  unlinkSync(local);
++
++  const attempts = {
++    unc_share: [join(ws, 'unc.txt'), toUNC(secret)],
++    unc_device: [join(ws, 'uncd.txt'), toUNCDevice(secret)],
++    globalroot: [join(ws, 'gr.txt'), '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\Windows\\win.ini'],
++  };
++  for (const [name, [link, target]] of Object.entries(attempts)) {
++    let refused = null;
++    try {
++      linkSync(target, link);
++    } catch (err) {
++      refused = `${err.code}/${err.errno}`;
++    }
++    assert.ok(refused, `${name} must refuse, not create a link`);
++    assert.equal(existsSync(link), false, `${name} must leave no link behind`);
++  }
++  assert.equal(lstatSync(secret).nlink, 1, 'no refused attempt may land a second name');
++  assert.deepEqual(inspectContainment(ws).hardLinks, [],
++    'and the workspace scans clean after the refusals');
++});
++
++// ── The containment walk separates hard links from reparse points ────────────
++
++test('inspectContainment reports a hard-linked file without confusing it with a junction', () => {
++  const base = join(ROOT, 'unit-walk');
++  const outside = join(base, 'outside');
++  const dir = join(base, 'task');
++  mkdirSync(outside, { recursive: true });
++  mkdirSync(dir);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'WALK-CANARY');
++  writeFileSync(join(dir, 'ordinary.txt'), 'PLAIN');
++  linkSync(secret, join(dir, 'hard.txt'));
++  symlinkSync(outside, join(dir, 'junc'), 'junction');
++
++  const seen = inspectContainment(dir);
++  assert.deepEqual(seen.hardLinks, [join(dir, 'hard.txt')],
++    'the hard link is the one file carrying a second name');
++  assert.ok(seen.links.includes(join(dir, 'junc')), 'the junction is a link');
++  assert.ok(seen.escaped.includes(join(dir, 'junc')), 'and it escapes');
++  assert.ok(!seen.hardLinks.includes(join(dir, 'ordinary.txt')), 'ordinary content stays out');
++});
++
++test('checkWorkspaceContainment refuses a hard link, a junction, and passes clean content', () => {
++  const root = join(ROOT, 'unit-cwc');
++  const outside = join(root, 'outside');
++  mkdirSync(outside, { recursive: true });
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'CWC-CANARY');
++
++  mkdirSync(join(root, 't-clean'));
++  writeFileSync(join(root, 't-clean', 'file.txt'), 'PLAIN');
++  const clean = checkWorkspaceContainment({ workspaceRoot: root, taskId: 't-clean' });
++  assert.equal(clean.ok, true, 'clean content is contained');
++  assert.equal(clean.code, 'WORKSPACE_CONTAINED');
++
++  mkdirSync(join(root, 't-link'));
++  linkSync(secret, join(root, 't-link', 'hard.txt'));
++  const linked = checkWorkspaceContainment({ workspaceRoot: root, taskId: 't-link' });
++  assert.equal(linked.ok, false, 'a hard link breaks the fresh-workspace invariant');
++  assert.equal(linked.code, 'WORKSPACE_HARD_LINK_PRESENT');
++
++  mkdirSync(join(root, 't-junc'));
++  symlinkSync(outside, join(root, 't-junc', 'junc'), 'junction');
++  const junction = checkWorkspaceContainment({ workspaceRoot: root, taskId: 't-junc' });
++  assert.equal(junction.ok, false, 'a junction resolving outside is an escape');
++  assert.equal(junction.code, 'WORKSPACE_LINK_ESCAPES');
++});
++
++// ── Contained: the same shapes against the real container ────────────────────
++
++test('AT-V3-HL-10 the container cannot link to UNC or device paths either', { skip }, async () => {
++  const base = join(ROOT, 'hl-10');
++  const outside = join(base, 'outside');
++  const ws = join(base, 'ws');
++  mkdirSync(outside, { recursive: true });
++  mkdirSync(ws);
++  protect(outside);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'HL10-CANARY');
++  grant(ws);
++  writeFileSync(join(ws, 'marker.txt'), 'HL10-LOCAL');
++
++  const script = [
++    "const fs = require('node:fs');",
++    `const pairs = {
++  unc_share: [${JSON.stringify(join(ws, 'c-unc.txt'))}, ${JSON.stringify(toUNC(secret))}],
++  unc_device: [${JSON.stringify(join(ws, 'c-uncd.txt'))}, ${JSON.stringify(toUNCDevice(secret))}],
++  globalroot: [${JSON.stringify(join(ws, 'c-gr.txt'))}, '\\\\\\\\?\\\\GLOBALROOT\\\\Device\\\\HarddiskVolume1\\\\Windows\\\\win.ini'],
++  local_positive_control: [${JSON.stringify(join(ws, 'c-local.txt'))}, ${JSON.stringify(join(ws, 'marker.txt'))}],
++};`,
++    'const out = {};',
++    'for (const [name, [link, target]] of Object.entries(pairs)) {',
++    '  try { fs.linkSync(target, link); out[name] = "LINK-CREATED"; }',
++    '  catch (err) { out[name] = `${err.code}/${err.errno}`; }',
++    '}',
++    'console.log(`RESULT ${JSON.stringify(out)}`);',
++  ].join('\n');
++  const seen = readResult(await runContained(script, ws));
++
++  assert.equal(seen.local_positive_control, 'LINK-CREATED',
++    'the control proves the container can link inside its own workspace');
++  for (const name of ['unc_share', 'unc_device', 'globalroot']) {
++    assert.notEqual(seen[name], 'LINK-CREATED', `${name} must refuse from inside the container (saw ${seen[name]})`);
++    assert.equal(existsSync(join(ws, { unc_share: 'c-unc.txt', unc_device: 'c-uncd.txt', globalroot: 'c-gr.txt' }[name])),
++      false, `${name} must leave no link behind`);
++  }
++  const reads = readResult(await runContained(readProbe({ secret_direct: secret }), ws));
++  assert.match(reads.secret_direct, /^EPERM\//,
++    'and nothing about the outside object became readable');
++  assert.equal(carriesContainerAce(secret), false, 'no ACE may have landed on it');
++});
++
++test('AT-V3-HL-11 a junction planted before the grant propagates nothing and is refused at run time', { skip }, async () => {
++  const base = join(ROOT, 'hl-11');
++  const outside = join(base, 'outside');
++  const root = join(base, 'root');
++  mkdirSync(outside, { recursive: true });
++  mkdirSync(join(root, 'ws'), { recursive: true });
++  protect(outside);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'HL11-CANARY');
++  const junc = join(root, 'ws', 'junc');
++  symlinkSync(outside, junc, 'junction');
++
++  const ws = createWorkspace({ root, task_id: 'ws', container: SID.sid });
++  // The grant-time gate scans for hard links; a junction is a reparse point,
++  // not a second name, and the measured propagation crosses no junction — so
++  // the grant itself proceeds and writes nothing onto the target tree.
++  const dir = ws.create();
++  assert.equal(carriesContainerAce(dir), true, 'the grant ran');
++  assert.equal(carriesContainerAce(outside), false, 'no ACE may reach the junction target directory');
++  assert.equal(carriesContainerAce(secret), false, 'and none may reach the file inside it');
++
++  // What the container sees through the junction: nothing.
++  const reads = readResult(await runContained(readProbe({
++    via_junction: join(dir, 'junc', 'secret.txt'),
++    secret_direct: secret,
++  }), dir));
++  assert.match(reads.via_junction, /^EPERM\//, `the junction must not become a read path (saw ${reads.via_junction})`);
++  assert.match(reads.secret_direct, /^EPERM\//, 'the target refuses on its own ACL too');
++
++  // The run-time boundary refuses the workspace outright: the junction
++  // resolves outside it. Until V-3.2 this check existed but no caller passed
++  // a task id, so the junction would have gone unrefused end to end.
++  const containment = checkWorkspaceContainment({ workspaceRoot: root, taskId: 'ws' });
++  assert.equal(containment.ok, false, 'the runner must refuse this workspace');
++  assert.equal(containment.code, 'WORKSPACE_LINK_ESCAPES');
++});
++
++test('AT-V3-HL-12 a link planted after the grant lands no ACE and the run refuses on the invariant', { skip }, async () => {
++  const base = join(ROOT, 'hl-12');
++  const outside = join(base, 'outside');
++  const root = join(base, 'root');
++  mkdirSync(outside, { recursive: true });
++  protect(outside);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'HL12-CANARY');
++
++  const ws = createWorkspace({ root, task_id: 'ws', container: SID.sid });
++  const dir = ws.create();
++  // The window this test is about: the grant has run, no tool has run yet.
++  const late = join(dir, 'late.txt');
++  linkSync(secret, late);
++
++  assert.equal(carriesContainerAce(secret), false,
++    'a link planted after the grant collects no ACE — the gate already ran');
++  const reads = readResult(await runContained(readProbe({
++    via_link: late,
++    secret_direct: secret,
++  }), dir));
++  assert.match(reads.via_link, /^EPERM\//, `the link must not read (saw ${reads.via_link})`);
++  assert.match(reads.secret_direct, /^EPERM\//, 'and the object refuses by its own name too');
++
++  // Not exploitable today, refused anyway: a second name for an outside
++  // object in a container-writable directory is a broken invariant, and the
++  // next grant or mechanism that touches the workspace would light it up.
++  const containment = checkWorkspaceContainment({ workspaceRoot: root, taskId: 'ws' });
++  assert.equal(containment.ok, false, 'the runner must refuse the tampered workspace');
++  assert.equal(containment.code, 'WORKSPACE_HARD_LINK_PRESENT');
++});
++
++test('AT-V3-HL-13 a locked outside file neither hides the link nor blocks the cleanup', { skip }, async () => {
++  const base = join(ROOT, 'hl-13');
++  const outside = join(base, 'outside');
++  const root = join(base, 'root');
++  mkdirSync(outside, { recursive: true });
++  protect(outside);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'HL13-CANARY');
++
++  const lockScript = `$fs=[System.IO.File]::Open('${secret.replace(/'/g, "''")}','Open','Read','None'); Start-Sleep -Seconds 120; $fs.Close()`;
++  const holder = spawn('powershell.exe', ['-NoProfile', '-Command', lockScript], { stdio: 'ignore', windowsHide: true });
++  try {
++    await new Promise((resolve) => setTimeout(resolve, 1500));
++    // Prove the lock is real: a second open of the file must fail.
++    assert.throws(() => openSync(secret, 'r+'), 'the FILE_SHARE_NONE lock must hold');
++    const link = join(root, 'ws', 'locked.txt');
++    mkdirSync(join(root, 'ws'), { recursive: true });
++    linkSync(secret, link);
++
++    // The scan sees the link count through the lock, because lstat reads
++    // through the parent directory and never opens the file.
++    assert.equal(lstatSync(link).nlink, 2, 'lstat must see the true link count under the lock');
++    const findings = scanForHardLinks(join(root, 'ws'));
++    assert.equal(findings.length, 1, 'the gate scan must report the link');
++
++    const ws = createWorkspace({ root, task_id: 'ws', container: SID.sid });
++    assert.throws(() => ws.create(), (err) => err.code === PRE_GRANT,
++      'the gate refuses with the file locked, exactly as it does without one');
++    assert.equal(carriesContainerAce(secret), false, 'and the grant never ran, so no ACE moved');
++
++    // The cleanup half, now with a real ACE to remove and the lock still held:
++    // grant the outside object directly, then strip it through the link. The
++    // DACL rewrite is the operation a sharing violation could have blocked,
++    // and the measured answer is that it does not block.
++    const direct = spawnSync('icacls', [secret, '/grant', `*${SID.sid}:(M)`], { encoding: 'utf8' });
++    assert.equal(direct.status, 0, `direct grant failed: ${direct.stdout}${direct.stderr}`);
++    assert.equal(carriesContainerAce(secret), true, 'the ACE is on the outside object');
++    const strip = stripContainerAce(link, SID.sid);
++    assert.equal(strip.removed, true, `the strip must work under the lock: ${strip.detail}`);
++    assert.equal(carriesContainerAce(secret), false, 'and the ACE is gone');
++  } finally {
++    holder.kill();
++    await new Promise((resolve) => setTimeout(resolve, 500));
++  }
++});
+diff --git a/test/exec/hardlink-remediation.test.mjs b/test/exec/hardlink-remediation.test.mjs
+new file mode 100644
+index 0000000..1ca40a1
+--- /dev/null
++++ b/test/exec/hardlink-remediation.test.mjs
+@@ -0,0 +1,240 @@
++/**
++ * The gate around the grant: does a hard link in the workspace stop the run
++ * before it can pull the container ACE onto an outside object?
++ *
++ * The OS-level behaviour these tests defend against is measured in
++ * docs/research/v3-read-isolation/hardlink-investigation.md (E1: the ACE lands
++ * through the link; E3: a directory watcher wins the mkdir→grant race 20/20;
++ * E5: icacls /remove takes the landed ACE back off). The gate is the code
++ * answer: scan before the grant, scan after it, remove what landed, refuse.
++ *
++ * HL-07 replays the E3 race deterministically — the grant callback plants the
++ * link itself — so the test does not depend on winning a real timing race.
++ */
++import assert from 'node:assert/strict';
++import { spawnSync } from 'node:child_process';
++import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { after, test } from 'node:test';
++
++import { createWorkspace } from '../../src/exec/workspace.mjs';
++import {
++  GRANT_ESCAPED, PRE_GRANT, LinkIsolationError,
++  enforceLinkIsolation, scanForHardLinks, stripContainerAce,
++} from '../../src/exec/hardlink-defect-remediation.mjs';
++import { containerSid, runInJobSync } from '../../src/exec/job.mjs';
++
++const ROOT = mkdtempSync(join(tmpdir(), 'lain-hl-gate-'));
++// The ungranted directories inside have inheritance stripped, so cleanup that
++// cannot read them would leave a red suite behind for the wrong reason.
++after(() => {
++  spawnSync('icacls', [ROOT, '/reset', '/T', '/C', '/Q'], { encoding: 'utf8' });
++  rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
++});
++
++const NODE = process.execPath;
++const SID = containerSid();
++const skip = SID.ok ? false : `no container profile: ${SID.detail}`;
++const OWNER = process.env.USERDOMAIN + '\\' + process.env.USERNAME;
++
++function protect(dir) {
++  const done = spawnSync('icacls', [dir, '/inheritance:r', '/grant:r', `${OWNER}:(OI)(CI)F`],
++    { encoding: 'utf8' });
++  assert.equal(done.status, 0, `could not strip inheritance: ${done.stdout}${done.stderr}`);
++}
++
++function grant(dir) {
++  const done = spawnSync('icacls', [dir, '/grant', `*${SID.sid}:(OI)(CI)M`], { encoding: 'utf8' });
++  assert.equal(done.status, 0, `grant failed for ${dir}: ${done.stdout}${done.stderr}`);
++}
++
++function carriesContainerAce(path) {
++  return spawnSync('icacls', [path], { encoding: 'utf8' }).stdout
++    .toLowerCase().includes(SID.sid.toLowerCase());
++}
++
++/** A read attempted inside the container, reported with its exact code. */
++function readContained(file, cwd) {
++  const script = [
++    "const fs = require('node:fs');",
++    `try { console.log('RESULT ' + JSON.stringify(fs.readFileSync(${JSON.stringify(file)}, 'utf8').trim())); }`,
++    "catch (err) { console.log('RESULT ' + JSON.stringify(err.code + '/' + err.errno)); }",
++  ].join('\n');
++  const run = runInJobSync({
++    command: NODE, args: ['-e', script], cwd,
++    env: { LOCALAPPDATA: process.env.LOCALAPPDATA, SystemRoot: process.env.SystemRoot },
++    outputBytes: 65_536, timeoutMs: 60_000, container: SID.sid,
++  });
++  assert.equal(run.status, 'ok', `the run failed: ${JSON.stringify(run.limits_refused)}`);
++  const line = String(run.stdout ?? '').split('\n').find((l) => l.startsWith('RESULT '));
++  assert.ok(line, `no RESULT line: ${JSON.stringify(run.stdout)}`);
++  return JSON.parse(line.slice('RESULT '.length));
++}
++
++// ── Unit shape: the scan, without a container ────────────────────────────────
++
++test('scanForHardLinks finds a link and passes ordinary content', () => {
++  const base = join(ROOT, 'scan');
++  mkdirSync(join(base, '.tmp'), { recursive: true });
++  writeFileSync(join(base, 'normal.txt'), 'NORMAL');
++  writeFileSync(join(base, '.tmp', 'scratch.txt'), 'SCRATCH');
++
++  assert.deepEqual(scanForHardLinks(base), []);
++
++  const target = join(base, 'target.txt');
++  writeFileSync(target, 'TARGET');
++  linkSync(target, join(base, 'hard.txt'));
++  const found = scanForHardLinks(base);
++  assert.equal(found.length, 2, `both names of the linked file are findings: ${JSON.stringify(found)}`);
++  assert.ok(found.every((f) => f.nlink === 2 && f.ino === found[0].ino),
++    `both names share one file ID and count: ${JSON.stringify(found)}`);
++});
++
++test('scanForHardLinks reports a directory it cannot list instead of skipping it', () => {
++  // The same icacls-deny idiom the path-shapes suite uses, aimed at a
++  // subdirectory: deny (RX) takes away FILE_LIST_DIRECTORY, readdir turns into
++  // EPERM/-4048, and the scan must surface that instead of walking past it.
++  // (A deny on a FILE cannot do this — lstat stats through the parent and
++  // reports the true link count even on a file the reader cannot open.)
++  const base = join(ROOT, 'scan-error');
++  const sub = join(base, 'sub');
++  mkdirSync(sub, { recursive: true });
++  writeFileSync(join(sub, 'x.txt'), 'X');
++  const denied = spawnSync('icacls', [sub, '/deny', `${OWNER}:(RX)`], { encoding: 'utf8' });
++  assert.equal(denied.status, 0, `could not deny the listing: ${denied.stdout}${denied.stderr}`);
++  try {
++    const findings = scanForHardLinks(base);
++    assert.equal(findings.length, 1, `the unlistable directory is a finding: ${JSON.stringify(findings)}`);
++    assert.equal(findings[0].path, sub);
++    assert.ok(findings[0].error, 'the finding carries why the path could not be read');
++  } finally {
++    spawnSync('icacls', [sub, '/remove:d', OWNER], { encoding: 'utf8' });
++  }
++});
++
++test('stripContainerAce detaches inheritance first, then removes the ACE, through the injected runner', () => {
++  const calls = [];
++  const run = (args) => { calls.push(args); return { status: 0, out: 'Successfully processed 1 files' }; };
++  const done = stripContainerAce('C:\\ws\\hard.txt', 'S-1-15-2-test', { run });
++  assert.deepEqual(calls, [
++    ['C:\\ws\\hard.txt', '/inheritance:d'],
++    ['C:\\ws\\hard.txt', '/remove', '*S-1-15-2-test'],
++  ]);
++  assert.equal(done.removed, true);
++
++  calls.length = 0;
++  const stuck = stripContainerAce('C:\\ws\\hard.txt', 'S-1-15-2-test', {
++    run: (args) => (args.includes('/inheritance:d')
++      ? { status: 5, out: 'Access is denied.' }
++      : { status: 0, out: 'ok' }),
++  });
++  assert.equal(stuck.removed, false, 'a failed detach must not be reported as removed');
++  assert.match(stuck.detail, /\/inheritance:d failed/);
++});
++
++test('enforceLinkIsolation refuses before the grant and never grants', () => {
++  const grants = [];
++  assert.throws(() => enforceLinkIsolation({
++    dir: 'D', sid: 'S-1-15-2-test',
++    grant: () => grants.push('ran'),
++    scan: () => [{ path: 'D\\hard.txt', ino: 7, nlink: 2 }],
++  }), (err) => err instanceof LinkIsolationError
++    && err.code === PRE_GRANT
++    && err.findings.length === 1);
++  assert.deepEqual(grants, [], 'the grant must not have run');
++});
++
++test('enforceLinkIsolation passes a grant failure through when nothing landed', () => {
++  const original = new Error('icacls exploded');
++  let thrown = null;
++  try {
++    enforceLinkIsolation({
++      dir: 'D', sid: 'S-1-15-2-test',
++      grant: () => { throw original; },
++      scan: (dir) => [],
++    });
++  } catch (err) { thrown = err; }
++  // The caller's error contract is the callback's own error object: a thrown
++  // message string would slip past every `instanceof WorkspaceError` check
++  // upstream (regression measured 2026-11-14 when the caught error was
++  // narrowed to its message for the grant_error detail).
++  assert.ok(thrown === original, `the original grant error must pass through untouched, got ${thrown}`);
++});
++
++test('enforceLinkIsolation cleans up and refuses when a link appears during the grant', () => {
++  const removals = [];
++  let scans = 0;
++  assert.throws(() => enforceLinkIsolation({
++    dir: 'D', sid: 'S-1-15-2-test',
++    grant: () => { /* the race: the link lands while the grant runs */ },
++    scan: () => (++scans === 1 ? [] : [{ path: 'D\\hard.txt', ino: 9, nlink: 2 }]),
++    removeAce: (path, sid) => { removals.push([path, sid]); return { attempted: true, removed: true, detail: '' }; },
++  }), (err) => err instanceof LinkIsolationError
++    && err.code === GRANT_ESCAPED
++    && err.cleanup.length === 1
++    && err.cleanup[0].removed === true);
++  assert.deepEqual(removals, [['D\\hard.txt', 'S-1-15-2-test']]);
++});
++
++// ── Contained: the gate against the real grant ───────────────────────────────
++
++test('AT-V3-HL-06 createWorkspace refuses a workspace that already holds a hard link, and the outside object stays untouched', { skip }, () => {
++  const base = join(ROOT, 'hl-06');
++  const outside = join(base, 'outside');
++  const dir = join(base, 'ws');
++  mkdirSync(outside, { recursive: true });
++  mkdirSync(dir);
++  protect(outside);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'CANARY-HL-06\n');
++  linkSync(secret, join(dir, 'hard.txt'));
++
++  const ws = createWorkspace({ root: base, task_id: 'ws', container: SID.sid });
++  assert.throws(() => ws.create(), (err) => err.code === PRE_GRANT,
++    'the gate must refuse before the grant runs');
++
++  assert.equal(carriesContainerAce(secret), false,
++    'no ACE may land on the outside object when the grant is refused');
++  assert.equal(readContained(secret, dir), 'EPERM/-4048',
++    'and the container still cannot read it');
++});
++
++test('AT-V3-HL-07 a link planted during the grant is detected, its ACE removed, and the run refused', { skip }, () => {
++  const base = join(ROOT, 'hl-07');
++  const outside = join(base, 'outside');
++  const dir = join(base, 'ws');
++  mkdirSync(outside, { recursive: true });
++  mkdirSync(dir);
++  protect(outside);
++  const secret = join(outside, 'secret.txt');
++  writeFileSync(secret, 'CANARY-HL-07\n');
++
++  // The E3 race, replayed deterministically: the link is planted inside the
++  // grant callback, between the pre-scan and the propagation walk, which is
++  // exactly where the directory watcher planted it 20 times out of 20.
++  assert.throws(() => enforceLinkIsolation({
++    dir, sid: SID.sid,
++    grant: () => {
++      linkSync(secret, join(dir, 'race.txt'));
++      grant(dir);
++    },
++  }), (err) => err instanceof LinkIsolationError && err.code === GRANT_ESCAPED,
++  'the post-grant scan must catch the link the race planted');
++
++  assert.equal(carriesContainerAce(secret), false,
++    'the cleanup must have taken the container ACE back off the outside object');
++  assert.ok(spawnSync('icacls', [secret], { encoding: 'utf8' }).stdout.includes(OWNER),
++    'the cleanup must not have replaced the rest of the outside object ACL');
++  assert.equal(readContained(secret, dir), 'EPERM/-4048',
++    'and the boundary must be closed again');
++});
++
++test('AT-V3-HL-08 ordinary workspace content grants normally under the gate', { skip }, () => {
++  const base = join(ROOT, 'hl-08');
++  const ws = createWorkspace({ root: base, task_id: 'ws', container: SID.sid });
++  const dir = ws.create();
++  assert.equal(carriesContainerAce(dir), true, 'the grant ran');
++  assert.equal(readContained(join(dir, 'missing.txt'), dir), 'ENOENT/-4058',
++    'the container runs in the granted workspace, so the gate did not break it');
++});

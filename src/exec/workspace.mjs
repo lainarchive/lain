@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { LainError } from '../core/errors.mjs';
 import { containerSid, runInJob, runInJobSync } from './job.mjs';
+import { enforceLinkIsolation, LinkIsolationError } from './hardlink-defect-remediation.mjs';
 
 export class WorkspaceError extends LainError {
   /**
@@ -196,12 +197,33 @@ export function createWorkspace(options) {
         // delete inside its own workspace, which is what ordinary work needs -
         // a boundary that breaks that is a boundary someone gets told to turn
         // off. Granted on this one task directory, never on a shared parent.
-        const grant = spawnSync('icacls', [dir, '/grant', `*${options.container}:(OI)(CI)M`],
-          { encoding: 'utf8', windowsHide: true });
-        if (grant.status !== 0) {
-          throw new WorkspaceError('CONTAINER_GRANT_FAILED',
-            `icacls could not grant ${options.container} on the workspace`,
-            { detail: (grant.stderr ?? '').trim() || `icacls exited ${grant.status}` });
+        //
+        // The grant runs inside the hard-link gate rather than bare, because
+        // the grant's own propagation walk follows hard links: a link sitting
+        // in the workspace at this moment pulls the container ACE onto an
+        // outside object (measured, E1; the race that plants one here in time
+        // was won 20/20 by a directory watcher, E3). The gate refuses before
+        // the grant, verifies after it, and takes a landed ACE back off the
+        // outside object before refusing — see hardlink-defect-remediation.mjs.
+        try {
+          enforceLinkIsolation({
+            dir,
+            sid: options.container,
+            grant: () => {
+              const grant = spawnSync('icacls', [dir, '/grant', `*${options.container}:(OI)(CI)M`],
+                { encoding: 'utf8', windowsHide: true });
+              if (grant.status !== 0) {
+                throw new WorkspaceError('CONTAINER_GRANT_FAILED',
+                  `icacls could not grant ${options.container} on the workspace`,
+                  { detail: (grant.stderr ?? '').trim() || `icacls exited ${grant.status}` });
+              }
+            },
+          });
+        } catch (err) {
+          if (err instanceof LinkIsolationError) {
+            throw new WorkspaceError(err.code, err.message, { detail: err.detail });
+          }
+          throw err;
         }
       }
       return dir;

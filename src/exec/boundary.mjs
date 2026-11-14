@@ -130,7 +130,7 @@ export function isInside(parent, child) {
  *
  * @param {string} dir
  * @param {{maxEntries?: number}} [options]
- * @returns {{checked: number, links: string[], escaped: string[], truncated: boolean}}
+ * @returns {{checked: number, links: string[], escaped: string[], hardLinks: string[], truncated: boolean}}
  */
 export function inspectContainment(dir, options = {}) {
   const maxEntries = options.maxEntries ?? 5000;
@@ -138,6 +138,8 @@ export function inspectContainment(dir, options = {}) {
   const links = [];
   /** @type {string[]} */
   const escaped = [];
+  /** @type {string[]} */
+  const hardLinks = [];
   let checked = 0;
   let truncated = false;
 
@@ -171,11 +173,23 @@ export function inspectContainment(dir, options = {}) {
         continue;
       }
       if (entry.isDirectory()) walk(full);
+      else {
+        // A regular file carrying more than one name is a hard link, and the
+        // second name may sit outside the workspace where this walk cannot see
+        // it — which is exactly why the file cannot be vouched for. Directories
+        // are excluded: NTFS directory link counts mean something else, and
+        // directory aliasing is the reparse question the check above answers.
+        try {
+          if (lstatSync(full).nlink > 1) hardLinks.push(full);
+        } catch {
+          // unreadable is not the same as absent, and the caller sees `checked`
+        }
+      }
     }
   };
 
   if (existsSync(dir)) walk(dir);
-  return { checked, links, escaped, truncated };
+  return { checked, links, escaped, hardLinks, truncated };
 }
 
 /**
@@ -200,6 +214,50 @@ function isReparsePoint(path) {
   } catch {
     return false;
   }
+}
+
+/**
+ * The per-task half of the execution boundary: the workspace a task is about
+ * to run in must hold no link that leaves it and no hard-linked file.
+ *
+ * The hard-link half exists because the grant-time gate in
+ * ./hardlink-defect-remediation.mjs only covers the creation window. A link
+ * planted after the grant lands no ACE (measured, P5) and is not exploitable
+ * on its own — but it is a second name for an outside object sitting in a
+ * directory the container can write, and the workspace's whole value is that
+ * a fresh task directory holds exactly what Lain put in it. A run refuses on
+ * the broken invariant, not on a proven exploit.
+ *
+ * @param {{workspaceRoot: string, taskId: string}} input
+ * @returns {{ok: boolean, code: string, message: string, facts: Record<string, unknown>}}
+ */
+export function checkWorkspaceContainment(input) {
+  const taskDir = join(resolve(input.workspaceRoot), input.taskId);
+  const containment = inspectContainment(taskDir);
+  /** @type {Record<string, unknown>} */
+  const facts = { workspace: taskDir, containment };
+  if (containment.escaped.length > 0) {
+    return {
+      ok: false,
+      code: 'WORKSPACE_LINK_ESCAPES',
+      message: `the task workspace contains ${containment.escaped.length} link(s) resolving outside it`,
+      facts,
+    };
+  }
+  if (containment.hardLinks.length > 0) {
+    return {
+      ok: false,
+      code: 'WORKSPACE_HARD_LINK_PRESENT',
+      message: `the task workspace contains ${containment.hardLinks.length} hard-linked file(s); a second name outside the workspace cannot be ruled out`,
+      facts,
+    };
+  }
+  return {
+    ok: true,
+    code: 'WORKSPACE_CONTAINED',
+    message: 'the workspace holds no link that leaves it and no hard-linked file',
+    facts,
+  };
 }
 
 /**
@@ -241,14 +299,13 @@ export function checkExecutionBoundary(input) {
   }
 
   if (input.taskId) {
-    const taskDir = join(root, input.taskId);
-    const containment = inspectContainment(taskDir);
-    facts.containment = containment;
-    if (containment.escaped.length > 0) {
+    const containment = checkWorkspaceContainment({ workspaceRoot: root, taskId: input.taskId });
+    facts.containment = containment.facts.containment;
+    if (!containment.ok) {
       return {
         ok: false,
-        code: 'WORKSPACE_LINK_ESCAPES',
-        message: `the task workspace contains ${containment.escaped.length} link(s) resolving outside it`,
+        code: containment.code,
+        message: containment.message,
         posture: posture.id,
         facts,
       };
