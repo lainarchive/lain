@@ -17,6 +17,8 @@
   lain model reclassify <model-id> <new-effect>
   lain model approval-record list | add <decision-id> <task-id> <model-id> <outcome> [--by <who>]
   lain model approval-persist store <db-path> | dump <db-path>
+  lain model invoke <task.json> <provider> [--live]
+  lain model credentials list
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -37,6 +39,8 @@ import { modelApproveCommand } from './commands/model-approve.mjs';
 import { modelReclassCommand } from './commands/model-reclass.mjs';
 import { modelApprovalRecordCommand } from './commands/model-approval-record.mjs';
 import { modelApprovalPersistCommand } from './commands/model-approval-persist.mjs';
+import { modelInvokeCommand } from './commands/model-invoke.mjs';
+import { modelCredentialsCommand } from './commands/model-credentials.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -312,15 +316,20 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
   if (group === 'model') {
     // `lain model run <file>`, `lain model approve <file> <model-id>`,
     // `lain model reclassify <model-id> <new-effect>`,
-    // `lain model approval-record list|add ...` and
-    // `lain model approval-persist store|dump ...` — the M-2/M-3 mock
-    // integration, its human-approval gate, the M-4 authorized override, the
-    // M-5 approval ledger and the M-6 durable ledger. Each command handler
-    // owns its own exit codes and prints exactly one JSON document.
+    // `lain model approval-record list|add ...`,
+    // `lain model approval-persist store|dump ...`,
+    // `lain model invoke <file> <provider>` and
+    // `lain model credentials list` — the M-2/M-3 mock integration, its
+    // human-approval gate, the M-4 authorized override, the M-5 approval
+    // ledger, the M-6 durable ledger and the M-7 provider routing scaffold.
+    // Each command handler owns its own exit codes and prints exactly one
+    // JSON document.
     if (command === 'approve') return modelApproveCommand({ command, positional, flags, io });
     if (command === 'reclassify') return modelReclassCommand({ command, positional, flags, io });
     if (command === 'approval-record') return modelApprovalRecordCommand({ command, positional, flags, io });
     if (command === 'approval-persist') return modelApprovalPersistCommand({ command, positional, flags, io });
+    if (command === 'invoke') return await modelInvokeCommand({ command, positional, flags, io });
+    if (command === 'credentials') return modelCredentialsCommand({ command, positional, flags, io });
     return modelCommand({ command, positional, flags, io });
   }
 
