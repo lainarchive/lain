@@ -14,6 +14,7 @@
  *   lain approve <approval_id> [--list] [--answer granted|denied --by <name> --digest <hex>] [--json]
   lain model run <task.json>
   lain model approve <task.json> <model-id>
+  lain model reclassify <model-id> <new-effect>
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -31,6 +32,7 @@ import { isEntryPoint } from '../../tools/check/lib/report.mjs';
 import { approveCommand } from './commands/approve.mjs';
 import { modelCommand } from './commands/model.mjs';
 import { modelApproveCommand } from './commands/model-approve.mjs';
+import { modelReclassCommand } from './commands/model-reclass.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -304,10 +306,13 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
   }
 
   if (group === 'model') {
-    // `lain model run <file>` and `lain model approve <file> <model-id>` —
-    // the M-2/M-3 mock integration and its human-approval gate. Each command
-    // handler owns its own exit codes and prints exactly one JSON document.
+    // `lain model run <file>`, `lain model approve <file> <model-id>` and
+    // `lain model reclassify <model-id> <new-effect>` — the M-2/M-3 mock
+    // integration, its human-approval gate, and the M-4 authorized override.
+    // Each command handler owns its own exit codes and prints exactly one
+    // JSON document.
     if (command === 'approve') return modelApproveCommand({ command, positional, flags, io });
+    if (command === 'reclassify') return modelReclassCommand({ command, positional, flags, io });
     return modelCommand({ command, positional, flags, io });
   }
 

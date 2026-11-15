@@ -38,6 +38,10 @@ export const DEFAULT_RULES = Object.freeze({
     // M-3: the registry path treats a model invocation as external — the
     // engine lands in A5 and a human decides before anything runs.
     'model.invoke.external': { tool_effect_class: 'external', requires: ['model.invoke'] },
+    // M-4: re-classification is a local, reversible bookkeeping change — the
+    // override map and its log — but it must stay in human hands, so the rule
+    // requires model.admin and the CLI path is the only one that carries it.
+    'model.reclassify': { tool_effect_class: 'local_reversible', requires: ['model.admin'] },
   },
   forbidden_paths: [
     '.lain-audit',

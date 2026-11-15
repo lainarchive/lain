@@ -1,0 +1,7 @@
+{
+  "id": "M4-001",
+  "title": "Scaffold model re-classification & provider integration",
+  "owner": "Gemini",
+  "status": "pending",
+  "dependencies": ["M3-001"]
+}
