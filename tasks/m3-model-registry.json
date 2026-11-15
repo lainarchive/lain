@@ -1,0 +1,7 @@
+{
+  "id": "M3-001",
+  "title": "Scaffold model registry & approval gate",
+  "owner": "Gemini",
+  "status": "pending",
+  "dependencies": ["v3.2-model-scaffold"]
+}
