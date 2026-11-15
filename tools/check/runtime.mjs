@@ -11,7 +11,9 @@ import { join } from 'node:path';
 import { isEntryPoint, main } from './lib/report.mjs';
 
 const PIN_FILE = '.node-version';
-const EXPECTED_MAJOR = '24';
+// Major 26 became the floor by owner decision on 2026-11-14: the M-9 dashboard
+// renderer @opentui/core needs node >= 26.4 (was 24 before that decision).
+const EXPECTED_MAJOR = '26';
 
 if (isEntryPoint(import.meta.url)) await main('runtime', async ({ result, root }) => {
   const actual = process.versions.node;

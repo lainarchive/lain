@@ -15,8 +15,8 @@
  */
 import { LainError } from '../core/errors.mjs';
 import { join } from 'node:path';
-import { decide } from '../policy/decide.mjs';
-import { buildContext } from '../policy/rules.mjs';
+import { publishTaskEvent } from '../model/eventBus.mjs';
+import { decide } from '../policy/decide.mjs';import { buildContext } from '../policy/rules.mjs';
 import { toolRule } from '../policy/rules.mjs';
 import { createApprovalLedger } from '../policy/approvals.mjs';
 import { createWorkspace } from '../exec/workspace.mjs';
@@ -184,8 +184,8 @@ export function createTaskRunner({
       const created = taskStore.create({ contract, origin });
       const taskId = created.task_id;
       const log = openLog({ task_id: taskId });
-      const record = (/** @type {{event_type: string, payload?: Record<string, unknown>, correlation_id?: string, causation_id?: string}} */ event) =>
-        log.record(event.event_type, event.payload ?? {}, {
+      const record = (/** @type {{event_type: string, payload?: Record<string, unknown>, correlation_id?: string, causation_id?: string}} */ event) => {
+        const stored = log.record(event.event_type, event.payload ?? {}, {
           // The events table carries the task id in its own column, so a task's
           // whole story is one indexed query — including the rows this runner
           // writes, which are the ones a cancellation has to be read against.
@@ -193,6 +193,19 @@ export function createTaskRunner({
           correlation_id: event.correlation_id,
           causation_id: event.causation_id,
         });
+        // The dashboard is a live observer, not a second store: one publish
+        // per recorded event, after the store has accepted it, carrying the
+        // same shape so an observer can never see an event the store refused.
+        publishTaskEvent({
+          event_type: event.event_type,
+          payload: event.payload ?? {},
+          task_id: taskId,
+          occurred_at: new Date().toISOString(),
+          correlation_id: event.correlation_id,
+          causation_id: event.causation_id,
+        });
+        return stored;
+      };
 
       record({ event_type: 'task.created', payload: { objective: contract.objective, effect_class: contract.effect_class } });
 
