@@ -1,0 +1,8 @@
+{
+  "id": "M8-001",
+  "title": "Integrate ledger-backed approval into the model gate",
+  "owner": "Gemini",
+  "status": "pending",
+  "dependencies": ["M7-001"],
+  "notes": "resolveLedgerApproval in src/model/registry.mjs; runTask live mode + bound augmentation in src/model/integration.mjs; --approval-id in src/cli/commands/model-invoke.mjs. An approval grants the capability only to the task id it was recorded for."
+}
