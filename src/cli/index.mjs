@@ -41,6 +41,7 @@ import { modelApprovalRecordCommand } from './commands/model-approval-record.mjs
 import { modelApprovalPersistCommand } from './commands/model-approval-persist.mjs';
 import { modelInvokeCommand } from './commands/model-invoke.mjs';
 import { modelCredentialsCommand } from './commands/model-credentials.mjs';
+import { tuiCommand } from './commands/tui.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -97,6 +98,8 @@ const USAGE = `lain — one bounded, authorized task
   lain approve --list [--json]
   lain approve <approval_id> --answer granted|denied --by <name> --digest <hex> [--json]
   lain approve <approval_id> --allow [--json]
+  lain tui
+                live task dashboard (q quit, r refresh, up/down scroll)
 `;
 
 /** @param {string} path */
@@ -331,6 +334,12 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
     if (command === 'invoke') return await modelInvokeCommand({ command, positional, flags, io });
     if (command === 'credentials') return modelCredentialsCommand({ command, positional, flags, io });
     return modelCommand({ command, positional, flags, io });
+  }
+
+  if (group === 'tui') {
+    // `lain tui` — the M-9 dashboard. Groupless on purpose: one screen, no
+    // subcommands, and the OpenTUI import stays behind the command module.
+    return await tuiCommand({ command, positional, flags, io });
   }
 
   io.err(USAGE);

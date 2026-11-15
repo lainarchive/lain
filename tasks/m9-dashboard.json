@@ -1,0 +1,7 @@
+{
+  "id": "M9-001",
+  "title": "Advanced TUI dashboard: live task table and scrolling event log",
+  "owner": "Gemini",
+  "status": "pending",
+  "dependencies": ["M8-001"]
+}

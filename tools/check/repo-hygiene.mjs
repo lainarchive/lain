@@ -16,8 +16,13 @@ import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isEntryPoint, main } from './lib/report.mjs';
 
-/** The complete list of runtime dependencies this project permits. */
-export const ALLOWED_RUNTIME_DEPENDENCIES = /** @type {string[]} */ ([]);
+/**
+ * The complete list of runtime dependencies this project permits. @opentui/core
+ * joined it by owner decision on 2026-11-14 (M-9 dashboard renderer) — the
+ * first and, so far, only runtime dependency; every other need so far is
+ * satisfied by the Node standard library.
+ */
+export const ALLOWED_RUNTIME_DEPENDENCIES = /** @type {string[]} */ (['@opentui/core']);
 
 /** The complete list of development dependencies this project permits. */
 export const ALLOWED_DEV_DEPENDENCIES = ['typescript', '@types/node'];
@@ -146,15 +151,17 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
   }
 
   // Node version pin is documented in package.json too; the two must agree that
-  // major 24 is required. Both `^24.0.0` and `>=24.0.0 <25.0.0` are acceptable
-  // spellings; a range that admits another major is not.
+  // major 26 is required. Both `^26.4.0` and `>=26.4.0 <27.0.0` are acceptable
+  // spellings; a range that admits another major is not. (Major 26 became the
+  // floor by owner decision on 2026-11-14: the M-9 dashboard renderer
+  // @opentui/core needs node >= 26.4.)
   const engine = pkg.engines?.node ?? '(unset)';
   result.record('engines_node', engine);
-  const requires24 = /^\^24\./.test(String(engine)) || /^>=24\.0\.0\s*<25/.test(String(engine));
-  if (!requires24) {
-    result.fail(`package.json engines.node is ${engine}, expected a pin limited to major 24`, {
+  const requires26 = /^\^26\./.test(String(engine)) || /^>=26\.4\.0\s*<27/.test(String(engine));
+  if (!requires26) {
+    result.fail(`package.json engines.node is ${engine}, expected a pin limited to major 26`, {
       message: 'engine range mismatch',
-      detail: 'accepted forms: ^24.0.0 or >=24.0.0 <25.0.0',
+      detail: 'accepted forms: ^26.4.0 or >=26.4.0 <27.0.0',
     });
   }
 
