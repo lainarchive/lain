@@ -69,3 +69,4 @@ Future integration work, without changing the existing foundation milestone:
 | --- | --- | --- | --- |
 | V-3.1 / V-3.2 — hard-link grant escape found, gated, edge cases closed | Done | 2026-11-14 | Commit `14e6d1b`, tag `v3.2-hardlink-edge`, pushed to `origin/main`. Evidence: `docs/research/v3-read-isolation/hardlink-investigation.md`. |
 | M-2 — Model Integration (first Phase 2 slice) | In-Progress | 2026-11-14 | Mock model behind the Policy Engine: `model.invoke` is a read-only rule-set row, `runTask` decides before it selects or invokes. No provider, no network, $0. M-3 moves the effect class to `external`. |
+| M-3 — Model Registry & Human-Approval Gate | Planned | 2026-11-14 | Registry + A5 approval gate scaffolded (uncommitted, pending review): `src/model/registry.mjs`, `src/model/approval.mjs`, `lain model approve`. Wiring the gate into `runTask` and proving a channel local are the milestone proper; design in `docs/model/registry.md`. |
