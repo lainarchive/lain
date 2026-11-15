@@ -10,6 +10,7 @@ import { decide, permitsExecution } from '../../policy/decide.mjs';
 import { buildContext, DEFAULT_RULES } from '../../policy/rules.mjs';
 import { getCredentials, maskSecret } from '../../model/provider/credentials.mjs';
 import { createPersistentLedger } from '../../model/persistentLedger.mjs';
+import { resolveLedgerApproval } from '../../model/registry.mjs';
 
 /** Kept equal to `EXIT` in `../index.mjs` for the same reason `approve.mjs` redeclares it. */
 const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
@@ -50,6 +51,12 @@ const USAGE = `lain model invoke — route one task to a provider
       blocks unbilled spend. The credential comes from AGY_ACCOUNT or .env
       and is reported masked; it travels only in request headers.
 
+      --approval-id <decision-id> is the M-8 spelling of --approval and adds
+      one power: when the granted ledger entry is bound to the task file's id
+      (the approval was recorded for THIS task), the entry supplies the
+      model.invoke.external capability for this invocation — an approval for
+      another task, or a task file without an id, never does.
+
   Exit 0 on success; 3 when the policy refused or a live precondition is
   missing; 4 on an unknown provider or a failed live call; 2 for usage
   errors and unreadable task files.
@@ -88,6 +95,10 @@ export async function modelInvokeCommand({ command, positional, flags, io, fetch
     return EXIT.failed;
   }
   const live = flags.live === true || flags.live === 'true';
+  if (typeof flags['approval-id'] === 'string' && !live) {
+    io.err('refused: --approval-id requires --live — the stub path needs no approval');
+    return EXIT.usage;
+  }
   /** @type {unknown} */
   let raw;
   try {
@@ -102,7 +113,8 @@ export async function modelInvokeCommand({ command, positional, flags, io, fetch
     io.err('refused: task file needs a non-empty string prompt');
     return EXIT.usage;
   }
-  const granted = Array.isArray(task.granted_capabilities) ? /** @type {string[]} */ (task.granted_capabilities) : [];
+  /** Reassigned only by the M-8 bound-approval augmentation; never shrunk. */
+  let granted = Array.isArray(task.granted_capabilities) ? /** @type {string[]} */ (task.granted_capabilities) : [];
 
   if (live) {
     // $0-first: OpenAI has no free API tier, so its live path stays shut until
@@ -111,7 +123,12 @@ export async function modelInvokeCommand({ command, positional, flags, io, fetch
       io.err('refused: openai has no free api tier — set OPENAI_FUNDED=1 only after the account is funded ($0-first)');
       return EXIT.refused;
     }
-    const approvalId = typeof flags.approval === 'string' ? flags.approval : undefined;
+    const approvalId =
+      typeof flags['approval-id'] === 'string'
+        ? flags['approval-id']
+        : typeof flags.approval === 'string'
+          ? flags.approval
+          : undefined;
     const ledgerPath = typeof flags.ledger === 'string' ? flags.ledger : undefined;
     if (approvalId !== undefined && ledgerPath === undefined) {
       io.err('refused: --approval needs --ledger <db-path> naming the persistent ledger to check it against');
@@ -124,14 +141,27 @@ export async function modelInvokeCommand({ command, positional, flags, io, fetch
         io.err(`failed: approval ledger not found: ${ledgerPath}`);
         return EXIT.failed;
       }
+      // The task file's id is what makes an approval bound: the approver
+      // recorded the entry for a named task, and only that task may treat the
+      // approval as its capability grant. A task file without an id stays
+      // un-augmented — the M-7 invariant holds.
+      const taskRecord = /** @type {{ id?: unknown }} */ (raw);
+      const taskId = typeof taskRecord.id === 'string' && taskRecord.id !== '' ? taskRecord.id : undefined;
       const ledger = createPersistentLedger(ledgerPath);
+      let resolution;
       try {
-        const entry = ledger.list().find((candidate) => candidate.decision_id === approvalId);
-        if (entry !== undefined) {
-          approval = approvalFromOutcome(/** @type {'pending' | 'granted' | 'denied' | 'timed_out'} */ (entry.outcome), entry.decision_id);
-        }
+        resolution = resolveLedgerApproval(approvalId, { ledger, taskId });
       } finally {
         ledger.close();
+      }
+      if (resolution.entry !== null) {
+        approval = approvalFromOutcome(
+          /** @type {'pending' | 'granted' | 'denied' | 'timed_out'} */ (resolution.entry.outcome),
+          resolution.entry.decision_id,
+        );
+      }
+      if (resolution.approved) {
+        granted = [...new Set([...granted, 'model.invoke.external'])];
       }
     }
     const context = buildContext({
