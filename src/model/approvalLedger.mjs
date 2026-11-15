@@ -16,7 +16,7 @@ import { ModelPolicyError } from './integration.mjs';
  *
  * @type {string[]}
  */
-const OUTCOMES = ['pending', 'granted', 'denied', 'timed_out'];
+export const OUTCOMES = ['pending', 'granted', 'denied', 'timed_out'];
 
 /**
  * In-memory for now, keyed by decision id: one decision, one entry, and a
