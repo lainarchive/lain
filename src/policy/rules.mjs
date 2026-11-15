@@ -48,6 +48,10 @@ export const DEFAULT_RULES = Object.freeze({
     // EFFECT_CLASSES) — `local_reversible` is the honest class, and
     // model.admin keeps the audit trail in human hands.
     'model.approval.record': { tool_effect_class: 'local_reversible', requires: ['model.admin'] },
+    // M-6: persisting the ledger into SQLite is the same bookkeeping one step
+    // further from memory — still local, still reversible (a row can be
+    // deleted), still an audit trail that must stay in human hands.
+    'model.approval.persist': { tool_effect_class: 'local_reversible', requires: ['model.admin'] },
   },
   forbidden_paths: [
     '.lain-audit',
