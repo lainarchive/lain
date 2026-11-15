@@ -1,0 +1,7 @@
+{
+  "id": "M5-001",
+  "title": "Scaffold real provider stubs & approval ledger",
+  "owner": "Gemini",
+  "status": "pending",
+  "dependencies": ["M4-001"]
+}
