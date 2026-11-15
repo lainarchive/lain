@@ -36,3 +36,24 @@
 
 e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt-base64:70
 e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt:70
+
+# Scope: exactly two more findings, both synthetic test fixtures from M-7
+# (commit 31f9507), both in live-transport tests.
+#
+#   commit 31f9507, test/model/openai-live.test.mjs:26 (generic-api-key)
+#   commit 31f9507, test/model/gemini-live.test.mjs:24 (generic-api-key)
+#
+# The values are fake API keys ('sk-test-…' and a same-shaped gemini fixture)
+# that exist only to prove the transports put the credential in request
+# HEADERS and report it masked. The tests inject a stub fetchImpl, so no
+# request ever leaves the machine, and no service anywhere accepts these
+# strings. They surfaced at M-8's verify because M-7's own verify ran before
+# the commit existed; the commit-scanning gate now sees them in history, and
+# history is not rewritten without explicit permission.
+#
+# Same narrowness rules as above: exact fingerprints only. If either fixture
+# line changes, the fingerprint stops matching and the finding returns — the
+# correct failure.
+
+31f9507e23f474fb696507d1613b80ee7242c48d:test/model/openai-live.test.mjs:generic-api-key:26
+31f9507e23f474fb696507d1613b80ee7242c48d:test/model/gemini-live.test.mjs:generic-api-key:24
