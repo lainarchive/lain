@@ -17,7 +17,7 @@
   lain model reclassify <model-id> <new-effect>
   lain model approval-record list | add <decision-id> <task-id> <model-id> <outcome> [--by <who>]
   lain model approval-persist store <db-path> | dump <db-path>
-  lain model invoke <task.json> <provider> [--live]
+  lain model invoke <task.json> <provider> [--live] [--approval-id <decision-id> --ledger <db-path>]
   lain model credentials list
  */
 import { readFileSync, rmSync } from 'node:fs';
