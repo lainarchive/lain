@@ -35,6 +35,9 @@ export const DEFAULT_RULES = Object.freeze({
     // nothing and reaches nothing. A real provider in M-3 must move to
     // `external`, which lands in A5 and asks a human before it runs.
     'model.invoke': { tool_effect_class: 'read_only', requires: ['model.invoke'] },
+    // M-3: the registry path treats a model invocation as external — the
+    // engine lands in A5 and a human decides before anything runs.
+    'model.invoke.external': { tool_effect_class: 'external', requires: ['model.invoke'] },
   },
   forbidden_paths: [
     '.lain-audit',
