@@ -36,8 +36,13 @@ export const DEFAULT_RULES = Object.freeze({
     // `external`, which lands in A5 and asks a human before it runs.
     'model.invoke': { tool_effect_class: 'read_only', requires: ['model.invoke'] },
     // M-3: the registry path treats a model invocation as external — the
-    // engine lands in A5 and a human decides before anything runs.
-    'model.invoke.external': { tool_effect_class: 'external', requires: ['model.invoke'] },
+    // engine lands in A5 and a human decides before anything runs. M-7 proper
+    // tightened `requires` to the distinct capability: holding the stub grant
+    // (`model.invoke`) must not imply the live grant, because the stub costs
+    // nothing and the live transport spends money and leaves the machine.
+    // This row governs the live transports only; the stub path keeps the
+    // read_only row above.
+    'model.invoke.external': { tool_effect_class: 'external', requires: ['model.invoke.external'] },
     // M-4: re-classification is a local, reversible bookkeeping change — the
     // override map and its log — but it must stay in human hands, so the rule
     // requires model.admin and the CLI path is the only one that carries it.

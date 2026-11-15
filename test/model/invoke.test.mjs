@@ -1,6 +1,6 @@
 /**
  * @generated
- * @purpose  M-7 tests: the invoke command routes to stubs, refuses --live, and gates through the engine
+ * @purpose  M-7 tests: the invoke command routes to stubs, keeps the live transports behind the funding gate, and gates through the engine
  * @requires Chief-of-Staff
  */
 import test from 'node:test';
@@ -78,12 +78,22 @@ test('AT-M7-11: the gemini stub answers with its own marker', async () => {
   assert.equal(doc.answer, 'mock-gemini-response');
 });
 
-test('AT-M7-12: --live is refused in the scaffold — no network, no exception', async () => {
-  const task = writeTask('live.json', { prompt: 'hello', granted_capabilities: ['model.invoke'] });
-  const result = await run(modelInvokeCommand, { command: 'invoke', positional: [task, 'openai'], flags: { live: true } });
-  assert.equal(result.exit, 3);
-  assert.match(result.stderr, /milestone proper/);
-  assert.equal(result.stdout, '', 'a refused invocation prints no result document');
+test('AT-M7-12: openai --live is refused while the account is unfunded — no network, no exception', async () => {
+  const task = writeTask('live.json', { prompt: 'hello', granted_capabilities: ['model.invoke.external'] });
+  const previous = process.env.OPENAI_FUNDED;
+  delete process.env.OPENAI_FUNDED;
+  try {
+    const result = await run(modelInvokeCommand, { command: 'invoke', positional: [task, 'openai'], flags: { live: true } });
+    assert.equal(result.exit, 3);
+    assert.match(result.stderr, /no free api tier/);
+    assert.equal(result.stdout, '', 'a refused invocation prints no result document');
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENAI_FUNDED;
+    } else {
+      process.env.OPENAI_FUNDED = previous;
+    }
+  }
 });
 
 test('AT-M7-13: without the model.invoke capability the engine refuses', async () => {

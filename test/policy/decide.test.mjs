@@ -69,6 +69,16 @@ test('AT-V1-POL-01: every arm is reachable — each one is selected by some requ
   );
   seen.add(needsApproval.arm_id);
 
+  // A5b the same external effect, now covered by a recorded human approval —
+  // the M-7 answer to A5. The approval travels with the decision as a
+  // condition, and the decision carries the approval id for the audit trail.
+  const approvedExternal = decide(
+    { action: 'tool.invoke', target: 'run_script', task_id: 'task-1', requested_capabilities: ['workspace.write'], effect_class: 'external' },
+    allowingContext({ approval: { status: 'granted', approval_id: '01M7E8TESTAPPROVAL' } }),
+    { now: NOW },
+  );
+  seen.add(approvedExternal.arm_id);
+
   // A4 budget exhausted — the arm reads an explicit `exceeded` flag rather than
   // inferring it, so the test sets the flag the implementation actually uses.
   const exhausted = decide(request(), allowingContext({ budget: { exceeded: true, remaining_tool_calls: 0, max_tool_calls: 8 } }), { now: NOW });
@@ -246,4 +256,53 @@ test('AT-V1-POL-09: an approval is bound to the exact question, and times out in
   clock += 5_000;
   assert.equal(expiring.get(pending.approval_id)?.status, 'timed_out');
   assert.equal(expiring.get(pending.approval_id)?.decided_by, 'timeout');
+});
+
+test('AT-V1-POL-13: a recorded human approval is the only thing that lets an external effect run', () => {
+  const externalRequest = {
+    action: 'tool.invoke',
+    target: 'run_script',
+    task_id: 'task-1',
+    requested_capabilities: ['workspace.write'],
+    effect_class: 'external',
+  };
+
+  // No approval on record: A5 asks a human, and nothing runs.
+  const unapproved = decide(externalRequest, allowingContext({ approval: null }), { now: NOW });
+  assert.equal(unapproved.arm_id, 'A5');
+  assert.equal(unapproved.outcome, 'require_approval');
+  assert.equal(permitsExecution(unapproved), false);
+
+  // The human said no: A1 refuses terminally, before A5b could ever be reached.
+  const denied = decide(externalRequest, allowingContext({ approval: { status: 'denied', approval_id: '01M7E8DENIED' } }), { now: NOW });
+  assert.equal(denied.arm_id, 'A1');
+  assert.equal(permitsExecution(denied), false);
+
+  // The window closed: A2 refuses, and the refusal is not retryable.
+  const timedOut = decide(externalRequest, allowingContext({ approval: { status: 'timed_out', approval_id: '01M7E8TIMEDOUT' } }), { now: NOW });
+  assert.equal(timedOut.arm_id, 'A2');
+  assert.equal(isRetryableRefusal(timedOut), false);
+
+  // The human said yes: A5b allows with conditions, the condition names the
+  // approval, and the decision carries the approval id for the audit trail.
+  const approved = decide(
+    externalRequest,
+    allowingContext({ approval: { status: 'granted', approval_id: '01M7E8GRANTED' } }),
+    { now: NOW },
+  );
+  assert.equal(approved.arm_id, 'A5b');
+  assert.equal(approved.outcome, 'allow_with_conditions');
+  assert.equal(approved.reason_code, 'APPROVED_EXTERNAL_INVOCATION');
+  assert.deepEqual(conditionsFor(approved), ['external_invocation_covered_by_recorded_approval']);
+  assert.equal(approved.approval_id, '01M7E8GRANTED');
+  assert.equal(permitsExecution(approved), true);
+
+  // A granted approval does not launder a forbidden tool: A3 outranks A5b.
+  const forbiddenButApproved = decide(
+    { action: 'tool.invoke', target: 'rm_rf', task_id: 'task-1', requested_capabilities: [], effect_class: 'external' },
+    buildContext({ rules: RULES, tool_id: 'rm_rf', granted_capabilities: [], budget: {}, approval: { status: 'granted', approval_id: '01M7E8GRANTED' }, complete: true }),
+    { now: NOW },
+  );
+  assert.equal(forbiddenButApproved.arm_id, 'A3', 'an approval must never override an explicit rule');
+  assert.equal(permitsExecution(forbiddenButApproved), false);
 });

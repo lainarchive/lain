@@ -42,8 +42,21 @@ capability) before it touches any provider module. Credential resolution
 happens after the decision, and its masked form is included in the result
 document so the audit trail shows the source without the secret.
 
-`--live` is refused in this scaffold (`exit 3`). The real HTTPS transports for
-the openai/gemini adapters, the free-tier selection under the $0-first rule,
-and the decision whether keys move from the environment into the OS credential
-store are the milestone proper — they start only with the owner's approval of
-this scaffold.
+`--live` was refused in this scaffold (`exit 3`). The milestone proper has
+since landed (M-7, tag `v3.8-live-transport`): the real HTTPS transports run
+under `model.invoke.external` with the approval gate described in
+`docs/model/openai.md` and `docs/model/gemini.md`.
+
+## Decision #1 — what `AGY_ACCOUNT` holds (decided 2026-11-14)
+
+**Option A, now:** `AGY_ACCOUNT` holds the raw API key, with the repo-root
+`.env` as fallback. The owner chose this for the live-transport milestone
+because the exposure is already bounded: the key exists only in the process
+environment, the AppContainer allow-list (`src/exec/workspace.mjs` `buildEnv`)
+already blocks it from leaking into any contained child process, and the
+loader plus `maskSecret` keep it out of every report. **Option B** —
+`AGY_ACCOUNT` holds a named account resolved against the OS credential store
+(Windows Credential Manager, via `cmdkey`/`Credential Management` APIs) — is
+the recorded follow-up. The seam is `getCredentials`: its callers never learn
+where the key came from, so swapping the resolver does not touch the
+transports, the CLI, or the gate.

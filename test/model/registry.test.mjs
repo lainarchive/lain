@@ -34,7 +34,7 @@ test('AT-M3-03 the gate hands an external model to a human: A5, decision attache
       requireHumanApproval(
         { id: 't-external' },
         'local-mock',
-        { granted_capabilities: ['model.invoke'] },
+        { granted_capabilities: ['model.invoke.external'] },
       ),
     (err) =>
       err instanceof HumanApprovalNeeded &&
@@ -54,7 +54,7 @@ test('AT-M3-04 the gate returns without a human for a local, permitted model', (
   const outcome = requireHumanApproval(
     { id: 't-local' },
     'local-mock',
-    { registry: local, granted_capabilities: ['model.invoke'] },
+    { registry: local, granted_capabilities: ['model.invoke.external'] },
   );
   assert.equal(outcome.required, false);
   assert.equal(outcome.taskId, 't-local');
@@ -62,7 +62,7 @@ test('AT-M3-04 the gate returns without a human for a local, permitted model', (
   assert.match(outcome.decision_id, /^[0-9A-HJKMNP-TV-Z]{26}$/);
   // An unknown id is a caller error, not an approval need.
   assert.throws(
-    () => requireHumanApproval({ id: 't-x' }, 'nope', { granted_capabilities: ['model.invoke'] }),
+    () => requireHumanApproval({ id: 't-x' }, 'nope', { granted_capabilities: ['model.invoke.external'] }),
     (err) => err instanceof StoreError && err.code === 'INVALID_SHAPE',
   );
 });
