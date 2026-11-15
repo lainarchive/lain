@@ -63,7 +63,7 @@ export function requireHumanApproval(task, modelId, options = {}) {
       action: 'model.invoke.external',
       target: descriptor.id,
       task_id: taskId,
-      requested_capabilities: ['model.invoke'],
+      requested_capabilities: ['model.invoke.external'],
       effect_class: descriptor.effect_class,
       requested_by: 'model-approval',
     },
