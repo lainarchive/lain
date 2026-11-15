@@ -42,6 +42,12 @@ export const DEFAULT_RULES = Object.freeze({
     // override map and its log — but it must stay in human hands, so the rule
     // requires model.admin and the CLI path is the only one that carries it.
     'model.reclassify': { tool_effect_class: 'local_reversible', requires: ['model.admin'] },
+    // M-5: recording a human approval decision into the ledger is the same
+    // kind of local, reversible bookkeeping. The brief asked for effect class
+    // `internal`, which is not in the engine's vocabulary (arms.mjs
+    // EFFECT_CLASSES) — `local_reversible` is the honest class, and
+    // model.admin keeps the audit trail in human hands.
+    'model.approval.record': { tool_effect_class: 'local_reversible', requires: ['model.admin'] },
   },
   forbidden_paths: [
     '.lain-audit',

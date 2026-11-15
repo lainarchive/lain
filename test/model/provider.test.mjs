@@ -33,3 +33,26 @@ test('AT-M4-03: loadProvider refuses a registered model whose provider kind has 
     return true;
   });
 });
+
+test('AT-M5-01: the OpenAI stub answers with its fixed mock payload', async () => {
+  const { query } = await import('../../src/model/provider/openai.mjs');
+  const result = query('hello');
+  assert.deepEqual(result, { provider: 'openai', answer: 'mock-openai-response', echo: 'hello' });
+});
+
+test('AT-M5-02: the OpenAI stub echoes the prompt unchanged', async () => {
+  const { query } = await import('../../src/model/provider/openai.mjs');
+  assert.equal(query('a different prompt').echo, 'a different prompt');
+});
+
+test('AT-M5-03: the Gemini stub answers with its fixed mock payload', async () => {
+  const { query } = await import('../../src/model/provider/gemini.mjs');
+  const result = query('hello');
+  assert.deepEqual(result, { provider: 'gemini', answer: 'mock-gemini-response', echo: 'hello' });
+});
+
+test('AT-M5-04: the two stubs are distinguishable by their provider marker', async () => {
+  const openai = await import('../../src/model/provider/openai.mjs');
+  const gemini = await import('../../src/model/provider/gemini.mjs');
+  assert.notEqual(openai.query('x').provider, gemini.query('x').provider);
+});
