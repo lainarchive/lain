@@ -157,6 +157,26 @@ export const ARMS = Object.freeze([
       normaliseEffectClass(req.effect_class) === 'local_irreversible' || normaliseEffectClass(req.effect_class) === 'external',
   },
   {
+    id: 'A5b',
+    outcome: 'allow_with_conditions',
+    reason_code: 'APPROVED_EXTERNAL_INVOCATION',
+    condition: 'external_invocation_covered_by_recorded_approval',
+    // M-7: the answer to A5. A human approval that the ledger recorded — and
+    // that the caller names by its decision id — is what lets an external
+    // effect run. Placed directly under A5 so the two arms read as one rule:
+    // no recorded approval, no external effect; a recorded one travels with
+    // the decision as a condition. Denied and timed-out approvals never reach
+    // this arm (A1 and A2 refuse them first), and an absent one still lands
+    // on A5. The capability gate holds here too: `ctx.granted` is required,
+    // because an approval answers A5's question ("may this effect run at
+    // all") and must never substitute for the capability the task itself
+    // must carry — A6b sits above this arm for exactly that reason.
+    when: (req, ctx) =>
+      (normaliseEffectClass(req.effect_class) === 'local_irreversible' || normaliseEffectClass(req.effect_class) === 'external') &&
+      ctx.approval?.status === 'granted' &&
+      ctx.granted === true,
+  },
+  {
     id: 'A6',
     outcome: 'defer',
     reason_code: 'POLICY_EVALUATION_INCOMPLETE',

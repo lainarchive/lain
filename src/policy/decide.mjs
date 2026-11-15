@@ -77,6 +77,7 @@ const REASONS = Object.freeze({
   POLICY_RULE_FORBIDS: 'an explicit policy rule forbids this action',
   BUDGET_EXCEEDED: 'the request exceeds the task budget',
   EFFECT_CLASS_REQUIRES_APPROVAL: 'this effect class requires explicit approval',
+  APPROVED_EXTERNAL_INVOCATION: 'a recorded human approval covers this external invocation',
   POLICY_EVALUATION_INCOMPLETE: 'the policy context is incomplete, so the request cannot be decided',
   CAPABILITY_NOT_GRANTED: 'the task does not hold the capability this action requires',
   READ_ONLY_WITHIN_GRANT: 'read-only action within the granted capability set',
@@ -104,10 +105,14 @@ export function decide(request, context = {}, options = {}) {
   let chosen = { arm_id: 'A9', outcome: 'defer_policy_error', reason_code: 'EVALUATION_ERROR' };
 
   // Evaluation order is A1, A2, A3 (a rule outranks an approval prompt, so a
-  // forbidden action never reaches a human), then the approval requirement, then
-  // budget, completeness, and finally the permissive arms. The default arm is
-  // last and is the only one that cannot fail to match.
-  const order = ['A1', 'A2', 'A3', 'A5', 'A4', 'A6', 'A6b', 'A7', 'A8'];
+  // forbidden action never reaches a human), then A6b (a missing capability
+  // is refused before any approval question is asked — an approval must never
+  // substitute for the grant), then the approval requirement — A5b before A5,
+  // because A5's predicate matches every external request and only a recorded
+  // `granted` approval may answer it — then budget, completeness, and finally
+  // the permissive arms. The default arm is last and is the only one that
+  // cannot fail to match.
+  const order = ['A1', 'A2', 'A3', 'A6b', 'A5b', 'A5', 'A4', 'A6', 'A7', 'A8'];
   try {
     for (const id of order) {
       const arm = armById(id);
