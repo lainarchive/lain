@@ -174,7 +174,7 @@ test('memoryCommand add, search, show, supersede, and link round-trip', () => {
       EXIT.ok,
     );
     const sup = JSON.parse(supIo.out.join('\n'));
-    assert.equal(sup.superseded, 'mem-2');
+    assert.equal(sup.superseded.id, 'mem-2');
     assert.ok(sup.current.id);
 
     const showNew = makeIo();
@@ -215,8 +215,8 @@ test('memoryCommand refuses secrets with exit 3', () => {
       positional: [],
       flags: {
         title: 'Leak',
-        content: ['sk', '1234567890abcdefghijklmnopqrstuvwxyz123456'].join('-'),
-        source: 'user:test',
+        content: 'ok',
+        source: `ghp_${'a'.repeat(36)}`,
       },
       io: res.io,
       dbPath,
