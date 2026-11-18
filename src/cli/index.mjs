@@ -24,6 +24,7 @@
   lain memory add|search|show|supersede|link [--json]
   lain delegate list|run --task <file.json> [--specialist <id>] [--depth <n>] [--json]
   lain ext validate|inspect|register|approve|activate|revoke|list [--json]
+  lain eval register|run|compare|rollback|list [--json]
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -52,6 +53,7 @@ import { tuiCommand } from './commands/tui.mjs';
 import { memoryCommand } from './commands/memory.mjs';
 import { delegateCommand } from './commands/delegate.mjs';
 import { extCommand } from './commands/ext.mjs';
+import { evalCommand } from './commands/eval.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -111,6 +113,7 @@ const USAGE = `lain — one bounded, authorized task
   lain approve <approval_id> --allow [--json]
   lain tui
                 live task dashboard (q quit, r refresh, up/down scroll)
+  lain eval register|run|compare|rollback|list [--json]
 `;
 
 /** @param {string} path */
@@ -387,6 +390,10 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
 
   if (group === 'ext') {
     return extCommand({ command, positional, flags, io });
+  }
+
+  if (group === 'eval') {
+    return await evalCommand({ command, positional, flags, io, env });
   }
 
   io.err(USAGE);
