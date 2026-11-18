@@ -31,7 +31,9 @@ export class TuiError extends Error {
 export async function launchLainTui(streams = {}) {
   const stdin = /** @type {NodeJS.ReadStream} */ (streams.stdin ?? process.stdin);
   const stdout = /** @type {NodeJS.WriteStream} */ (streams.stdout ?? process.stdout);
-  if (!stdin.isTTY || !stdout.isTTY) {
+  const isTTY = (/** @type {{ isTTY?: boolean }} */ stream) =>
+    typeof stream.isTTY === 'boolean' ? stream.isTTY : process.platform === 'win32';
+  if (process.env.FORCE_TUI_TTY !== '1' && (!isTTY(stdin) || !isTTY(stdout))) {
     throw new TuiError('TUI_REQUIRES_TTY', 'lain tui needs a real terminal; a pipe has no screen to paint');
   }
   // exitOnCtrlC: false — Ctrl-C is the dashboard's quit key, handled through
