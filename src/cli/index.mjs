@@ -18,6 +18,7 @@
   lain model approval-record list | add <decision-id> <task-id> <model-id> <outcome> [--by <who>]
   lain model approval-persist store <db-path> | dump <db-path>
   lain model invoke <task.json> <provider> [--live] [--approval-id <decision-id> --ledger <db-path>]
+  lain model loop --task <file.json> [--live --approval-id <decision-id> --ledger <db-path>] [--json]
   lain model credentials list
  */
 import { readFileSync, rmSync } from 'node:fs';
@@ -40,6 +41,7 @@ import { modelReclassCommand } from './commands/model-reclass.mjs';
 import { modelApprovalRecordCommand } from './commands/model-approval-record.mjs';
 import { modelApprovalPersistCommand } from './commands/model-approval-persist.mjs';
 import { modelInvokeCommand } from './commands/model-invoke.mjs';
+import { modelLoopCommand } from './commands/model-loop.mjs';
 import { modelCredentialsCommand } from './commands/model-credentials.mjs';
 import { tuiCommand } from './commands/tui.mjs';
 
@@ -332,6 +334,7 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
     if (command === 'approval-record') return modelApprovalRecordCommand({ command, positional, flags, io });
     if (command === 'approval-persist') return modelApprovalPersistCommand({ command, positional, flags, io });
     if (command === 'invoke') return await modelInvokeCommand({ command, positional, flags, io });
+    if (command === 'loop') return await modelLoopCommand({ command, positional, flags, io });
     if (command === 'credentials') return modelCredentialsCommand({ command, positional, flags, io });
     return modelCommand({ command, positional, flags, io });
   }
