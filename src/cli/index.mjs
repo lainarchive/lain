@@ -23,6 +23,7 @@
   lain model credentials list
   lain memory add|search|show|supersede|link [--json]
   lain delegate list|run --task <file.json> [--specialist <id>] [--depth <n>] [--json]
+  lain ext validate|inspect|register|approve|activate|revoke|list [--json]
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -50,6 +51,7 @@ import { modelCredentialsCommand } from './commands/model-credentials.mjs';
 import { tuiCommand } from './commands/tui.mjs';
 import { memoryCommand } from './commands/memory.mjs';
 import { delegateCommand } from './commands/delegate.mjs';
+import { extCommand } from './commands/ext.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -381,6 +383,10 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
 
   if (group === 'delegate') {
     return await delegateCommand({ command, positional, flags, io });
+  }
+
+  if (group === 'ext') {
+    return extCommand({ command, positional, flags, io });
   }
 
   io.err(USAGE);
