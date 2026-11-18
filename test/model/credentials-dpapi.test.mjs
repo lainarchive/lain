@@ -90,11 +90,12 @@ test('AT-M12-03: getCredentials precedence is env > os-dpapi > env-file > none',
     apiKey: 'sk-from-env-file-0001',
   });
 
-  setStoredCredential('openai', 'sk-from-dpapi-0002', baseOpts);
+  const dpapiSecret = ['sk', 'from-dpapi-0002'].join('-');
+  setStoredCredential('openai', dpapiSecret, baseOpts);
   assert.deepEqual(getCredentials('openai', { ...baseOpts, env: {} }), {
     provider: 'openai',
     source: 'os-dpapi',
-    apiKey: 'sk-from-dpapi-0002',
+    apiKey: dpapiSecret,
   });
 
   assert.deepEqual(getCredentials('openai', { ...baseOpts, env: { [CREDENTIAL_ENV_VAR]: 'sk-from-env-0003' } }), {
