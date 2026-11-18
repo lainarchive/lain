@@ -39,7 +39,13 @@ description: >-
   and Ctrl-C via `renderer.keyInput.on('keypress', ...)`, then call
   `view.dispose()`, `renderer.destroy()`, and `await renderer.closed`.
 
-## 3. Verification
+## 3. Production TUI Design Rules (from `tui-design`)
+
+- **Responsive Breakpoints:** Support `80x24` minimum; below `80` cols, collapse sidebars or switch to stacked/tabbed panes.
+- **Focus & Keyboard UX:** Show a clear active-pane indicator (`>` or accent border), support `Tab`/`Shift+Tab` pane cycling, `j`/`k` alongside `↑`/`↓`, `Esc` to close modals, and a pinned bottom footer listing active shortcuts.
+- **Palette & Unicode Discipline:** Avoid raw saturated primaries on `#000`; use restrained semantic contrast tokens, and keep box/cell widths Unicode-safe so frames never wrap or jitter.
+
+## 4. Verification
 
 Run headless renderer frame tests with `@opentui/core/testing`
 (`createTestRenderer`, `captureCharFrame`, `mockInput`):
