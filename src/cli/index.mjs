@@ -22,6 +22,7 @@
   lain model loop --task <file.json> [--live --approval-id <decision-id> --ledger <db-path>] [--json]
   lain model credentials list
   lain memory add|search|show|supersede|link [--json]
+  lain delegate list|run --task <file.json> [--specialist <id>] [--depth <n>] [--json]
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -48,6 +49,7 @@ import { modelLoopCommand } from './commands/model-loop.mjs';
 import { modelCredentialsCommand } from './commands/model-credentials.mjs';
 import { tuiCommand } from './commands/tui.mjs';
 import { memoryCommand } from './commands/memory.mjs';
+import { delegateCommand } from './commands/delegate.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -375,6 +377,10 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
 
   if (group === 'memory') {
     return memoryCommand({ command, positional, flags, io });
+  }
+
+  if (group === 'delegate') {
+    return await delegateCommand({ command, positional, flags, io });
   }
 
   io.err(USAGE);
