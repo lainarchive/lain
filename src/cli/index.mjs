@@ -21,6 +21,7 @@
   lain model invoke <task.json> <provider> [--live] [--approval-id <decision-id> --ledger <db-path>]
   lain model loop --task <file.json> [--live --approval-id <decision-id> --ledger <db-path>] [--json]
   lain model credentials list
+  lain memory add|search|show|supersede|link [--json]
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -46,6 +47,7 @@ import { modelInvokeCommand } from './commands/model-invoke.mjs';
 import { modelLoopCommand } from './commands/model-loop.mjs';
 import { modelCredentialsCommand } from './commands/model-credentials.mjs';
 import { tuiCommand } from './commands/tui.mjs';
+import { memoryCommand } from './commands/memory.mjs';
 
 export const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
@@ -369,6 +371,10 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
     // `lain tui` — the M-9 dashboard. Groupless on purpose: one screen, no
     // subcommands, and the OpenTUI import stays behind the command module.
     return await tuiCommand({ command, positional, flags, io });
+  }
+
+  if (group === 'memory') {
+    return memoryCommand({ command, positional, flags, io });
   }
 
   io.err(USAGE);
