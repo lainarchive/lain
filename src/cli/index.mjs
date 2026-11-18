@@ -10,6 +10,7 @@
  *   lain task run --task <file.json> [--allow <tool_id>] [--by <flag_source>] [--cancel-after <ms>]
  *                 [--keep-workspace] [--json]
  *   lain task show <task_id> [--json]
+  lain task replay <task_id> [--json]
  *   lain store verify [--json]
  *   lain approve <approval_id> [--list] [--answer granted|denied --by <name> --digest <hex>] [--json]
   lain model run <task.json>
@@ -26,6 +27,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { validateTaskDraft } from '../tasks/contract.mjs';
 import { openTaskStore } from '../tasks/store.mjs';
+import { formatReplayReport, replayTask } from '../tasks/replay.mjs';
 import { DEFAULT_RULES } from '../policy/rules.mjs';
 import { createRegistry } from '../tools/registry.mjs';
 import { createRunScriptTool } from '../tools/run-script.mjs';
@@ -95,6 +97,7 @@ const USAGE = `lain — one bounded, authorized task
   lain task run --task <file.json> [--allow <tool_id>] [--by <flag_source>] [--cancel-after <ms>]
                 [--keep-workspace] [--json]
   lain task show <task_id> [--json]
+  lain task replay <task_id> [--json]
   lain store verify [--json]
   lain approve <approval_id> [--json]
   lain approve --list [--json]
@@ -285,6 +288,29 @@ export async function main(argv = process.argv.slice(2), io = { out: console.log
       }
       return verification.ok ? EXIT.ok : EXIT.failed;
     } finally {
+      taskStore.close();
+    }
+  }
+
+  if (group === 'task' && command === 'replay') {
+    const taskId = positional[0];
+    if (!taskId) {
+      io.err(USAGE);
+      return EXIT.usage;
+    }
+    const taskStore = openTaskStore({ path: paths.tasks });
+    const eventLog = openEventStore({ path: paths.log, producer: 'cli' });
+    try {
+      const report = replayTask(taskId, { eventLog, taskStore });
+      if (flags.json) log(JSON.stringify(report, null, 2));
+      else if (report.found) {
+        for (const line of formatReplayReport(report)) log(line);
+      } else {
+        io.err(`failed: ${report.reason ?? 'TASK_NOT_FOUND'}`);
+      }
+      return report.ok ? EXIT.ok : EXIT.failed;
+    } finally {
+      eventLog.close();
       taskStore.close();
     }
   }
