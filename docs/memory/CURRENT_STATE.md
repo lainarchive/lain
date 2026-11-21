@@ -1,5 +1,23 @@
 # Current Project State
 
+## Rust Windows IPC / CLI increment
+
+- On `feat/windows-ipc-cli`, `lain-ipc` provides versioned bounded IPC over Windows named pipes or Unix sockets;
+  `lain-core` adds bounded PowerShell execution. The new `crates/lain-cli` binary provides daemon, interactive start,
+  query, and memory inspection with configured `lain-agent` runners, cancellation, reflection, and TTY/plain rendering.
+- The daemon reads `LAIN_CONFIG` / `--config` (default `lain.json`) and `LAIN_MEMORY_DB` (default `.lain/memory.db`).
+  No provider is called until a configured session receives input. The README contains the explicit local-provider example.
+  `lain-memory/src/agent.rs` adds bounded recent transcript/rule inspection without promoting untrusted episodes.
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (91 tests), including seven CLI
+  tests. Daemon tests use an injected provider and make no network calls. One prior suite attempt returned `No such process`
+  in the unchanged Linux `powershell_timeout_kills_descendants` test while inspecting a child; the complete retry passed.
+  Whole-workspace Windows cross-Clippy passed with `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0A00`.
+  Repository hygiene and its seven verification-meta tests passed. Linux smoke: empty memory inspection exited 0,
+  missing-config query returned `CONFIG_NOT_FOUND` and exited 1, Ctrl-C stopped the daemon and removed its socket.
+- Native Windows execution and interactive terminal appearance remain unverified. Next: Windows runtime checks for
+  named-pipe startup, detached console hiding, PowerShell cancellation, and interactive rendering. This increment does
+  not change accepted architecture decisions or the earlier Node containment guarantees; Lain is not a sandbox.
+
 **Record status:** Implementation record, verified 2026-11-08. Supersedes the planning baseline of 2026-11-05.
 **Repository revision inspected:** `d12fda0086b88ed3f6ee12cc9caee1e93c7f38d5` at the start of the V-1 session; V-1 itself is
 `2b90c9b5416a77992fa8f62a8be0c04f7a86fe90` (`feat: run one authorized task end to end without a model`), followed by
