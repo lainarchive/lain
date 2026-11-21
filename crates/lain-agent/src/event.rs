@@ -8,8 +8,17 @@ use crate::state::TerminationReason;
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum ToolOutcome {
     Succeeded(ToolOutput),
-    Failed { code: String, message: String },
-    Skipped { reason: String },
+    Failed {
+        code: String,
+        message: String,
+    },
+    Skipped {
+        reason: String,
+    },
+    /// Started but cut off by cancellation or the wall-time budget; any side effects it had may have happened.
+    Interrupted {
+        reason: String,
+    },
 }
 
 impl ToolOutcome {
@@ -18,7 +27,7 @@ impl ToolOutcome {
         match self {
             Self::Succeeded(output) => output.exit_code.is_some_and(|code| code != 0),
             Self::Failed { .. } => true,
-            Self::Skipped { .. } => false,
+            Self::Skipped { .. } | Self::Interrupted { .. } => false,
         }
     }
 }
