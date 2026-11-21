@@ -59,6 +59,11 @@ provider or credential defaults. Keep keys in the environment variable named by
 `api_key_env`, not in JSON. Tools are Bash on Unix or PowerShell on Windows, plus
 trusted-memory search; the runner also provides its scratchpad tool.
 
+Shell tools are **disabled by default**: only trusted-memory search is registered
+by the factory. Set `LAIN_ALLOW_SHELL=1` in the daemon's environment to explicitly
+authorize Bash (Unix) or PowerShell (Windows). Other values do not grant access.
+An already-running daemon must be restarted to change this authorization.
+
 ## Interaction and output
 
 Interactive commands: `/quit`, `/status`, `/memory`, `/cancel`. Ctrl-C during a turn
