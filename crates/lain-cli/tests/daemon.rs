@@ -122,6 +122,41 @@ impl ModelProvider for ScriptedProvider {
 
 struct ScriptedFactory(Arc<Notify>);
 
+#[tokio::test]
+async fn sessions_are_bounded_and_terminated_sessions_are_removed() -> TestResult {
+    timeout(Duration::from_secs(15), async {
+        let directory = tempfile::tempdir()?;
+        let endpoint = endpoint(&directory);
+        let started = Arc::new(Notify::new());
+        let handler = Arc::new(DaemonHandler::new(memory(&directory)?, Arc::new(ScriptedFactory(started.clone()))));
+        let (stop, receiver) = watch::channel(false);
+        let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
+        let mut client = IpcClient::connect(&endpoint).await?;
+        for index in 0..=32 {
+            assert!(matches!(client.request(Command::StartSession { session_id: Some(format!("pending-{index}")) }).await?.as_slice(), [Event::SessionStarted { .. }]));
+        }
+        assert!(matches!(client.request(Command::GetStatus { session_id: Some("pending-0".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_NOT_FOUND"));
+        assert!(matches!(client.request(Command::GetStatus { session_id: None }).await?.as_slice(), [Event::Status { status, .. }] if status == "ready (32 sessions)"));
+        for index in 1..=32 {
+            client.send(Command::SendMessage { session_id: format!("pending-{index}"), text: "wait".into() }).await?;
+            started.notified().await;
+        }
+        assert!(matches!(client.request(Command::StartSession { session_id: Some("overflow".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_LIMIT"));
+        for index in 1..=32 {
+            client.request(Command::CancelTurn { session_id: format!("pending-{index}") }).await?;
+        }
+        let mut completed = 0;
+        while completed < 32 {
+            if matches!(client.recv().await?.ok_or("closed")?.1, Event::SessionCompleted { .. }) { completed += 1; }
+        }
+        assert!(matches!(client.request(Command::GetStatus { session_id: None }).await?.as_slice(), [Event::Status { status, .. }] if status == "ready (0 sessions)"));
+        client.close().await?;
+        stop.send(true)?;
+        server.await??;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }).await?
+}
+
 impl RunnerFactory for ScriptedFactory {
     fn create(&self, id: &str, memory: SharedMemory) -> Result<AgentRunner, Error> {
         let mut tools = ToolRegistry::new();
@@ -138,7 +173,7 @@ impl RunnerFactory for ScriptedFactory {
                 Message::text(Role::Assistant, "Done."),
             ])),
             started: self.0.clone(),
-            pending: id == "pending",
+            pending: id.starts_with("pending"),
         });
         let config = AgentConfig::new(
             ProviderSelection::OpenAiCompatible {

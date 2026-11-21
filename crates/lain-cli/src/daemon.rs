@@ -5,7 +5,10 @@ use std::{
     future::Future,
     path::PathBuf,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use lain_agent::{
@@ -24,6 +27,7 @@ use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
 use crate::Error;
 
 pub type SharedMemory = Arc<Mutex<MemoryStore>>;
+pub const MAX_SESSIONS: usize = 32;
 
 pub trait RunnerFactory: Send + Sync + 'static {
     fn create(&self, id: &str, memory: SharedMemory) -> Result<AgentRunner, Error>;
@@ -91,12 +95,14 @@ impl RunnerFactory for ConfigFactory {
 struct Session {
     runner: AsyncMutex<AgentRunner>,
     canceller: Canceller,
+    created: u64,
 }
 
 pub struct DaemonHandler {
     memory: SharedMemory,
     factory: Arc<dyn RunnerFactory>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
+    next_session: AtomicU64,
 }
 
 impl std::fmt::Debug for DaemonHandler {
@@ -111,6 +117,7 @@ impl DaemonHandler {
             memory,
             factory,
             sessions: RwLock::new(HashMap::new()),
+            next_session: AtomicU64::new(0),
         }
     }
 
@@ -144,13 +151,31 @@ impl DaemonHandler {
                 if sessions.contains_key(&id) {
                     return Err(Error::failure("SESSION_EXISTS", &id));
                 }
+                let evict = if sessions.len() >= MAX_SESSIONS {
+                    Some(
+                        sessions
+                            .iter()
+                            .filter(|(_, session)| session.runner.try_lock().is_ok())
+                            .min_by_key(|(_, session)| session.created)
+                            .map(|(id, _)| id.clone())
+                            .ok_or_else(|| {
+                                Error::failure("SESSION_LIMIT", "All 32 sessions are running")
+                            })?,
+                    )
+                } else {
+                    None
+                };
                 let runner = self.factory.create(&id, self.memory.clone())?;
                 let canceller = runner.canceller();
+                if let Some(evict) = evict {
+                    sessions.remove(&evict);
+                }
                 sessions.insert(
                     id.clone(),
                     Arc::new(Session {
                         runner: AsyncMutex::new(runner),
                         canceller,
+                        created: self.next_session.fetch_add(1, Ordering::Relaxed),
                     }),
                 );
                 drop(sessions);
@@ -234,11 +259,16 @@ impl DaemonHandler {
     }
 
     async fn run(&self, id: String, text: String, events: &EventSink) -> Result<(), Error> {
-        let session = self.session(&id).await?;
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| Error::failure("SESSION_NOT_FOUND", &id))?;
         let mut runner = session
             .runner
             .try_lock()
             .map_err(|_| Error::failure("SESSION_BUSY", &id))?;
+        drop(sessions);
         let mut source = runner.subscribe();
         let result = {
             let run = runner.run(text);
@@ -252,6 +282,9 @@ impl DaemonHandler {
                 }
             }
         };
+        if matches!(runner.state().status, AgentStatus::Terminated(_)) {
+            self.sessions.write().await.remove(&id);
+        }
         while let Ok(event) = source.try_recv() {
             if let Some(event) = map_agent_event(&id, event) {
                 events.send(event).await?;
