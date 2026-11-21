@@ -23,6 +23,8 @@ pub enum AgentError {
     Memory(#[from] lain_memory::StoreError),
     #[error("memory worker: {0}")]
     Worker(String),
+    #[error("session {0} already has a transcript in memory")]
+    SessionExists(String),
 }
 
 impl AgentError {
@@ -34,6 +36,7 @@ impl AgentError {
             Self::Provider(_) => "AGENT_PROVIDER_FAILED",
             Self::Memory(_) => "AGENT_MEMORY_FAILED",
             Self::Worker(_) => "AGENT_MEMORY_WORKER_FAILED",
+            Self::SessionExists(_) => "AGENT_SESSION_EXISTS",
         }
     }
 }
