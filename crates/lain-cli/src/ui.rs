@@ -357,3 +357,28 @@ pub async fn interactive(client: &mut IpcClient, renderer: &mut Renderer) -> Res
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_error_codes_appear_once() -> Result<(), Error> {
+        for message in ["", "missing.json: No such file or directory"] {
+            let event = Error::failure("CONFIG_NOT_FOUND", message).into_event();
+            let error = event_error(&event)
+                .ok_or_else(|| Error::failure("TEST", "Expected daemon error"))?;
+            assert_eq!(
+                error.to_string(),
+                format!("DAEMON_ERROR: CONFIG_NOT_FOUND: {message}")
+            );
+        }
+        let event =
+            Error::Io(io::Error::new(io::ErrorKind::PermissionDenied, "denied")).into_event();
+        assert!(
+            matches!(event, Event::Error { code, message } if code == "CLI_IO" && message == "denied")
+        );
+        assert!(event_error(&Event::Pong { server_version: 1 }).is_none());
+        Ok(())
+    }
+}

@@ -76,7 +76,8 @@ async fn ping_status_memory_and_missing_config() -> TestResult {
             [Event::Memory { episodic, procedural }] if episodic.is_empty() && procedural.is_empty()));
         assert!(matches!(client.request(Command::InspectMemory { session_id: None, limit: Some(0) }).await?.as_slice(), [Event::Error { .. }]));
         let missing = client.request(Command::StartSession { session_id: None }).await?;
-        assert!(matches!(missing.as_slice(), [Event::Error { code, message }] if code == "CONFIG_NOT_FOUND" && message.contains("missing.json")));
+        assert!(matches!(missing.as_slice(), [Event::Error { code, message }]
+            if code == "CONFIG_NOT_FOUND" && message.contains("missing.json") && !message.contains("CONFIG_NOT_FOUND")));
         assert!(matches!(client.request(Command::Ping).await?.as_slice(), [Event::Pong { .. }]));
         client.close().await?;
         stop.send(true)?;
