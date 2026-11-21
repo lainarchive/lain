@@ -62,7 +62,8 @@ trusted-memory search; the runner also provides its scratchpad tool.
 ## Interaction and output
 
 Interactive commands: `/quit`, `/status`, `/memory`, `/cancel`. Ctrl-C during a turn
-sends `CancelTurn`; cancellation terminates that runner and the next prompt uses
+sends `CancelTurn`, as does typing `/cancel` while it runs; other input during a
+turn is ignored. Cancellation terminates that runner and the next prompt uses
 a new session. The scratchpad remains displayed above the next prompt, clipped
 to six lines and the terminal width. Model/tool text is filtered for terminal
 control characters. Tool badges go to stderr; answer text goes to stdout.

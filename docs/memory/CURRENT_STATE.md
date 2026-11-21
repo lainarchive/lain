@@ -8,10 +8,13 @@
 - The daemon reads `LAIN_CONFIG` / `--config` (default `lain.json`) and `LAIN_MEMORY_DB` (default `.lain/memory.db`).
   No provider is called until a configured session receives input. The README contains the explicit local-provider example.
   `lain-memory/src/agent.rs` adds bounded recent transcript/rule inspection without promoting untrusted episodes.
-- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (93 tests), including eight CLI
+- Interactive turns now select stdin alongside IPC events: `/cancel` sends immediately while a turn is running;
+  other in-flight input is ignored. Status and termination messages render readable labels instead of raw JSON.
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (95 tests), including ten CLI
   tests. Daemon tests use an injected provider and make no network calls. The descendant timeout test now accepts ESRCH
   as an already-exited child during Linux `/proc` inspection and passed 30/30 repetitions. The timeout kill helper already
   ignores gone-process errors. Daemon error events now keep codes separate from messages, with no duplicate printed code.
+  A mock IPC test requires `/cancel` before completion and covers EOF and input errors; status formatting has unit tests.
   Whole-workspace Windows cross-Clippy passed with `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0A00`.
   Repository hygiene and its seven verification-meta tests passed. Linux smoke: empty memory inspection exited 0,
   missing-config query returned `CONFIG_NOT_FOUND` and exited 1, Ctrl-C stopped the daemon and removed its socket.

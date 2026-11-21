@@ -18,7 +18,7 @@ use tokio::time::{interval, timeout, Instant};
 
 use crate::{
     args::Options,
-    render::{badge, clean, render_scratchpad_box, SPINNER},
+    render::{badge, clean, readable_status, render_scratchpad_box, SPINNER},
     Error,
 };
 
@@ -83,7 +83,7 @@ impl Renderer {
                 badge(name, Some(*ok), self.fancy)
             )?,
             Event::Status { status, .. } => {
-                writeln!(io::stdout().lock(), "Status: {}", clean(status))?
+                writeln!(io::stdout().lock(), "Status: {}", readable_status(status))?
             }
             Event::Memory {
                 episodic,
@@ -106,7 +106,11 @@ impl Renderer {
                 }
             }
             Event::SessionCompleted { reason, .. } if reason != "completed" => {
-                writeln!(io::stderr().lock(), "Session ended: {}", clean(reason))?;
+                writeln!(
+                    io::stderr().lock(),
+                    "Session ended: {}",
+                    readable_status(reason)
+                )?;
             }
             _ => {}
         }
@@ -245,6 +249,17 @@ pub async fn turn(
     text: String,
     renderer: &mut Renderer,
 ) -> Result<(bool, Option<String>), Error> {
+    let (_, mut lines) = tokio::sync::mpsc::channel(1);
+    turn_with_input(client, session, text, renderer, &mut lines).await
+}
+
+async fn turn_with_input(
+    client: &mut IpcClient,
+    session: &str,
+    text: String,
+    renderer: &mut Renderer,
+    lines: &mut tokio::sync::mpsc::Receiver<io::Result<String>>,
+) -> Result<(bool, Option<String>), Error> {
     let id = client
         .send(Command::SendMessage {
             session_id: session.into(),
@@ -253,6 +268,7 @@ pub async fn turn(
         .await?;
     let mut ticker = interval(Duration::from_millis(80));
     let mut cancelled = false;
+    let mut input_open = true;
     loop {
         tokio::select! {
             event = client.recv() => {
@@ -267,6 +283,17 @@ pub async fn turn(
                 signal?;
                 client.send(Command::CancelTurn { session_id: session.into() }).await?;
                 cancelled = true;
+            }
+            line = lines.recv(), if input_open => {
+                match line {
+                    Some(line) => {
+                        if line?.trim() == "/cancel" && !cancelled {
+                            client.send(Command::CancelTurn { session_id: session.into() }).await?;
+                            cancelled = true;
+                        }
+                    }
+                    None => input_open = false,
+                }
             }
             _ = ticker.tick() => renderer.tick()?,
         }
@@ -339,7 +366,7 @@ pub async fn interactive(client: &mut IpcClient, renderer: &mut Renderer) -> Res
             )
             .await
             .map(|_| ()),
-            _ => match turn(client, &session, line, renderer).await {
+            _ => match turn_with_input(client, &session, line, renderer, &mut lines).await {
                 Ok((ok, plan)) => {
                     scratchpad = plan.unwrap_or_default();
                     if !ok {
@@ -361,6 +388,94 @@ pub async fn interactive(client: &mut IpcClient, renderer: &mut Renderer) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lain_ipc::{CommandHandler, Endpoint, EventSink, IpcServer};
+    use std::{future::Future, pin::Pin, sync::Arc};
+    use tokio::sync::{mpsc, watch, Notify};
+
+    struct TurnHandler {
+        started: Arc<Notify>,
+        cancelled: Notify,
+    }
+
+    impl CommandHandler for TurnHandler {
+        fn handle(
+            &self,
+            command: Command,
+            events: EventSink,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                match command {
+                    Command::SendMessage { session_id, text } => {
+                        self.started.notify_one();
+                        if text == "wait" {
+                            self.cancelled.notified().await;
+                        }
+                        let _ = events
+                            .send(Event::SessionCompleted {
+                                session_id,
+                                reason: if text == "wait" {
+                                    "cancelled"
+                                } else {
+                                    "completed"
+                                }
+                                .into(),
+                                scratchpad: None,
+                            })
+                            .await;
+                    }
+                    Command::CancelTurn { .. } => {
+                        self.cancelled.notify_one();
+                    }
+                    _ => {}
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_consumes_cancel_input_before_completion() -> Result<(), Box<dyn std::error::Error>>
+    {
+        timeout(Duration::from_secs(5), async {
+            for mode in ["cancel", "eof", "error"] {
+                let directory = tempfile::tempdir()?;
+                #[cfg(unix)]
+                let endpoint = Endpoint(directory.path().join("ipc.sock"));
+                #[cfg(windows)]
+                let endpoint = Endpoint(format!(r"\\.\pipe\lain-turn-{}-{}", std::process::id(), directory.path().file_name().unwrap_or_default().to_string_lossy()).into());
+                let started = Arc::new(Notify::new());
+                let handler = Arc::new(TurnHandler { started: started.clone(), cancelled: Notify::new() });
+                let (stop, shutdown) = watch::channel(false);
+                let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, shutdown));
+                let mut client = IpcClient::connect(&endpoint).await?;
+                let (sender, mut lines) = mpsc::channel(4);
+                let input = tokio::spawn(async move {
+                    started.notified().await;
+                    match mode {
+                        "cancel" => {
+                            sender.send(Ok("ignored input".into())).await?;
+                            sender.send(Ok("/status".into())).await?;
+                            sender.send(Ok("/cancel".into())).await?;
+                        }
+                        "error" => sender.send(Err(io::Error::new(io::ErrorKind::InvalidData, "bad input"))).await?,
+                        _ => {}
+                    }
+                    Ok::<(), mpsc::error::SendError<io::Result<String>>>(())
+                });
+                let text = if mode == "eof" { "normal" } else { "wait" };
+                let result = turn_with_input(&mut client, "s", text.into(), &mut Renderer::new(true), &mut lines).await;
+                if mode == "error" {
+                    assert!(matches!(result, Err(Error::Io(error)) if error.kind() == io::ErrorKind::InvalidData));
+                } else {
+                    assert_eq!(result?, (mode == "eof", None));
+                }
+                input.await??;
+                client.close().await?;
+                stop.send(true)?;
+                server.await??;
+            }
+            Ok::<(), Box<dyn std::error::Error>>(())
+        }).await?
+    }
 
     #[test]
     fn daemon_error_codes_appear_once() -> Result<(), Error> {

@@ -8,6 +8,20 @@ pub fn clean(text: &str) -> String {
         .collect()
 }
 
+pub fn readable_status(text: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return clean(text);
+    };
+    let Some(status) = value.get("status").and_then(serde_json::Value::as_str) else {
+        return clean(text);
+    };
+    let mut label = status.replace('_', " ");
+    if let Some(reason) = value.get("reason").and_then(serde_json::Value::as_str) {
+        label.push_str(&format!(" ({})", reason.replace('_', " ")));
+    }
+    clean(&label)
+}
+
 pub fn badge(name: &str, outcome: Option<bool>, color: bool) -> String {
     let (label, shade) = match outcome {
         None => ("[ RUN ]", Color::Yellow),
@@ -61,6 +75,23 @@ pub fn render_scratchpad_box(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statuses_are_readable() {
+        for (input, expected) in [
+            (
+                r#"{"status":"terminated","reason":"cancelled"}"#,
+                "terminated (cancelled)",
+            ),
+            (r#"{"status":"awaiting_input"}"#, "awaiting input"),
+            (r#"{"status":"idle"}"#, "idle"),
+            ("running", "running"),
+            ("", ""),
+            ("invalid JSON", "invalid JSON"),
+        ] {
+            assert_eq!(readable_status(input), expected);
+        }
+    }
 
     #[test]
     fn plain_badges_and_escape_filtering() {
