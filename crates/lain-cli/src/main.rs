@@ -19,12 +19,11 @@ async fn daemon(options: Options) -> Result<(), Error> {
     let memory = std::env::var_os("LAIN_MEMORY_DB")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.join(".lain/memory.db"));
+    let mut factory = ConfigFactory::new(options.config, cwd);
+    factory.allow_shell = std::env::var("LAIN_ALLOW_SHELL").is_ok_and(|value| value == "1");
     let handler = Arc::new(DaemonHandler::new(
         Arc::new(Mutex::new(MemoryStore::open(memory)?)),
-        Arc::new(ConfigFactory {
-            config_path: options.config,
-            working_directory: cwd,
-        }),
+        Arc::new(factory),
     ));
     let server = IpcServer::bind(&options.endpoint)?;
     let (shutdown, receiver) = watch::channel(false);

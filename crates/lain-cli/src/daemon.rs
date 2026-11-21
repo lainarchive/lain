@@ -33,6 +33,34 @@ pub trait RunnerFactory: Send + Sync + 'static {
 pub struct ConfigFactory {
     pub config_path: PathBuf,
     pub working_directory: PathBuf,
+    pub allow_shell: bool,
+}
+
+impl ConfigFactory {
+    pub fn new(config_path: impl Into<PathBuf>, working_directory: impl Into<PathBuf>) -> Self {
+        Self {
+            config_path: config_path.into(),
+            working_directory: working_directory.into(),
+            allow_shell: false,
+        }
+    }
+
+    fn tools(&self, memory: SharedMemory) -> Result<ToolRegistry, Error> {
+        let mut tools = ToolRegistry::new();
+        // I require operator opt-in for shell execution because ADR-004 makes trusted components authorize capabilities.
+        if self.allow_shell {
+            #[cfg(unix)]
+            tools.register(Arc::new(BashTool {
+                working_directory: self.working_directory.clone(),
+                timeout: Duration::from_secs(30),
+                output_byte_cap: 64 * 1024,
+            }))?;
+            #[cfg(windows)]
+            tools.register(Arc::new(PowerShellTool::new(&self.working_directory)))?;
+        }
+        tools.register(Arc::new(MemoryReadTool::new(memory)))?;
+        Ok(tools)
+    }
 }
 
 impl RunnerFactory for ConfigFactory {
@@ -50,16 +78,7 @@ impl RunnerFactory for ConfigFactory {
         let config: AgentConfig = serde_json::from_slice(&bytes)
             .map_err(|error| Error::failure("CONFIG_INVALID", error))?;
         config.validate()?;
-        let mut tools = ToolRegistry::new();
-        #[cfg(unix)]
-        tools.register(Arc::new(BashTool {
-            working_directory: self.working_directory.clone(),
-            timeout: Duration::from_secs(30),
-            output_byte_cap: 64 * 1024,
-        }))?;
-        #[cfg(windows)]
-        tools.register(Arc::new(PowerShellTool::new(&self.working_directory)))?;
-        tools.register(Arc::new(MemoryReadTool::new(memory.clone())))?;
+        let tools = self.tools(memory.clone())?;
         Ok(AgentRunner::from_config(
             config,
             Arc::new(tools),
@@ -356,6 +375,22 @@ mod tests {
     use lain_agent::TerminationReason;
     use lain_core::tools::ToolOutput;
     use serde_json::json;
+
+    #[test]
+    fn shell_tools_require_operator_opt_in() -> Result<(), Error> {
+        let memory = Arc::new(Mutex::new(MemoryStore::open(":memory:")?));
+        let mut factory = ConfigFactory::new("unused.json", ".");
+        let definitions = factory.tools(memory.clone())?.definitions();
+        assert_eq!(definitions.len(), 1);
+        assert!(definitions.iter().all(|tool| tool.name == "memory_read"));
+        factory.allow_shell = true;
+        let definitions = factory.tools(memory)?.definitions();
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions
+            .iter()
+            .any(|tool| matches!(tool.name.as_str(), "bash" | "powershell")));
+        Ok(())
+    }
 
     #[test]
     fn event_mapping() {
