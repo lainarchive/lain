@@ -1,11 +1,14 @@
 use std::{
     borrow::Cow,
-    fs::{self, File, FileType},
     io::{self, Read},
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, Metadata},
+};
 use tree_sitter::{Node, ParseOptions, ParseState, Parser};
 
 const MAX_ENTRIES: usize = 16_384;
@@ -36,15 +39,20 @@ pub struct RepoMap {
 impl RepoMap {
     /// Scans a caller-authorized workspace; symlinks, hidden paths and common build/vendor directories are skipped.
     pub fn scan(root: impl AsRef<Path>) -> Result<Self, RepoMapError> {
-        let root = root.as_ref().canonicalize()?;
+        let root = Dir::open_ambient_dir(root, ambient_authority())?;
         let deadline = Instant::now() + MAX_SCAN_TIME;
         let mut index = Index::new()?;
         let mut map = Self::default();
         let mut entries_left = MAX_ENTRIES;
         let mut bytes_left = MAX_TOTAL_BYTES;
-        let mut pending = vec![(root.clone(), 0)];
+        let mut pending = vec![(PathBuf::new(), 0)];
         while let Some((directory, depth)) = pending.pop() {
-            let entries = match fs::read_dir(directory) {
+            let entries = if depth == 0 {
+                root.entries()
+            } else {
+                root.read_dir(&directory)
+            };
+            let entries = match entries {
                 Ok(entries) => entries,
                 Err(error) if depth == 0 => return Err(error.into()),
                 Err(_) => {
@@ -69,21 +77,22 @@ impl RepoMap {
                 if name.starts_with('.') || name.chars().any(char::is_control) {
                     continue;
                 }
-                let Ok(kind) = entry.file_type() else {
+                let path = directory.join(name);
+                let Ok(metadata) = root.symlink_metadata(&path) else {
                     map.truncated = true;
                     continue;
                 };
-                let path = entry.path();
-                if kind.is_dir() && !skip_directory(name) && !is_link(&path, kind) {
+                if is_link(&metadata) {
+                    continue;
+                }
+                if metadata.is_dir() && !skip_directory(name) {
                     if depth < MAX_DEPTH {
                         subdirs.push(path);
                     } else {
                         map.truncated = true;
                     }
-                } else if kind.is_file() {
-                    if let Some(language) =
-                        Language::for_path(&path).filter(|_| !is_link(&path, kind))
-                    {
+                } else if metadata.is_file() {
+                    if let Some(language) = Language::for_path(&path) {
                         files.push((path, language));
                     }
                 }
@@ -95,7 +104,7 @@ impl RepoMap {
                     map.truncated = true;
                     return Ok(map);
                 }
-                let Ok(source) = read_source(&path, cap, &mut bytes_left) else {
+                let Ok(source) = read_source(&root, &path, cap, &mut bytes_left) else {
                     map.truncated = true;
                     continue;
                 };
@@ -105,13 +114,8 @@ impl RepoMap {
                 };
                 let (symbols, truncated) = index.symbols(language, &source);
                 map.truncated |= truncated;
-                if !symbols.is_empty() {
-                    let Ok(relative) = path.strip_prefix(&root) else {
-                        continue;
-                    };
-                    if !map.add_file(relative, symbols) {
-                        return Ok(map);
-                    }
+                if !symbols.is_empty() && !map.add_file(&path, symbols) {
+                    return Ok(map);
                 }
             }
             if entries_left == 0 {
@@ -165,28 +169,36 @@ fn skip_directory(name: &str) -> bool {
     )
 }
 
-#[cfg(windows)]
-fn is_link(path: &Path, kind: FileType) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    kind.is_symlink()
-        || fs::symlink_metadata(path).map_or(true, |meta| {
-            meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        })
+fn is_link(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use cap_std::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    metadata.is_symlink()
 }
 
-#[cfg(not(windows))]
-fn is_link(_path: &Path, kind: FileType) -> bool {
-    kind.is_symlink()
-}
-
-fn read_source(path: &Path, cap: usize, bytes_left: &mut usize) -> io::Result<Option<String>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || is_link(path, metadata.file_type()) || metadata.len() >= cap as u64 {
+fn read_source(
+    root: &Dir,
+    path: &Path,
+    cap: usize,
+    bytes_left: &mut usize,
+) -> io::Result<Option<String>> {
+    let metadata = root.symlink_metadata(path)?;
+    if !metadata.is_file() || is_link(&metadata) || metadata.len() >= cap as u64 {
+        return Ok(None);
+    }
+    // Metadata is only a filter; the directory handle also constrains resolution at open time.
+    let file = root.open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || is_link(&opened) || opened.len() >= cap as u64 {
         return Ok(None);
     }
     let mut bytes = Vec::new();
-    let result = File::open(path)?.take(cap as u64).read_to_end(&mut bytes);
+    let result = file.take(cap as u64).read_to_end(&mut bytes);
     *bytes_left -= bytes.len();
     result?;
     Ok((bytes.len() < cap)
@@ -637,6 +649,7 @@ fn compact(text: &str, cap: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn extracts_rust_items_and_public_api_without_bodies() -> Result<(), RepoMapError> {
@@ -774,6 +787,28 @@ export class B extends api.Base<string> {}
             .iter()
             .any(|line| line == "export class B extends api.Base<string>"));
         assert!(!lines.join("\n").contains("bodyOnly"));
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rechecks_the_workspace_boundary_when_an_ancestor_changes() -> Result<(), RepoMapError> {
+        let workspace = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        fs::create_dir(workspace.path().join("src"))?;
+        fs::write(workspace.path().join("src/site.rs"), "pub fn inside() {}")?;
+        fs::write(outside.path().join("site.rs"), "pub fn outside() {}")?;
+
+        let root = Dir::open_ambient_dir(workspace.path(), ambient_authority())?;
+        let source = Path::new("src/site.rs");
+        assert!(root.symlink_metadata(source)?.is_file());
+        fs::rename(workspace.path().join("src"), workspace.path().join("old"))?;
+        std::os::unix::fs::symlink(outside.path(), workspace.path().join("src"))?;
+
+        let mut bytes_left = MAX_TOTAL_BYTES;
+        let result = read_source(&root, source, MAX_SOURCE_BYTES, &mut bytes_left);
+        assert!(result.is_err() || matches!(result, Ok(None)));
+        assert_eq!(bytes_left, MAX_TOTAL_BYTES);
         Ok(())
     }
 

@@ -7,6 +7,8 @@
 - The CLI's `coding_session` opt-in grants `repo_map` read access to the daemon's workspace and attaches an
   initial outline to the first provider request. `context_window_tokens` controls the request plus response budget.
   Source text in the map is untrusted; the existing shell authorization is unchanged.
+- The owner approved `cap-std` for workspace-relative repository reads. The scan resolves paths from an opened
+  directory handle instead of opening a filesystem path after a separate link check.
 - Workspace Rust tests and Clippy passed on Linux, and Windows GNU cross-Clippy passed. The legacy Node suite
   reproduced the same twelve Linux failures on unmodified main. Native Windows execution was not tested.
 
