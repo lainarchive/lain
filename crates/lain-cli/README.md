@@ -114,8 +114,9 @@ from `LAIN_ALLOW_SHELL`; neither setting grants the other.
 `allow_creator_mode` defaults to true in debug builds and false in release
 builds. Set it to false explicitly for strict operation, and keep
 `plugin_permissions` empty to prevent loading plugins. Creator Mode requires
-the same explicit four grants as script plugins. `test_tool` runs a proposed
-script without saving it. `create_tool` validates the argument schema, runs with
+the same explicit four grants as script plugins. [ADR-012](../../DECISIONS.md#adr-012-extension-creation-differs-from-activation)
+allows dev-mode testing and registration without per-candidate approval.
+`test_tool` runs a proposed script without saving it. `create_tool` validates the argument schema, runs with
 the supplied `test_args`, and on success writes the script and manifest to
 `.lain/tools/` and registers the tool in the active session. It becomes
 available to the model on its next request and to new sessions on discovery.
