@@ -11,7 +11,7 @@ use std::{
 
 use lain_core::{
     provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall, ToolDefinition},
-    tools::{ToolOutput, ToolRegistry},
+    tools::{ToolOutput, ToolRegistry, REPO_MAP_TOOL_NAME},
     CoreError,
 };
 use lain_memory::{
@@ -22,7 +22,7 @@ use serde_json::json;
 use tokio::sync::{broadcast, Notify};
 
 use crate::{
-    hermes, AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind,
+    hermes, prompt, AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind,
     ReflectionSummary, TerminationReason, ToolCallMode, ToolOutcome, UserFeedback,
 };
 
@@ -90,6 +90,7 @@ pub struct AgentRunner {
     events: broadcast::Sender<AgentEvent>,
     started: Option<Instant>,
     procedural_rules: Vec<String>,
+    repo_map: Option<String>,
     scratchpad_notice: Option<String>,
     feedback: Option<UserFeedback>,
 }
@@ -167,6 +168,7 @@ impl AgentRunner {
             started: None,
             cancel: Canceller::default(),
             procedural_rules: Vec::new(),
+            repo_map: None,
             scratchpad_notice: None,
             feedback: None,
         })
@@ -356,6 +358,22 @@ impl AgentRunner {
             .await?;
         self.state.inputs = input_number;
         self.state.messages.push(Message::text(Role::User, input));
+        if input_number == 1
+            && self.config.coding_session
+            && self
+                .tool_definitions
+                .iter()
+                .any(|tool| tool.name == REPO_MAP_TOOL_NAME)
+        {
+            match self
+                .bounded(self.tools.dispatch(REPO_MAP_TOOL_NAME, json!({})))
+                .await
+            {
+                Ok(Ok(outline)) => self.repo_map = Some(outline.content),
+                Ok(Err(_)) => {} // The outline is optional; a direct tool call can report the scan error.
+                Err(reason) => return Ok(self.stop(reason, 0)),
+            }
+        }
 
         for run_turn in 1..=self.config.max_turns {
             if let Some(reason) = self.interrupted() {
@@ -367,7 +385,14 @@ impl AgentRunner {
                 session_id: self.state.session_id.clone(),
                 turn,
             });
-            let request = self.request();
+            let Ok(request) = self.request() else {
+                return Ok(self.stop(
+                    TerminationReason::BudgetExhausted {
+                        budget: BudgetKind::ContextWindow,
+                    },
+                    run_turn,
+                ));
+            };
             let response = match self.bounded(self.provider.complete(request)).await {
                 Ok(response) => response?,
                 Err(reason) => return Ok(self.stop(reason, run_turn)),
@@ -452,13 +477,15 @@ impl AgentRunner {
         Ok(self.stop(TerminationReason::MaxTurns, self.config.max_turns))
     }
 
-    fn request(&mut self) -> CompletionRequest {
-        let mut messages = self.state.messages.clone();
+    fn request(&mut self) -> Result<CompletionRequest, lain_context::ContextOverflow> {
         let mut prefix = Vec::new();
+        let has_system_prompt = !self.config.system_prompt.trim().is_empty();
+        if has_system_prompt {
+            prefix.push(self.config.system_prompt.clone());
+        }
         let hermes = self.config.tool_call_mode == ToolCallMode::HermesTags;
         if hermes {
             prefix.push(hermes::instructions(&self.tool_definitions));
-            messages = messages.into_iter().map(hermes::project).collect();
         }
         if !self.procedural_rules.is_empty() {
             prefix.push(format!(
@@ -475,31 +502,29 @@ impl AgentRunner {
         if let Some(notice) = self.scratchpad_notice.take() {
             prefix.push(notice);
         }
-        if !prefix.is_empty() {
-            let prefix = prefix.join("\n");
-            match messages.first_mut() {
-                Some(first)
-                    if first.role == Role::System
-                        && !self.config.system_prompt.trim().is_empty() =>
-                {
-                    let content = first.content.get_or_insert_with(String::new);
-                    content.push_str("\n\n");
-                    content.push_str(&prefix);
-                }
-                _ => messages.insert(0, Message::text(Role::System, prefix)),
-            }
-        }
-        CompletionRequest {
+        let mut request = CompletionRequest {
             model: self.config.model.clone(),
-            messages,
+            messages: Vec::new(),
             tools: if hermes {
                 Vec::new()
             } else {
                 self.tool_definitions.clone()
             },
             temperature: self.config.temperature,
-            max_tokens: self.config.budget.max_completion_tokens,
-        }
+            max_tokens: Some(self.config.completion_token_limit()),
+        };
+        prompt::fill(
+            &mut request,
+            self.state
+                .messages
+                .get(usize::from(has_system_prompt)..)
+                .unwrap_or_default(),
+            prefix.join("\n\n"),
+            self.repo_map.as_deref(),
+            self.config.context_window_tokens,
+            hermes,
+        )?;
+        Ok(request)
     }
 
     async fn update_scratchpad(&mut self, call: &ToolCall) -> Result<ToolOutcome, AgentError> {
@@ -1433,6 +1458,76 @@ mod tests {
         );
         assert!(!recalled.contains("rumor"));
         assert_eq!(request.messages.last().unwrap().role, Role::User);
+    }
+
+    #[tokio::test]
+    async fn coding_session_adds_a_workspace_outline_to_its_first_provider_request() {
+        use lain_core::tools::RepoMapTool;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("app.rs"),
+            "/// Startup entry.\npub fn launch() { body_only(); }",
+        )
+        .unwrap();
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(Arc::new(RepoMapTool::new(directory.path())))
+            .unwrap();
+        let tools = Arc::new(tools);
+        for enabled in [false, true] {
+            let mut config = config();
+            config.coding_session = enabled;
+            let provider = ScriptedProvider::new(vec![text("ok")]);
+            let mut agent =
+                AgentRunner::new(config, provider.clone(), tools.clone(), memory(), "s1").unwrap();
+            agent.run("Where does startup begin?").await.unwrap();
+            let request = provider.requests().remove(0);
+            let user = request
+                .messages
+                .iter()
+                .find(|m| m.role == Role::User)
+                .unwrap()
+                .content
+                .as_deref()
+                .unwrap();
+            assert_eq!(user.contains("pub fn launch() — Startup entry."), enabled);
+            assert!(
+                !user.contains("body_only")
+                    && !user.contains(&directory.path().display().to_string())
+            );
+            assert!(request
+                .tools
+                .iter()
+                .any(|tool| tool.name == REPO_MAP_TOOL_NAME));
+            let original = agent
+                .state
+                .messages
+                .iter()
+                .find(|m| m.role == Role::User)
+                .unwrap();
+            assert_eq!(
+                original.content.as_deref(),
+                Some("Where does startup begin?")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_to_call_provider_when_required_context_cannot_fit() {
+        let mut config = config();
+        config.context_window_tokens = 256;
+        config.system_prompt = "Do not trim required instructions. ".repeat(100);
+        let provider = ScriptedProvider::new(vec![]);
+        let (mut agent, _) = runner(config, provider.clone());
+        let outcome = agent.run("An ordinary request").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::ContextWindow
+            })
+        );
+        assert!(provider.requests().is_empty());
     }
 
     #[tokio::test]
