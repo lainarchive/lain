@@ -1,12 +1,15 @@
 pub mod config;
 pub mod event;
+mod hermes;
+mod reflection;
 pub mod runner;
 pub mod state;
 
-pub use config::{AgentConfig, BudgetLimits, ProviderSelection};
+pub use config::{AgentConfig, BudgetLimits, ProviderSelection, ToolCallMode};
 pub use event::{AgentEvent, ToolOutcome};
+pub use reflection::{ReflectionSummary, UserFeedback};
 pub use runner::{AgentRunner, RunOutcome};
-pub use state::{AgentState, AgentStatus, BudgetKind, TerminationReason};
+pub use state::{AgentState, AgentStatus, BudgetKind, Scratchpad, TerminationReason};
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -25,6 +28,8 @@ pub enum AgentError {
     Worker(String),
     #[error("session {0} already has a transcript in memory")]
     SessionExists(String),
+    #[error("reflection requires this runner's completed or terminated session")]
+    ReflectionUnavailable,
 }
 
 impl AgentError {
@@ -37,6 +42,7 @@ impl AgentError {
             Self::Memory(_) => "AGENT_MEMORY_FAILED",
             Self::Worker(_) => "AGENT_MEMORY_WORKER_FAILED",
             Self::SessionExists(_) => "AGENT_SESSION_EXISTS",
+            Self::ReflectionUnavailable => "AGENT_REFLECTION_UNAVAILABLE",
         }
     }
 }

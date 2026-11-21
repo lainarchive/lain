@@ -47,6 +47,15 @@ pub struct BudgetLimits {
     pub max_wall_time_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallMode {
+    #[default]
+    Native,
+    /// Send tool schemas in the prompt for endpoints that do not accept OpenAI function schemas.
+    HermesTags,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentConfig {
     pub provider: ProviderSelection,
@@ -56,8 +65,10 @@ pub struct AgentConfig {
     /// Model calls allowed between one user input and the answer.
     pub max_turns: u32,
     pub max_consecutive_tool_errors: u32,
-    /// Trusted memories recalled per input; 0 turns recall off.
+    /// Trusted memories recalled per input, and an upper bound on new-session heuristics; 0 turns recall off.
     pub memory_context_limit: i64,
+    #[serde(default)]
+    pub tool_call_mode: ToolCallMode,
     pub budget: BudgetLimits,
 }
 
@@ -71,6 +82,7 @@ impl AgentConfig {
             max_turns: 16,
             max_consecutive_tool_errors: 3,
             memory_context_limit: 5,
+            tool_call_mode: ToolCallMode::Native,
             budget: BudgetLimits::default(),
         }
     }
