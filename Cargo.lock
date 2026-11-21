@@ -699,6 +699,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lain-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "lain-memory"
 version = "0.1.0"
 dependencies = [
