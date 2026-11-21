@@ -20,6 +20,7 @@ Options (before or after the command):
 
 The daemon opens LAIN_MEMORY_DB or ./.lain/memory.db in its working directory.
 Shell tools are disabled unless the daemon's environment has LAIN_ALLOW_SHELL=1.
+Unix default: $XDG_RUNTIME_DIR/lain-ipc.sock or a user-scoped temporary socket.
 No provider is contacted until a configured session receives a message.
 Output is whole runner messages, not provider-token streaming.
 Interactive commands: /quit, /status, /memory, /cancel. Ctrl-C cancels a turn.
