@@ -411,10 +411,11 @@ async fn powershell_dropped_future_kills_descendants() -> Result<(), Box<dyn std
     });
     let pid = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Ok(text) = std::fs::read_to_string(directory.path().join("child.pid")) {
-                if let Ok(pid) = text.trim().parse::<u32>() {
-                    break pid;
-                }
+            let pid = std::fs::read_to_string(directory.path().join("child.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok());
+            if let Some(pid) = pid {
+                break pid;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
