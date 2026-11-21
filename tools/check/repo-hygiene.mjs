@@ -146,7 +146,7 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
   }
 
   // The lockfile is the reproducibility artifact; its absence is a failure.
-  const cargo = spawnSync('cargo', ['metadata', '--no-deps', '--format-version=1', '--locked'], {
+  const cargo = spawnSync('cargo', ['metadata', '--format-version=1', '--locked'], {
     cwd: root, encoding: 'utf8', windowsHide: true, shell: false,
   });
   if (cargo.status !== 0) {
@@ -154,6 +154,7 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
   } else {
     const metadata = JSON.parse(cargo.stdout);
     for (const pkg of metadata.packages) {
+      if (!metadata.workspace_members.includes(pkg.id)) continue;
       for (const dep of pkg.dependencies) {
         const allowed = dep.kind === 'dev' ? ALLOWED_RUST_DEV_DEPENDENCIES : ALLOWED_RUST_DEPENDENCIES;
         if (dep.kind === 'build' || !allowed.includes(dep.name)) {
