@@ -185,11 +185,18 @@ impl DaemonHandler {
             }
             Command::SendMessage { session_id, text } => self.run(session_id, text, events).await?,
             Command::CancelTurn { session_id } => {
-                self.session(&session_id).await?.canceller.cancel();
+                let session = self.session(&session_id).await?;
+                let status = match session.runner.try_lock() {
+                    Ok(_) => "idle: nothing to cancel",
+                    Err(_) => {
+                        session.canceller.cancel();
+                        "cancelling"
+                    }
+                };
                 events
                     .send(Event::Status {
                         session_id: Some(session_id),
-                        status: "cancelling".into(),
+                        status: status.into(),
                         scratchpad: None,
                     })
                     .await?;

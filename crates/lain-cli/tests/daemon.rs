@@ -203,6 +203,8 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
         let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
         let mut client = IpcClient::connect(&endpoint).await?;
         assert!(matches!(client.request(Command::StartSession { session_id: Some("s".into()) }).await?.as_slice(), [Event::SessionStarted { .. }]));
+        assert!(matches!(client.request(Command::CancelTurn { session_id: "s".into() }).await?.as_slice(),
+            [Event::Status { status, .. }] if status == "idle: nothing to cancel"));
         let events = client.request(Command::SendMessage { session_id: "s".into(), text: "hi".into() }).await?;
         let labels: Vec<_> = events.iter().map(|event| match event {
             Event::StreamToken { .. } => "text", Event::ToolStarted { .. } => "tool_start", Event::ToolFinished { ok: true, .. } => "tool_end",
