@@ -259,8 +259,9 @@ impl Tool for MemoryReadTool {
         let limit = args
             .get("limit")
             .map(|v| {
-                v.as_i64()
-                    .filter(|v| (1..=100).contains(v))
+                v.as_f64()
+                    .filter(|v| v.fract() == 0.0 && (1.0..=100.0).contains(v))
+                    .map(|v| v as i64)
                     .ok_or_else(|| ToolError::Arguments("limit must be 1..=100".into()))
             })
             .transpose()?
