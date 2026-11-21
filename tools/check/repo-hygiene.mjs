@@ -28,8 +28,9 @@ export const ALLOWED_RUNTIME_DEPENDENCIES = /** @type {string[]} */ (['@opentui/
 export const ALLOWED_DEV_DEPENDENCIES = ['typescript', '@types/node'];
 
 export const ALLOWED_RUST_DEPENDENCIES = [
-  'async-stream', 'async-trait', 'crossterm', 'futures', 'jsonschema', 'lain-agent', 'lain-core', 'lain-ipc', 'lain-memory',
-  'reqwest', 'rusqlite', 'serde', 'serde_json', 'thiserror', 'tokio',
+  'async-stream', 'async-trait', 'cap-std', 'crossterm', 'futures', 'jsonschema', 'lain-agent', 'lain-context', 'lain-core', 'lain-ipc',
+  'lain-memory', 'reqwest', 'rusqlite', 'serde', 'serde_json', 'thiserror', 'tiktoken-rs', 'tokio',
+  'tree-sitter', 'tree-sitter-rust', 'tree-sitter-typescript',
 ];
 export const ALLOWED_RUST_DEV_DEPENDENCIES = ['async-trait', 'futures', 'tempfile'];
 
