@@ -8,6 +8,30 @@ use std::{
 };
 
 struct TestTool(Value);
+
+#[test]
+fn tool_error_reason_codes() {
+    for (error, code) in [
+        (ToolError::Duplicate("bash".into()), "TOOL_DUPLICATE"),
+        (ToolError::Unknown("missing".into()), "TOOL_NOT_FOUND"),
+        (
+            ToolError::Schema("bad schema".into()),
+            "TOOL_SCHEMA_INVALID",
+        ),
+        (
+            ToolError::Arguments("bad args".into()),
+            "TOOL_ARGUMENTS_INVALID",
+        ),
+        (
+            ToolError::Execution("failed".into()),
+            "TOOL_EXECUTION_FAILED",
+        ),
+        (ToolError::Timeout, "TOOL_TIMEOUT"),
+    ] {
+        assert_eq!(error.code(), code);
+    }
+}
+
 #[async_trait]
 impl Tool for TestTool {
     fn name(&self) -> &str {
@@ -145,6 +169,24 @@ async fn bash_output_limits_exit_environment_and_timeout() {
 }
 
 #[tokio::test]
+async fn bash_marks_truncation_after_lossy_utf8_expansion() {
+    let directory = tempfile::tempdir().unwrap();
+    let tool = BashTool {
+        working_directory: directory.path().into(),
+        timeout: Duration::from_secs(2),
+        output_byte_cap: 4,
+    };
+    let output = tool
+        .execute(json!({"command": r"printf '\xff\xff\xff\xff'"}))
+        .await
+        .unwrap();
+    assert_eq!(output.exit_code, Some(0));
+    let content: Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(content.get("stdout").unwrap(), "�\n[truncated]");
+    assert_eq!(content.get("stderr").unwrap(), "");
+}
+
+#[tokio::test]
 async fn memory_search_respects_trust_and_errors() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = MemoryStore::open(directory.path().join("memory.db")).unwrap();
@@ -179,6 +221,11 @@ async fn memory_search_respects_trust_and_errors() {
     let records: Vec<Value> = serde_json::from_str(&output.content).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records.first().unwrap().get("trust").unwrap(), "trusted");
+    let float_limit_output = registry
+        .dispatch("memory_read", json!({"query":"apple","limit":1.0}))
+        .await
+        .unwrap();
+    assert_eq!(float_limit_output, output);
     assert_eq!(
         registry
             .dispatch("memory_read", json!({"query":"absent"}))
@@ -191,6 +238,8 @@ async fn memory_search_respects_trust_and_errors() {
         json!({}),
         json!({"query":""}),
         json!({"query":"apple","limit":0}),
+        json!({"query":"apple","limit":1.5}),
+        json!({"query":"apple","limit":101.0}),
     ] {
         assert!(matches!(
             registry.dispatch("memory_read", args).await,
