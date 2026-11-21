@@ -10,16 +10,20 @@ use std::{
 };
 
 use lain_core::{
-    provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall},
-    tools::ToolRegistry,
+    provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall, ToolDefinition},
+    tools::{ToolOutput, ToolRegistry},
+    CoreError,
 };
-use lain_memory::{MemoryInput, MemoryRecord, MemoryStore, SearchOptions, StoreError};
+use lain_memory::{
+    MemoryInput, MemoryRecord, MemoryStore, SearchOptions, StoreError, SCRATCHPAD_MAX_UTF16,
+};
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{broadcast, Notify};
 
 use crate::{
-    AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind, TerminationReason,
-    ToolOutcome,
+    hermes, AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind,
+    ReflectionSummary, TerminationReason, ToolCallMode, ToolOutcome, UserFeedback,
 };
 
 /// A receiver more than this many events behind gets `RecvError::Lagged`; the runner never waits on a slow UI.
@@ -28,6 +32,13 @@ const QUERY_MAX_UTF16: usize = 1000;
 const CONTENT_MAX_UTF16: usize = 999_000;
 const RECALL_TERMS: usize = 8;
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
+const UPDATE_SCRATCHPAD: &str = "UpdateScratchpad";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScratchpadUpdate {
+    plan: String,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunOutcome {
@@ -73,10 +84,14 @@ pub struct AgentRunner {
     config: AgentConfig,
     provider: Arc<dyn ModelProvider>,
     tools: Arc<ToolRegistry>,
+    tool_definitions: Vec<ToolDefinition>,
     memory: Arc<Mutex<MemoryStore>>,
     state: AgentState,
     events: broadcast::Sender<AgentEvent>,
     started: Option<Instant>,
+    procedural_rules: Vec<String>,
+    scratchpad_notice: Option<String>,
+    feedback: Option<UserFeedback>,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -121,16 +136,39 @@ impl AgentRunner {
                 "session_id must be 1..=120 of [A-Za-z0-9._-]".into(),
             ));
         }
+        let mut tool_definitions = tools.definitions();
+        if tool_definitions
+            .iter()
+            .any(|tool| tool.name == UPDATE_SCRATCHPAD)
+        {
+            return Err(AgentError::Config(format!(
+                "{UPDATE_SCRATCHPAD} is a reserved built-in tool name"
+            )));
+        }
+        tool_definitions.push(ToolDefinition {
+            name: UPDATE_SCRATCHPAD.into(),
+            description: "Replace the active plan without adding a chat message. Use an empty plan to clear it.".into(),
+            parameters: json!({
+                "type":"object",
+                "properties":{"plan":{"type":"string","maxLength":SCRATCHPAD_MAX_UTF16}},
+                "required":["plan"],
+                "additionalProperties":false
+            }),
+        });
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Ok(Self {
             config,
             provider,
             tools,
+            tool_definitions,
             memory,
             state: AgentState::new(session_id),
             events,
             started: None,
             cancel: Canceller::default(),
+            procedural_rules: Vec::new(),
+            scratchpad_notice: None,
+            feedback: None,
         })
     }
 
@@ -163,12 +201,68 @@ impl AgentRunner {
     pub fn terminate(&mut self) {
         self.cancel.cancel();
         if !matches!(self.state.status, AgentStatus::Terminated(_)) {
+            let unfinished = self.state.status == AgentStatus::Running && self.state.inputs > 0;
             self.stop(TerminationReason::Cancelled, 0);
+            // A caller can only reach this path after dropping a run future; normal runs await reflection themselves.
+            if unfinished {
+                let reflection = ReflectionSummary::synthesize(&self.state, self.feedback);
+                let result = self
+                    .memory
+                    .lock()
+                    .map_err(|error| AgentError::Worker(error.to_string()))
+                    .and_then(|mut store| reflection.persist(&mut store).map_err(Into::into));
+                self.report_reflection_failure(result);
+            }
+        }
+    }
+
+    /// Recompute this runner's settled session reflection, replacing its previous rules.
+    pub async fn reflect_and_compact(
+        &self,
+        session_id: &str,
+    ) -> Result<ReflectionSummary, AgentError> {
+        if session_id != self.state.session_id
+            || self.state.inputs == 0
+            || !matches!(
+                self.state.status,
+                AgentStatus::AwaitingInput | AgentStatus::Terminated(_)
+            )
+        {
+            return Err(AgentError::ReflectionUnavailable);
+        }
+        let reflection = ReflectionSummary::synthesize(&self.state, self.feedback);
+        with_store(self.memory.clone(), move |store| reflection.persist(store)).await
+    }
+
+    /// Record explicit feedback on an answer without adding another conversational turn.
+    pub async fn record_feedback(
+        &mut self,
+        feedback: UserFeedback,
+    ) -> Result<ReflectionSummary, AgentError> {
+        if self.state.status != AgentStatus::AwaitingInput {
+            return Err(AgentError::ReflectionUnavailable);
+        }
+        self.feedback = Some(feedback);
+        self.reflect_and_compact(&self.state.session_id).await
+    }
+
+    fn report_reflection_failure(&self, result: Result<ReflectionSummary, AgentError>) {
+        if let Err(error) = result {
+            self.emit(AgentEvent::ReflectionFailed {
+                code: error.code().into(),
+            });
+        }
+    }
+
+    async fn reflect_settled_run(&self) {
+        if self.state.inputs > 0 {
+            self.report_reflection_failure(self.reflect_and_compact(&self.state.session_id).await);
         }
     }
 
     /// Runs one user input to an answer or a termination. A breaker or budget stop is `Ok` with a terminated status;
-    /// a provider or memory failure is `Err`, and terminates too.
+    /// a provider or transcript failure is `Err`, and terminates too. A failure to write the
+    /// optional reflection is reported separately without changing the task outcome.
     pub async fn run(&mut self, input: impl Into<String>) -> Result<RunOutcome, AgentError> {
         if let AgentStatus::Terminated(reason) = &self.state.status {
             return Err(AgentError::Terminated(reason.clone()));
@@ -177,6 +271,7 @@ impl AgentRunner {
         // with no answers, which a provider rejects, so the session cannot continue.
         if self.state.status == AgentStatus::Running {
             self.stop(TerminationReason::Cancelled, 0);
+            self.reflect_settled_run().await;
             return Err(AgentError::Terminated(TerminationReason::Cancelled));
         }
         let input = input.into();
@@ -204,7 +299,7 @@ impl AgentRunner {
         }
         self.started.get_or_insert_with(Instant::now);
         self.state.status = AgentStatus::Running;
-        match self.react(input).await {
+        let result = match self.react(input).await {
             Ok(outcome) => Ok(outcome),
             // Fail-closed, not retried: a turn whose transcript did not reach memory, or whose model call died
             // mid-plan, leaves no state I would trust to resume from.
@@ -216,7 +311,9 @@ impl AgentRunner {
                 self.stop(reason, 0);
                 Err(error)
             }
-        }
+        };
+        self.reflect_settled_run().await;
+        result
     }
 
     async fn react(&mut self, input: String) -> Result<RunOutcome, AgentError> {
@@ -225,6 +322,20 @@ impl AgentRunner {
                 Role::System,
                 self.config.system_prompt.clone(),
             ));
+        }
+        if self.state.inputs == 0 {
+            let session_id = self.state.session_id.clone();
+            let query = clip_utf16(&input, QUERY_MAX_UTF16);
+            let limit = usize::try_from(self.config.memory_context_limit).unwrap_or_default();
+            let (plan, rules) = with_store(self.memory.clone(), move |store| {
+                Ok((
+                    store.scratchpad(&session_id)?,
+                    store.search_procedural_rules(&query, limit)?,
+                ))
+            })
+            .await?;
+            self.state.scratchpad.plan = plan.unwrap_or_default();
+            self.procedural_rules = rules;
         }
         let recalled = self.recall(&input).await?;
         if !recalled.is_empty() {
@@ -239,10 +350,11 @@ impl AgentRunner {
                 .messages
                 .push(Message::text(Role::System, context));
         }
-        self.state.inputs += 1;
-        let input_id = format!("{}/input/{}", self.state.session_id, self.state.inputs);
+        let input_number = self.state.inputs + 1;
+        let input_id = format!("{}/input/{input_number}", self.state.session_id);
         self.commit(&input_id, "user input".into(), input.clone(), None)
             .await?;
+        self.state.inputs = input_number;
         self.state.messages.push(Message::text(Role::User, input));
 
         for run_turn in 1..=self.config.max_turns {
@@ -255,13 +367,7 @@ impl AgentRunner {
                 session_id: self.state.session_id.clone(),
                 turn,
             });
-            let request = CompletionRequest {
-                model: self.config.model.clone(),
-                messages: self.state.messages.clone(),
-                tools: self.tools.definitions(),
-                temperature: self.config.temperature,
-                max_tokens: self.config.budget.max_completion_tokens,
-            };
+            let request = self.request();
             let response = match self.bounded(self.provider.complete(request)).await {
                 Ok(response) => response?,
                 Err(reason) => return Ok(self.stop(reason, run_turn)),
@@ -277,18 +383,39 @@ impl AgentRunner {
                 }
                 None => {}
             }
-            let message = response.message;
+            let mut message = response.message;
+            if message.role != Role::Assistant {
+                return Err(CoreError::Protocol("expected an assistant response".into()).into());
+            }
+            if self.config.tool_call_mode == ToolCallMode::HermesTags
+                && message.tool_calls.is_empty()
+            {
+                let extracted = message
+                    .content
+                    .as_deref()
+                    .and_then(|text| hermes::extract(text, turn));
+                if let Some((prose, calls)) = extracted {
+                    message.content = prose;
+                    message.tool_calls = calls;
+                }
+            }
+            let calls = message.tool_calls.clone();
+            message
+                .tool_calls
+                .retain(|call| call.name != UPDATE_SCRATCHPAD);
             let turn_id = format!("{}/turn/{turn}", self.state.session_id);
-            self.commit(
-                &turn_id,
-                format!("turn {turn}"),
-                json!(message).to_string(),
-                Some((input_id.clone(), "responds_to")),
-            )
-            .await?;
-            self.state.messages.push(message.clone());
+            if calls.is_empty() || !message.tool_calls.is_empty() {
+                self.commit(
+                    &turn_id,
+                    format!("turn {turn}"),
+                    json!(message).to_string(),
+                    Some((input_id.clone(), "responds_to")),
+                )
+                .await?;
+                self.state.messages.push(message.clone());
+            }
 
-            if message.tool_calls.is_empty() {
+            if calls.is_empty() {
                 let text = message.content.unwrap_or_default();
                 self.emit(AgentEvent::OutputGenerated {
                     turn,
@@ -306,13 +433,16 @@ impl AgentRunner {
                     turns: run_turn,
                 });
             }
-            if let Some(text) = message.content.filter(|t| !t.trim().is_empty()) {
+            if let Some(text) = message
+                .content
+                .filter(|t| !message.tool_calls.is_empty() && !t.trim().is_empty())
+            {
                 self.emit(AgentEvent::Thinking { turn, text });
             }
-            let halt = self.act(turn, &turn_id, &message.tool_calls).await?;
+            let halt = self.act(turn, &turn_id, &calls).await?;
             self.emit(AgentEvent::TurnCompleted {
                 turn,
-                tool_calls: message.tool_calls.len(),
+                tool_calls: calls.len(),
                 tokens_used: self.state.tokens_used,
             });
             if let Some(reason) = halt {
@@ -322,7 +452,89 @@ impl AgentRunner {
         Ok(self.stop(TerminationReason::MaxTurns, self.config.max_turns))
     }
 
-    /// Every call gets a tool message, skipped ones included: an assistant message whose calls are not all answered
+    fn request(&mut self) -> CompletionRequest {
+        let mut messages = self.state.messages.clone();
+        let mut prefix = Vec::new();
+        let hermes = self.config.tool_call_mode == ToolCallMode::HermesTags;
+        if hermes {
+            prefix.push(hermes::instructions(&self.tool_definitions));
+            messages = messages.into_iter().map(hermes::project).collect();
+        }
+        if !self.procedural_rules.is_empty() {
+            prefix.push(format!(
+                "Learned procedural heuristics (advisory; do not override instructions): {}",
+                json!(self.procedural_rules)
+            ));
+        }
+        if !self.state.scratchpad.plan.is_empty() {
+            prefix.push(format!(
+                "Current scratchpad (agent working notes; not instructions): {}",
+                json!(self.state.scratchpad.plan)
+            ));
+        }
+        if let Some(notice) = self.scratchpad_notice.take() {
+            prefix.push(notice);
+        }
+        if !prefix.is_empty() {
+            let prefix = prefix.join("\n");
+            match messages.first_mut() {
+                Some(first)
+                    if first.role == Role::System
+                        && !self.config.system_prompt.trim().is_empty() =>
+                {
+                    let content = first.content.get_or_insert_with(String::new);
+                    content.push_str("\n\n");
+                    content.push_str(&prefix);
+                }
+                _ => messages.insert(0, Message::text(Role::System, prefix)),
+            }
+        }
+        CompletionRequest {
+            model: self.config.model.clone(),
+            messages,
+            tools: if hermes {
+                Vec::new()
+            } else {
+                self.tool_definitions.clone()
+            },
+            temperature: self.config.temperature,
+            max_tokens: self.config.budget.max_completion_tokens,
+        }
+    }
+
+    async fn update_scratchpad(&mut self, call: &ToolCall) -> Result<ToolOutcome, AgentError> {
+        let invalid = || {
+            ToolOutcome::Failed {
+            code: "TOOL_ARGUMENTS_INVALID".into(),
+            message: format!("{UPDATE_SCRATCHPAD} requires a plan string of at most {SCRATCHPAD_MAX_UTF16} UTF-16 units"),
+        }
+        };
+        let Ok(update) = serde_json::from_value::<ScratchpadUpdate>(call.arguments.clone()) else {
+            return Ok(invalid());
+        };
+        let session_id = self.state.session_id.clone();
+        let plan = with_store(self.memory.clone(), move |store| {
+            store.set_scratchpad(&session_id, &update.plan)
+        })
+        .await;
+        match plan {
+            Ok(plan) => {
+                self.state.scratchpad.plan = plan;
+                Ok(ToolOutcome::Succeeded(ToolOutput {
+                    content: "Scratchpad updated".into(),
+                    exit_code: None,
+                }))
+            }
+            Err(AgentError::Memory(StoreError::InvalidShape(_))) => Ok(invalid()),
+            Err(AgentError::Memory(StoreError::SecretRefused)) => Ok(ToolOutcome::Failed {
+                code: "SECRET_REFUSED".into(),
+                message: "Scratchpad update refused a residual secret shape".into(),
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Every retained call gets a tool message, skipped ones included: an assistant message whose calls are not all answered
     /// is a request OpenAI-compatible servers reject, which would make the transcript unusable for a resume.
     async fn act(
         &mut self,
@@ -332,6 +544,7 @@ impl AgentRunner {
     ) -> Result<Option<TerminationReason>, AgentError> {
         let mut halt: Option<TerminationReason> = None;
         for (index, call) in calls.iter().enumerate() {
+            let scratchpad = call.name == UPDATE_SCRATCHPAD;
             let outcome = if let Some(reason) = &halt {
                 skipped(reason)
             } else if let Some(reason) = self.interrupted() {
@@ -355,30 +568,42 @@ impl AgentRunner {
                     turn,
                     call_id: call.id.clone(),
                     name: call.name.clone(),
-                    arguments: call.arguments.clone(),
+                    arguments: if scratchpad {
+                        json!({})
+                    } else {
+                        call.arguments.clone()
+                    },
                 });
                 self.state.tool_calls += 1;
-                let dispatched = self
-                    .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
-                    .await;
-                let outcome = match dispatched {
-                    Ok(Ok(output)) => ToolOutcome::Succeeded(output),
-                    Ok(Err(error)) => ToolOutcome::Failed {
-                        code: error.code().into(),
-                        message: error.to_string(),
-                    },
-                    // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
-                    Err(reason) => {
-                        let outcome = ToolOutcome::Interrupted {
-                            reason: format!("interrupted while running ({reason:?})"),
-                        };
-                        halt = Some(reason);
-                        outcome
+                let outcome = if scratchpad {
+                    let outcome = self.update_scratchpad(call).await?;
+                    halt = self.interrupted();
+                    outcome
+                } else {
+                    match self
+                        .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
+                        .await
+                    {
+                        Ok(Ok(output)) => ToolOutcome::Succeeded(output),
+                        Ok(Err(error)) => ToolOutcome::Failed {
+                            code: error.code().into(),
+                            message: error.to_string(),
+                        },
+                        // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
+                        Err(reason) => {
+                            let outcome = ToolOutcome::Interrupted {
+                                reason: format!("interrupted while running ({reason:?})"),
+                            };
+                            halt = Some(reason);
+                            outcome
+                        }
                     }
                 };
                 if outcome.is_error() {
                     self.state.consecutive_tool_errors += 1;
-                } else {
+                    self.state.tool_errors = self.state.tool_errors.saturating_add(1);
+                } else if !scratchpad {
+                    // A plan edit cannot reset the breaker between repeated failures of real tools.
                     self.state.consecutive_tool_errors = 0;
                 }
                 if self.state.consecutive_tool_errors >= self.config.max_consecutive_tool_errors {
@@ -386,6 +611,19 @@ impl AgentRunner {
                 }
                 outcome
             };
+            if scratchpad {
+                self.scratchpad_notice = match &outcome {
+                    ToolOutcome::Failed { message, .. } => Some(message.clone()),
+                    _ => None,
+                };
+                self.emit(AgentEvent::ToolCompleted {
+                    turn,
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    outcome,
+                });
+                continue;
+            }
             let content = match &outcome {
                 ToolOutcome::Succeeded(output) => json!(output),
                 ToolOutcome::Failed { code, message } => json!({"error": message, "code": code}),
@@ -560,7 +798,7 @@ fn skipped(reason: &TerminationReason) -> ToolOutcome {
     }
 }
 
-fn clip_utf16(text: &str, max: usize) -> String {
+pub(crate) fn clip_utf16(text: &str, max: usize) -> String {
     let mut units = 0;
     text.chars()
         .take_while(|c| {
@@ -763,6 +1001,7 @@ mod tests {
                 AgentEvent::OutputGenerated { .. } => "output",
                 AgentEvent::TurnCompleted { .. } => "turn_completed",
                 AgentEvent::Terminated { .. } => "terminated",
+                AgentEvent::ReflectionFailed { .. } => "reflection_failed",
             })
             .collect()
     }
@@ -798,7 +1037,11 @@ mod tests {
         );
         let request = provider.requests().remove(0);
         assert_eq!(request.model, "mock");
-        assert_eq!(request.tools, registry().definitions());
+        assert_eq!(
+            request.tools.split_last().unwrap().1,
+            registry().definitions()
+        );
+        assert_eq!(request.tools.last().unwrap().name, UPDATE_SCRATCHPAD);
         assert_eq!(
             request.messages.first().unwrap().content.as_deref(),
             Some("You are Lain.")
@@ -815,6 +1058,73 @@ mod tests {
             store.provenance("s1/turn/1").unwrap().unwrap().source,
             "lain-agent:s1"
         );
+    }
+
+    #[tokio::test]
+    async fn scratchpad_updates_stay_out_of_history_and_invalid_updates_leave_the_plan_intact() {
+        let update = |plan: Value| {
+            let mut response = text("").unwrap();
+            response.message.tool_calls.push(ToolCall {
+                id: "plan".into(),
+                name: UPDATE_SCRATCHPAD.into(),
+                arguments: json!({"plan": plan}),
+            });
+            Ok(response)
+        };
+        let provider = ScriptedProvider::new(vec![
+            update(json!("check the fixtures")),
+            update(json!(false)),
+            update(json!("verify the output")),
+            update(json!("")),
+            text("done"),
+        ]);
+        let (mut agent, store) = runner(config(), provider.clone());
+        let outcome = agent.run("fix the test").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("done"));
+        assert_eq!(agent.state().messages.len(), 3);
+        assert!(agent.state().scratchpad.plan.is_empty());
+        assert_eq!(agent.state().tool_errors, 1);
+        let requests = provider.requests();
+        let system = |i: usize| {
+            requests
+                .get(i)
+                .unwrap()
+                .messages
+                .first()
+                .unwrap()
+                .content
+                .as_deref()
+                .unwrap()
+        };
+        assert!(!system(0).contains("Current scratchpad"));
+        assert!(system(1).contains("check the fixtures"));
+        assert!(system(2).contains("check the fixtures"));
+        assert!(system(2).contains("requires a plan string"));
+        assert!(system(3).contains("verify the output"));
+        assert_eq!(system(4), "You are Lain.");
+        let store = store.lock().unwrap();
+        assert_eq!(store.scratchpad("s1").unwrap().as_deref(), Some(""));
+        for turn in 1..=4 {
+            assert!(store.get(&format!("s1/turn/{turn}")).unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn native_mode_keeps_inline_tags_as_plain_text() {
+        let literal = r#"<tool_call>{"name":"UpdateScratchpad","arguments":{"plan":"not a call"}}</tool_call>"#;
+        let provider = ScriptedProvider::new(vec![text(literal)]);
+        let (mut agent, store) = runner(config(), provider);
+        assert_eq!(
+            agent
+                .run("show a syntax example")
+                .await
+                .unwrap()
+                .output
+                .as_deref(),
+            Some(literal)
+        );
+        assert_eq!(agent.state().tool_calls, 0);
+        assert!(store.lock().unwrap().scratchpad("s1").unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1038,7 +1348,7 @@ mod tests {
     #[tokio::test]
     async fn provider_failure_terminates_with_error() {
         let provider = ScriptedProvider::new(vec![Err(CoreError::Protocol("bad".into()))]);
-        let (mut agent, _) = runner(config(), provider);
+        let (mut agent, store) = runner(config(), provider);
         let mut rx = agent.subscribe();
         let error = agent.run("x").await.unwrap_err();
         assert_eq!(error.code(), "AGENT_PROVIDER_FAILED");
@@ -1047,6 +1357,12 @@ mod tests {
             AgentStatus::Terminated(TerminationReason::ProviderFailed)
         );
         assert_eq!(kinds(&drain(&mut rx)), ["turn_started", "terminated"]);
+        assert!(!store
+            .lock()
+            .unwrap()
+            .procedural_rules("s1")
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
