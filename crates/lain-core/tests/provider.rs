@@ -56,7 +56,17 @@ mod tests {
                 serde_json::from_slice(bytes.get(header_end..header_end + length).unwrap())
                     .unwrap();
             assert_eq!(request.get("stream").unwrap(), streaming);
-            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n", body.len(), if streaming { "text/event-stream" } else { "application/json" }).as_bytes()).await.unwrap();
+            let content_type = if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            };
+            let headers = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\n\
+                 Connection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
             for chunk in body.as_bytes().chunks(3) {
                 socket.write_all(chunk).await.unwrap();
             }
@@ -114,7 +124,21 @@ mod tests {
 
     #[tokio::test]
     async fn completion_parses_calls_and_usage() {
-        let body = json!({"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}});
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{\"command\":\"echo hi\"}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
+        });
         let (url, handle) = server("200 OK", body.to_string(), false).await;
         let response = OpenAiCompatibleProvider::new(url, Some("test-key".into()))
             .complete(request())
