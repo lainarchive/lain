@@ -10,7 +10,9 @@
   `lain-memory/src/agent.rs` adds bounded recent transcript/rule inspection without promoting untrusted episodes.
 - Interactive turns now select stdin alongside IPC events: `/cancel` sends immediately while a turn is running;
   other in-flight input is ignored. Status and termination messages render readable labels instead of raw JSON.
-- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (95 tests), including ten CLI
+- Scratchpad clipping/padding uses character display widths, including common East Asian/emoji wide ranges and combining marks;
+  accented Latin text no longer pulls the right border left. Narrow-width alignment tests include `café résumé` and `界界 wide row`.
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (96 tests), including eleven CLI
   tests. Daemon tests use an injected provider and make no network calls. The descendant timeout test now accepts ESRCH
   as an already-exited child during Linux `/proc` inspection and passed 30/30 repetitions. The timeout kill helper already
   ignores gone-process errors. Daemon error events now keep codes separate from messages, with no duplicate printed code.
