@@ -36,12 +36,37 @@ pub fn badge(name: &str, outcome: Option<bool>, color: bool) -> String {
     }
 }
 
+fn char_width(c: char) -> usize {
+    match c {
+        '\u{0300}'..='\u{036f}'
+        | '\u{1ab0}'..='\u{1aff}'
+        | '\u{1dc0}'..='\u{1dff}'
+        | '\u{200d}'
+        | '\u{20d0}'..='\u{20ff}'
+        | '\u{fe00}'..='\u{fe0f}'
+        | '\u{fe20}'..='\u{fe2f}'
+        | '\u{e0100}'..='\u{e01ef}' => 0,
+        '\u{1100}'..='\u{115f}'
+        | '\u{2329}'..='\u{232a}'
+        | '\u{2600}'..='\u{27bf}'
+        | '\u{2e80}'..='\u{a4cf}'
+        | '\u{ac00}'..='\u{d7a3}'
+        | '\u{f900}'..='\u{faff}'
+        | '\u{fe10}'..='\u{fe19}'
+        | '\u{fe30}'..='\u{fe6f}'
+        | '\u{ff01}'..='\u{ff60}'
+        | '\u{ffe0}'..='\u{ffe6}'
+        | '\u{1f300}'..='\u{1faff}'
+        | '\u{20000}'..='\u{3fffd}' => 2,
+        _ => 1,
+    }
+}
+
 fn clip(text: &str, width: usize) -> String {
-    // I reserve two cells per non-ASCII character; a wide glyph must not push the border past the terminal edge.
     let mut used = 0;
     text.chars()
         .take_while(|c| {
-            used += if c.is_ascii() { 1 } else { 2 };
+            used += char_width(*c);
             used <= width
         })
         .collect()
@@ -53,7 +78,7 @@ pub fn render_scratchpad_box(text: &str, width: usize) -> Vec<String> {
     let mut lines = vec![format!("+{}+", "-".repeat(width - 2))];
     let row = |text: &str| {
         let text = clip(text, inner);
-        let used: usize = text.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum();
+        let used: usize = text.chars().map(char_width).sum();
         format!("| {text}{} |", " ".repeat(inner.saturating_sub(used)))
     };
     lines.push(row("Scratchpad"));
@@ -75,6 +100,28 @@ pub fn render_scratchpad_box(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scratchpad_display_width_alignment() {
+        assert_eq!("café résumé".chars().map(char_width).sum::<usize>(), 11);
+        assert_eq!("界界 wide row".chars().map(char_width).sum::<usize>(), 13);
+        for c in ['界', '한', 'Ａ', '😀'] {
+            assert_eq!(char_width(c), 2);
+        }
+        for width in [4, 5, 6, 9, 12, 15, 34] {
+            for text in ["café résumé", "界界 wide row", "한글 Ａ😀", "cafe\u{301}"] {
+                let lines = render_scratchpad_box(text, width);
+                assert!(lines
+                    .iter()
+                    .all(|line| line.chars().map(char_width).sum::<usize>() == width));
+            }
+        }
+        assert!(render_scratchpad_box("café résumé", 34)
+            .iter()
+            .any(|line| line.contains("café résumé")));
+        assert_eq!(clip("界界", 3), "界");
+        assert_eq!(clip("é", 1), "é");
+    }
 
     #[test]
     fn statuses_are_readable() {
