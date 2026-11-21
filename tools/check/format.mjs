@@ -46,6 +46,7 @@ export const OWNED_PATHS = [
   'src/',
   'test/',
   'tools/',
+  'crates/',
   'docs/implementation/',
 ];
 
@@ -56,11 +57,14 @@ export const LEGACY_PATHS = [
 ];
 
 /** Extensions whose contents are checked. */
-const TEXT_EXTENSIONS = new Set(['.mjs', '.js', '.cjs', '.json', '.md', '.txt', '.yml', '.yaml', '.sql']);
+const TEXT_EXTENSIONS = new Set(['.mjs', '.js', '.cjs', '.json', '.md', '.txt', '.yml', '.yaml', '.sql', '.rs', '.toml']);
 
 /** Individual files at the repository root that this repository owns. */
 const OWNED_ROOT_FILES = new Set([
   'package.json',
+  'Cargo.toml',
+  'Cargo.lock',
+  'clippy.toml',
   'tsconfig.json',
   '.node-version',
   '.gitattributes',
@@ -139,7 +143,7 @@ async function walk(dir, root, out) {
     const full = join(dir, entry.name);
     const rel = relative(root, full).split(sep).join('/');
     if (entry.isDirectory()) {
-      if (['.git', 'node_modules', '.lain-audit', 'artifacts'].includes(rel)) continue;
+      if (['.git', 'node_modules', '.lain-audit', 'artifacts', 'target'].includes(rel)) continue;
       await walk(full, root, out);
     } else if (TEXT_EXTENSIONS.has(entry.name.slice(entry.name.lastIndexOf('.')))) {
       out.push(rel);

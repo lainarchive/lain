@@ -27,6 +27,9 @@ export const ALLOWED_RUNTIME_DEPENDENCIES = /** @type {string[]} */ (['@opentui/
 /** The complete list of development dependencies this project permits. */
 export const ALLOWED_DEV_DEPENDENCIES = ['typescript', '@types/node'];
 
+export const ALLOWED_RUST_DEPENDENCIES = ['rusqlite', 'thiserror'];
+export const ALLOWED_RUST_DEV_DEPENDENCIES = ['tempfile'];
+
 /**
  * @param {string} root
  * @param {string[]} args
@@ -87,6 +90,8 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
         'unexpected dependency not detected',
       ],
       ['empty runtime deps', unexpectedDependencies([], []).length === 0, 'false positive on empty set'],
+      ['rust dependency rule', unexpectedDependencies(['rusqlite', 'tokio'], ALLOWED_RUST_DEPENDENCIES).length === 1, 'unapproved Rust dependency missed'],
+      ['rust dev dependency rule', unexpectedDependencies(['tempfile', 'anyhow'], ALLOWED_RUST_DEV_DEPENDENCIES).length === 1, 'unapproved Rust dev dependency missed'],
     ];
     const failed = checks.filter(([, ok]) => !ok);
     result.record('self_test_checks', checks.length);
@@ -141,7 +146,24 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
   }
 
   // The lockfile is the reproducibility artifact; its absence is a failure.
-  for (const required of ['package.json', 'package-lock.json', '.node-version']) {
+  const cargo = spawnSync('cargo', ['metadata', '--no-deps', '--format-version=1', '--locked'], {
+    cwd: root, encoding: 'utf8', windowsHide: true, shell: false,
+  });
+  if (cargo.status !== 0) {
+    result.fail('Cargo workspace metadata unavailable', { message: cargo.error?.message ?? cargo.stderr.trim() });
+  } else {
+    const metadata = JSON.parse(cargo.stdout);
+    for (const pkg of metadata.packages) {
+      for (const dep of pkg.dependencies) {
+        const allowed = dep.kind === 'dev' ? ALLOWED_RUST_DEV_DEPENDENCIES : ALLOWED_RUST_DEPENDENCIES;
+        if (dep.kind === 'build' || !allowed.includes(dep.name)) {
+          result.fail(`unapproved Rust dependency: ${pkg.name}/${dep.name}`, { message: 'unapproved Rust dependency' });
+        }
+      }
+    }
+  }
+
+  for (const required of ['package.json', 'package-lock.json', '.node-version', 'Cargo.toml', 'Cargo.lock']) {
     try {
       await stat(join(root, required));
       result.note(`${required} present`);
