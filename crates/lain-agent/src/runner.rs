@@ -11,7 +11,7 @@ use std::{
 
 use lain_core::{
     provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall, ToolDefinition},
-    tools::{ToolOutput, ToolRegistry},
+    tools::{ToolOutput, ToolRegistry, REPO_MAP_TOOL_NAME},
     CoreError,
 };
 use lain_memory::{
@@ -22,7 +22,7 @@ use serde_json::json;
 use tokio::sync::{broadcast, Notify};
 
 use crate::{
-    hermes, AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind,
+    hermes, prompt, AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind,
     ReflectionSummary, TerminationReason, ToolCallMode, ToolOutcome, UserFeedback,
 };
 
@@ -356,6 +356,23 @@ impl AgentRunner {
             .await?;
         self.state.inputs = input_number;
         self.state.messages.push(Message::text(Role::User, input));
+        let mut initial_repo_map = None;
+        if input_number == 1
+            && self.config.coding_session
+            && self
+                .tool_definitions
+                .iter()
+                .any(|tool| tool.name == REPO_MAP_TOOL_NAME)
+        {
+            match self
+                .bounded(self.tools.dispatch(REPO_MAP_TOOL_NAME, json!({})))
+                .await
+            {
+                Ok(Ok(outline)) => initial_repo_map = Some(outline.content),
+                Ok(Err(_)) => {} // The outline is optional; a direct tool call can report the scan error.
+                Err(reason) => return Ok(self.stop(reason, 0)),
+            }
+        }
 
         for run_turn in 1..=self.config.max_turns {
             if let Some(reason) = self.interrupted() {
@@ -367,7 +384,14 @@ impl AgentRunner {
                 session_id: self.state.session_id.clone(),
                 turn,
             });
-            let request = self.request();
+            let Ok(request) = self.request(initial_repo_map.take().as_deref()) else {
+                return Ok(self.stop(
+                    TerminationReason::BudgetExhausted {
+                        budget: BudgetKind::ContextWindow,
+                    },
+                    run_turn,
+                ));
+            };
             let response = match self.bounded(self.provider.complete(request)).await {
                 Ok(response) => response?,
                 Err(reason) => return Ok(self.stop(reason, run_turn)),
@@ -387,7 +411,10 @@ impl AgentRunner {
             if message.role != Role::Assistant {
                 return Err(CoreError::Protocol("expected an assistant response".into()).into());
             }
-            if self.config.tool_call_mode == ToolCallMode::HermesTags
+            let truncated = response.finish_reason.as_deref() == Some("length");
+            if truncated {
+                message.tool_calls.clear();
+            } else if self.config.tool_call_mode == ToolCallMode::HermesTags
                 && message.tool_calls.is_empty()
             {
                 let extracted = message
@@ -426,6 +453,16 @@ impl AgentRunner {
                     tool_calls: 0,
                     tokens_used: self.state.tokens_used,
                 });
+                if truncated {
+                    let mut outcome = self.stop(
+                        TerminationReason::BudgetExhausted {
+                            budget: BudgetKind::CompletionTokens,
+                        },
+                        run_turn,
+                    );
+                    outcome.output = Some(text);
+                    return Ok(outcome);
+                }
                 self.state.status = AgentStatus::AwaitingInput;
                 return Ok(RunOutcome {
                     status: self.state.status.clone(),
@@ -452,13 +489,18 @@ impl AgentRunner {
         Ok(self.stop(TerminationReason::MaxTurns, self.config.max_turns))
     }
 
-    fn request(&mut self) -> CompletionRequest {
-        let mut messages = self.state.messages.clone();
+    fn request(
+        &mut self,
+        initial_repo_map: Option<&str>,
+    ) -> Result<CompletionRequest, lain_context::ContextOverflow> {
         let mut prefix = Vec::new();
+        let has_system_prompt = !self.config.system_prompt.trim().is_empty();
+        if has_system_prompt {
+            prefix.push(self.config.system_prompt.clone());
+        }
         let hermes = self.config.tool_call_mode == ToolCallMode::HermesTags;
         if hermes {
             prefix.push(hermes::instructions(&self.tool_definitions));
-            messages = messages.into_iter().map(hermes::project).collect();
         }
         if !self.procedural_rules.is_empty() {
             prefix.push(format!(
@@ -475,31 +517,29 @@ impl AgentRunner {
         if let Some(notice) = self.scratchpad_notice.take() {
             prefix.push(notice);
         }
-        if !prefix.is_empty() {
-            let prefix = prefix.join("\n");
-            match messages.first_mut() {
-                Some(first)
-                    if first.role == Role::System
-                        && !self.config.system_prompt.trim().is_empty() =>
-                {
-                    let content = first.content.get_or_insert_with(String::new);
-                    content.push_str("\n\n");
-                    content.push_str(&prefix);
-                }
-                _ => messages.insert(0, Message::text(Role::System, prefix)),
-            }
-        }
-        CompletionRequest {
+        let mut request = CompletionRequest {
             model: self.config.model.clone(),
-            messages,
+            messages: Vec::new(),
             tools: if hermes {
                 Vec::new()
             } else {
                 self.tool_definitions.clone()
             },
             temperature: self.config.temperature,
-            max_tokens: self.config.budget.max_completion_tokens,
-        }
+            max_tokens: Some(self.config.completion_token_limit()),
+        };
+        prompt::fill(
+            &mut request,
+            self.state
+                .messages
+                .get(usize::from(has_system_prompt)..)
+                .unwrap_or_default(),
+            prefix.join("\n\n"),
+            initial_repo_map,
+            self.config.context_window_tokens,
+            hermes,
+        )?;
+        Ok(request)
     }
 
     async fn update_scratchpad(&mut self, call: &ToolCall) -> Result<ToolOutcome, AgentError> {
@@ -1433,6 +1473,123 @@ mod tests {
         );
         assert!(!recalled.contains("rumor"));
         assert_eq!(request.messages.last().unwrap().role, Role::User);
+    }
+
+    #[tokio::test]
+    async fn coding_session_adds_a_workspace_outline_to_its_first_provider_request() {
+        use lain_core::tools::RepoMapTool;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("app.rs"),
+            "/// Startup entry.\npub fn launch() { body_only(); }",
+        )
+        .unwrap();
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(Arc::new(RepoMapTool::new(directory.path())))
+            .unwrap();
+        let tools = Arc::new(tools);
+        for enabled in [false, true] {
+            let mut config = config();
+            config.coding_session = enabled;
+            let provider = ScriptedProvider::new(vec![text("ok")]);
+            let mut agent =
+                AgentRunner::new(config, provider.clone(), tools.clone(), memory(), "s1").unwrap();
+            agent.run("Where does startup begin?").await.unwrap();
+            let request = provider.requests().remove(0);
+            let user = request
+                .messages
+                .iter()
+                .find(|m| m.role == Role::User)
+                .unwrap()
+                .content
+                .as_deref()
+                .unwrap();
+            assert_eq!(user.contains("pub fn launch() — Startup entry."), enabled);
+            assert!(
+                !user.contains("body_only")
+                    && !user.contains(&directory.path().display().to_string())
+            );
+            assert!(request
+                .tools
+                .iter()
+                .any(|tool| tool.name == REPO_MAP_TOOL_NAME));
+            let original = agent
+                .state
+                .messages
+                .iter()
+                .find(|m| m.role == Role::User)
+                .unwrap();
+            assert_eq!(
+                original.content.as_deref(),
+                Some("Where does startup begin?")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_repo_map_refresh_reaches_the_provider_without_the_startup_snapshot() {
+        use lain_core::tools::RepoMapTool;
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("app.rs");
+        std::fs::write(&source, "pub fn original() {}").unwrap();
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(Arc::new(RepoMapTool::new(directory.path())))
+            .unwrap();
+        let mut config = config();
+        config.coding_session = true;
+        let mut refresh = calls(None, &[REPO_MAP_TOOL_NAME]).unwrap();
+        refresh.message.tool_calls.first_mut().unwrap().arguments = json!({});
+        let provider = ScriptedProvider::new(vec![text("Seen"), Ok(refresh), text("Refreshed")]);
+        let mut agent =
+            AgentRunner::new(config, provider.clone(), Arc::new(tools), memory(), "s1").unwrap();
+
+        agent.run("Inspect the outline").await.unwrap();
+        std::fs::write(&source, "pub fn renamed() {}").unwrap();
+        agent.run("Refresh the outline").await.unwrap();
+        let requests = provider.requests();
+        assert!(serde_json::to_string(requests.first().unwrap()).unwrap().contains("fn original()"));
+        let follow_ups = serde_json::to_string(requests.get(1..).unwrap()).unwrap();
+        assert!(!follow_ups.contains("fn original()"));
+        assert!(follow_ups.contains("fn renamed()"));
+    }
+
+    #[tokio::test]
+    async fn a_length_limited_completion_reports_partial_output_and_does_not_run_tools() {
+        let mut response = calls(Some("Partial answer"), &["read"]).unwrap();
+        response.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![Ok(response)]);
+        let (mut agent, _) = runner(config(), provider.clone());
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Partial answer"));
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::CompletionTokens,
+            }),
+        );
+        assert_eq!(provider.requests().len(), 1);
+        assert!(agent.state().messages.last().unwrap().tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refuses_to_call_provider_when_required_context_cannot_fit() {
+        let mut config = config();
+        config.context_window_tokens = 256;
+        config.system_prompt = "Do not trim required instructions. ".repeat(100);
+        let provider = ScriptedProvider::new(vec![]);
+        let (mut agent, _) = runner(config, provider.clone());
+        let outcome = agent.run("An ordinary request").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::ContextWindow
+            })
+        );
+        assert!(provider.requests().is_empty());
     }
 
     #[tokio::test]
