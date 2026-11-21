@@ -147,6 +147,38 @@ The first useful release should provide a CLI, one configured model provider, pe
 
 Defer full swarms, advanced GraphRAG, model training, marketplace, desktop/mobile, unattended business operations, and self-modifying production Core.
 
+## 15. Agent harness (`.devin/`)
+
+Lain is built largely by agents. The harness is the set of repository files that tells any agent how to work here, so the
+rules travel with the code instead of living in a prompt. It is guidance, not enforcement: what can be checked mechanically
+is checked by `tools/check/` and the gates below, and authority still comes from the owner and the Policy Engine.
+
+```text
+AGENTS.md                 always loaded: code style pointer, context and handoff protocol
+   |
+.devin/                   playbooks, read for the work at hand
+   efficiency.md          diffs over rewrites, prompt caching, traceability, commit/PR form
+   workflows.md           plan -> review -> implement -> pre-flight -> ready for review
+   rust_core.md           Rust crates: no unwrap/expect, thiserror/anyhow, Tokio actors
+   frontend.md            interfaces: dark-first tokens, density, state separation
+   |
+.agents/skills/           task-specific procedures (lead-dev workflow, OpenTUI facts)
+.agents/hooks.json        session-start reminder of the gates
+   |
+tools/check/, npm run verify, cargo gates     mechanical enforcement
+```
+
+| File | Applies to | Binds now |
+| --- | --- | --- |
+| `.devin/efficiency.md` | every session and change | yes |
+| `.devin/workflows.md` | every change | yes; Rust gates once a Cargo workspace exists |
+| `.devin/rust_core.md` | Rust crates | from the first Rust line, including the ADR-011 slice |
+| `.devin/frontend.md` | terminal UI and any web/desktop UI | terminal now; web stack once a web UI is approved |
+
+Precedence follows `AGENTS.md`: explicit owner instructions, then repository state, then `DECISIONS.md`, then these files.
+A playbook never promotes a candidate in section 13 to a decision; Rust, Tokio and the web stack become commitments only
+through `DECISIONS.md`. Playbook edits are their own commits, because every agent session reads them.
+
 ## Reconciliation: collaboration, mods, and quality
 
 ### Collaboration
