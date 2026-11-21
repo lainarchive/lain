@@ -62,7 +62,13 @@ Statuses: **Accepted** = approved direction; **Proposed** = recommended but unpr
 ## ADR-012: Extension creation differs from activation
 **Status:** Accepted  
 **Decision:** Creator Engine produces a candidate; validation and explicit approval are required before activation.  
-**Reason:** Generated and third-party code is untrusted until reviewed.
+**Dev-mode exception:** When `allow_creator_mode` is enabled (on by default in debug builds, off by default in release builds and explicitly off in strict operation),
+`test_tool` and `create_tool` may test-run model-generated scripts without per-candidate approval. The operator must explicitly grant `read_fs`, `write_fs`, `network`, and `subprocess`.
+Only `create_tool` may save a script and manifest to the workspace's `.lain/tools/` and register it for use, and only after argument validation and a passing test run.
+The exception does not grant capabilities or waive approval outside Creator Mode.
+
+**Reason:** Generated and third-party code is untrusted until reviewed. Operators may opt into faster iteration for trusted agents and workspaces in development;
+a passing test is not a security review.
 
 ## ADR-013: Advanced autonomy is deferred
 **Status:** Accepted  
@@ -74,4 +80,6 @@ Exact language/workspace structure; async runtime; event persistence/projections
 
 ## Reconciliation: low-risk extension activation
 
-Clarification to the extension lifecycle decision: low-risk, validated declarative extensions limited to permissions already authorized by the user may be installed and activated automatically. Extensions that request new permissions, executable behavior, sensitive access, or broader authority require independent policy evaluation and applicable explicit approval. Creation, installation, authorization, and activation remain distinct. This clarification does not authorize an extension to approve itself.
+Clarification to the extension lifecycle decision: low-risk, validated declarative extensions limited to permissions already authorized by the user may be installed and activated automatically.
+Outside the ADR-012 dev-mode exception, extensions that request new permissions, executable behavior, sensitive access, or broader authority require independent policy evaluation and applicable explicit approval.
+Creation, installation, authorization, and activation remain distinct. This clarification does not authorize an extension to approve itself.
