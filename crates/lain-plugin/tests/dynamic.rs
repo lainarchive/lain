@@ -5,7 +5,7 @@ use std::{
 };
 
 use lain_plugin::{
-    manifest::{Capability, HOST_PROCESS_PERMISSIONS},
+    manifest::{Capability, ScriptInterpreter, HOST_PROCESS_PERMISSIONS},
     Plugin, PluginManager,
 };
 use serde_json::json;
@@ -13,6 +13,47 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+
+#[tokio::test]
+async fn powershell_script_preserves_utf8_json_rpc() -> Result<(), Box<dyn std::error::Error>> {
+    let names: &[&str] = if cfg!(windows) {
+        &["pwsh.exe", "powershell.exe"]
+    } else {
+        &["pwsh"]
+    };
+    if !names.iter().any(|name| {
+        Command::new(name)
+            .args(["-NoProfile", "-NonInteractive", "-Command", "exit 0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }) {
+        return Ok(());
+    }
+    let workspace = tempfile::tempdir()?;
+    let manager = PluginManager::new(
+        workspace.path(),
+        HOST_PROCESS_PERMISSIONS.into_iter().collect(),
+    );
+    let plugin = manager.prepare_script(
+        "echo_unicode".into(),
+        "Echo non-ASCII arguments".into(),
+        json!({"type":"object"}),
+        ScriptInterpreter::Powershell,
+        r#"
+$request = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
+@{jsonrpc='2.0'; id=$request.id; result=@{text=$request.params.text; literal='café'}} | ConvertTo-Json -Compress
+"#.into(),
+    )?;
+    assert_eq!(
+        plugin
+            .invoke("echo_unicode", json!({"text":"東京"}))
+            .await?,
+        json!({"text":"東京","literal":"café"})
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn discovers_and_invokes_one_json_rpc_request() -> Result<(), Box<dyn std::error::Error>> {
