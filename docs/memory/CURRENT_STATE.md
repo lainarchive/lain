@@ -10,13 +10,21 @@
   `lain-memory/src/agent.rs` adds bounded recent transcript/rule inspection without promoting untrusted episodes.
 - Interactive turns now select stdin alongside IPC events: `/cancel` sends immediately while a turn is running;
   other in-flight input is ignored. Status and termination messages render readable labels instead of raw JSON.
+- Shell execution now requires the operator's `LAIN_ALLOW_SHELL=1` opt-in (ADR-004); the default factory registers only
+  memory search. PowerShell execution has a drop guard that kills its process tree on cancellation as well as timeout.
+  Turn errors select a fresh session. The daemon removes terminated sessions, caps live sessions at 32 with oldest-idle
+  eviction, refuses overflow when all are running, and leaves idle sessions' cancellation flags untouched.
+  Unix default sockets now use `XDG_RUNTIME_DIR` or a user-scoped temporary name; the Windows pipe name is unchanged.
 - Scratchpad clipping/padding uses character display widths, including common East Asian/emoji wide ranges and combining marks;
   accented Latin text no longer pulls the right border left. Narrow-width alignment tests include `café résumé` and `界界 wide row`.
-- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (96 tests), including eleven CLI
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (100 tests), including thirteen CLI
   tests. Daemon tests use an injected provider and make no network calls. The descendant timeout test now accepts ESRCH
   as an already-exited child during Linux `/proc` inspection and passed 30/30 repetitions. The timeout kill helper already
   ignores gone-process errors. Daemon error events now keep codes separate from messages, with no duplicate printed code.
   A mock IPC test requires `/cancel` before completion and covers EOF and input errors; status formatting has unit tests.
+  The real-pwsh dropped-future descendant test ran on Linux. Session tests cover 32 active runners, overflow refusal,
+  idle eviction, removal after cancellation, and an idle cancel followed by a successful turn. Recovery tests cover a
+  provider Error before SessionCompleted followed by a successful prompt on a fresh session.
   Whole-workspace Windows cross-Clippy passed with `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0A00`.
   Repository hygiene and its seven verification-meta tests passed. Linux smoke: empty memory inspection exited 0,
   missing-config query returned `CONFIG_NOT_FOUND` and exited 1, Ctrl-C stopped the daemon and removed its socket.
