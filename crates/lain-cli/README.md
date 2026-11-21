@@ -71,8 +71,9 @@ An already-running daemon must be restarted to change this authorization.
 Set `coding_session: true` to attach a compact Rust/TypeScript outline to the
 first model prompt and enable `repo_map` to request a fresh scan. The tool takes no
 path argument; the workspace is the daemon's original working directory. The
-scan skips hidden paths, links, and common build/vendor directories, but does not
-interpret `.gitignore`. Enable this only if the configured provider may receive
+scan resolves paths relative to an opened workspace directory and skips hidden
+paths, symlinks, Windows reparse points, and common build/vendor directories. It
+does not interpret `.gitignore`. Enable this only if the configured provider may receive
 that workspace's file names, signatures, and doc summaries. The outline is
 untrusted source data, not system instructions.
 
