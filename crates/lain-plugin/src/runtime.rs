@@ -47,9 +47,8 @@ impl Runtime {
                 let path = script
                     .path()
                     .join(format!("main.{}", interpreter.extension()));
-                fs::File::create(&path)?.write_all(source)?;
-                let mut command = interpreter_command(*interpreter)?;
-                command.arg(path);
+                write_script(&path, *interpreter, source)?;
+                let command = interpreter_command(*interpreter, &path)?;
                 let result = process(
                     command,
                     workspace,
@@ -63,7 +62,7 @@ impl Runtime {
                 program,
                 args: fixed_args,
             } => {
-                let mut command = Command::new(program);
+                let mut command = clean_command(program);
                 command.args(fixed_args);
                 let result = process(command, workspace, args, TIMEOUT).await?;
                 Ok(json!({"stdout":result.stdout,"stderr":result.stderr}))
@@ -128,7 +127,30 @@ async fn webhook(url: &Url, args: &Value) -> Result<Value, PluginError> {
     Ok(json!({"status":response.status().as_u16(),"body":String::from_utf8_lossy(&bytes)}))
 }
 
-fn interpreter_command(interpreter: ScriptInterpreter) -> Result<Command, PluginError> {
+fn write_script(path: &Path, interpreter: ScriptInterpreter, source: &[u8]) -> io::Result<()> {
+    const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
+    let mut file = fs::File::create(path)?;
+    // Windows PowerShell reads an unmarked script using the local ANSI code page.
+    if matches!(interpreter, ScriptInterpreter::Powershell) && !source.starts_with(UTF8_BOM) {
+        file.write_all(UTF8_BOM)?;
+    }
+    file.write_all(source)
+}
+
+fn clean_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.env_clear();
+    #[cfg(windows)]
+    if let Some(root) = env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
+    command
+}
+
+fn interpreter_command(
+    interpreter: ScriptInterpreter,
+    script: &Path,
+) -> Result<Command, PluginError> {
     let names: &[&str] = match (interpreter, cfg!(windows)) {
         (ScriptInterpreter::Python, false) => &["python3", "python"],
         (ScriptInterpreter::Python, true) => &["python.exe", "python3.exe"],
@@ -149,13 +171,22 @@ fn interpreter_command(interpreter: ScriptInterpreter) -> Result<Command, Plugin
         .ok_or_else(|| {
             PluginError::Execution(format!("{interpreter:?} interpreter not found on PATH"))
         })?;
-    let mut command = Command::new(path);
+    let mut command = clean_command(&path);
     match interpreter {
-        ScriptInterpreter::Python => command.arg("-I"),
-        ScriptInterpreter::Powershell => {
-            command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
-        }
-        ScriptInterpreter::Node => &mut command,
+        ScriptInterpreter::Python => command.arg("-I").arg(script),
+        ScriptInterpreter::Node => command.arg(script),
+        ScriptInterpreter::Powershell => command
+            .env("LAIN_PLUGIN_SCRIPT", script)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                concat!(
+                    "[Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+                    "& $env:LAIN_PLUGIN_SCRIPT; if (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
+                ),
+            ]),
     };
     Ok(command)
 }
@@ -273,15 +304,10 @@ async fn process(
     let input = bounded_json(&input)?;
     command
         .current_dir(workspace)
-        .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(windows)]
-    if let Some(root) = env::var_os("SystemRoot") {
-        command.env("SystemRoot", root);
-    }
     let mut tree = ProcessTree::spawn(&mut command)?;
     let child = &mut tree.child;
     let (mut stdin, stdout, stderr) =
