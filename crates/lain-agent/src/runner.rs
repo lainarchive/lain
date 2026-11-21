@@ -187,10 +187,17 @@ impl AgentRunner {
         // would silently overwrite the earlier conversation.
         if self.state.inputs == 0 {
             let first = format!("{}/input/1", self.state.session_id);
-            let taken = with_store(self.memory.clone(), move |store| {
+            let taken = match with_store(self.memory.clone(), move |store| {
                 store.get(&first).map(|r| r.is_some())
             })
-            .await?;
+            .await
+            {
+                Ok(taken) => taken,
+                Err(error) => {
+                    self.stop(TerminationReason::MemoryFailed, 0);
+                    return Err(error);
+                }
+            };
             if taken {
                 return Err(AgentError::SessionExists(self.state.session_id.clone()));
             }
@@ -362,7 +369,9 @@ impl AgentRunner {
                     },
                     // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
                     Err(reason) => {
-                        let outcome = skipped(&reason);
+                        let outcome = ToolOutcome::Interrupted {
+                            reason: format!("interrupted while running ({reason:?})"),
+                        };
                         halt = Some(reason);
                         outcome
                     }
@@ -381,6 +390,7 @@ impl AgentRunner {
                 ToolOutcome::Succeeded(output) => json!(output),
                 ToolOutcome::Failed { code, message } => json!({"error": message, "code": code}),
                 ToolOutcome::Skipped { reason } => json!({"skipped": reason}),
+                ToolOutcome::Interrupted { reason } => json!({"interrupted": reason}),
             }
             .to_string();
             self.commit(
@@ -1230,10 +1240,10 @@ mod tests {
         let outcome = agent.run("hi").await.unwrap();
         assert_eq!(outcome.status, AgentStatus::Terminated(WALL_TIME));
         let outcomes = outcomes(&drain(&mut rx));
-        assert_eq!(outcomes.len(), 2);
-        assert!(outcomes
-            .iter()
-            .all(|o| matches!(o, ToolOutcome::Skipped { .. })));
+        assert!(matches!(
+            outcomes.as_slice(),
+            [ToolOutcome::Interrupted { .. }, ToolOutcome::Skipped { .. }]
+        ));
         let messages = &agent.state().messages;
         assert!(messages.iter().rev().take(2).all(|m| m.role == Role::Tool));
     }
