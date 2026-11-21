@@ -19,7 +19,7 @@ use lain_agent::{
 use lain_core::tools::BashTool;
 #[cfg(windows)]
 use lain_core::tools::PowerShellTool;
-use lain_core::tools::{MemoryReadTool, ToolRegistry};
+use lain_core::tools::{MemoryReadTool, RepoMapTool, ToolRegistry};
 use lain_ipc::{Command, CommandHandler, Event, EventSink, PROTOCOL_VERSION};
 use lain_memory::MemoryStore;
 use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
@@ -49,7 +49,7 @@ impl ConfigFactory {
         }
     }
 
-    fn tools(&self, memory: SharedMemory) -> Result<ToolRegistry, Error> {
+    fn tools(&self, memory: SharedMemory, coding_session: bool) -> Result<ToolRegistry, Error> {
         let mut tools = ToolRegistry::new();
         // I require operator opt-in for shell execution because ADR-004 makes trusted components authorize capabilities.
         if self.allow_shell {
@@ -63,6 +63,9 @@ impl ConfigFactory {
             tools.register(Arc::new(PowerShellTool::new(&self.working_directory)))?;
         }
         tools.register(Arc::new(MemoryReadTool::new(memory)))?;
+        if coding_session {
+            tools.register(Arc::new(RepoMapTool::new(&self.working_directory)))?;
+        }
         Ok(tools)
     }
 }
@@ -82,7 +85,7 @@ impl RunnerFactory for ConfigFactory {
         let config: AgentConfig = serde_json::from_slice(&bytes)
             .map_err(|error| Error::failure("CONFIG_INVALID", error))?;
         config.validate()?;
-        let tools = self.tools(memory.clone())?;
+        let tools = self.tools(memory.clone(), config.coding_session)?;
         Ok(AgentRunner::from_config(
             config,
             Arc::new(tools),
@@ -420,15 +423,29 @@ mod tests {
     fn shell_tools_require_operator_opt_in() -> Result<(), Error> {
         let memory = Arc::new(Mutex::new(MemoryStore::open(":memory:")?));
         let mut factory = ConfigFactory::new("unused.json", ".");
-        let definitions = factory.tools(memory.clone())?.definitions();
+        let definitions = factory.tools(memory.clone(), false)?.definitions();
         assert_eq!(definitions.len(), 1);
         assert!(definitions.iter().all(|tool| tool.name == "memory_read"));
         factory.allow_shell = true;
-        let definitions = factory.tools(memory)?.definitions();
+        let definitions = factory.tools(memory, false)?.definitions();
         assert_eq!(definitions.len(), 2);
         assert!(definitions
             .iter()
             .any(|tool| matches!(tool.name.as_str(), "bash" | "powershell")));
+        Ok(())
+    }
+
+    #[test]
+    fn coding_mode_registers_repo_map_without_granting_shell_access() -> Result<(), Error> {
+        let memory = Arc::new(Mutex::new(MemoryStore::open(":memory:")?));
+        let factory = ConfigFactory::new("unused.json", ".");
+        let names: Vec<_> = factory
+            .tools(memory, true)?
+            .definitions()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(names, ["memory_read", "repo_map"]);
         Ok(())
     }
 

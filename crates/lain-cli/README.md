@@ -48,6 +48,8 @@ or download a model:
   "max_consecutive_tool_errors": 3,
   "memory_context_limit": 5,
   "tool_call_mode": "native",
+  "coding_session": false,
+  "context_window_tokens": 16384,
   "budget": {
     "max_total_tokens": null,
     "max_completion_tokens": null,
@@ -62,10 +64,24 @@ provider or credential defaults. Keep keys in the environment variable named by
 `api_key_env`, not in JSON. Tools are Bash on Unix or PowerShell on Windows, plus
 trusted-memory search; the runner also provides its scratchpad tool.
 
-Shell tools are **disabled by default**: only trusted-memory search is registered
-by the factory. Set `LAIN_ALLOW_SHELL=1` in the daemon's environment to explicitly
+Shell tools are **disabled by default**. Set `LAIN_ALLOW_SHELL=1` in the daemon's environment to explicitly
 authorize Bash (Unix) or PowerShell (Windows). Other values do not grant access.
 An already-running daemon must be restarted to change this authorization.
+
+Set `coding_session: true` to attach a compact Rust/TypeScript outline to the
+first model prompt and enable `repo_map` to request a fresh scan. The tool takes no
+path argument; the workspace is the daemon's original working directory. The
+scan skips hidden paths, links, and common build/vendor directories, but does not
+interpret `.gitignore`. Enable this only if the configured provider may receive
+that workspace's file names, signatures, and doc summaries. The outline is
+untrusted source data, not system instructions.
+
+Set `context_window_tokens` to the model's window size. Lain reserves space for
+tool schemas and the response (by default one quarter of the window, up to 4,096
+tokens). It keeps instructions, the scratchpad, and procedural rules intact;
+older tool outputs and the repo outline can be trimmed. If required context
+cannot fit, the turn stops before calling the provider. Token counts are
+estimates for OpenAI-compatible servers with non-OpenAI tokenizers.
 
 On Windows the client uses the system Windows PowerShell `Start-Process` launcher
 without redirection to start a hidden daemon. Null stdio on a direct Rust spawn
