@@ -70,4 +70,7 @@ pub enum AgentEvent {
         turn: u32,
         reason: TerminationReason,
     },
+    ReflectionFailed {
+        code: String,
+    },
 }
