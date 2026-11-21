@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use crate::provider::{CompletionResponse, Message, Role, ToolDefinition};
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ToolError {
     #[error("duplicate tool: {0}")]
     Duplicate(String),
@@ -28,6 +29,19 @@ pub enum ToolError {
     Execution(String),
     #[error("tool timed out")]
     Timeout,
+}
+
+impl ToolError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Duplicate(_) => "TOOL_DUPLICATE",
+            Self::Unknown(_) => "TOOL_NOT_FOUND",
+            Self::Schema(_) => "TOOL_SCHEMA_INVALID",
+            Self::Arguments(_) => "TOOL_ARGUMENTS_INVALID",
+            Self::Execution(_) => "TOOL_EXECUTION_FAILED",
+            Self::Timeout => "TOOL_TIMEOUT",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,6 +167,7 @@ async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io:
     let mut text = String::from_utf8_lossy(&stored).into_owned();
     while text.len() > cap {
         text.pop();
+        truncated = true;
     }
     if truncated {
         text.push_str("\n[truncated]");
@@ -259,8 +274,9 @@ impl Tool for MemoryReadTool {
         let limit = args
             .get("limit")
             .map(|v| {
-                v.as_i64()
-                    .filter(|v| (1..=100).contains(v))
+                v.as_f64()
+                    .filter(|v| v.fract() == 0.0 && (1.0..=100.0).contains(v))
+                    .map(|v| v as i64)
                     .ok_or_else(|| ToolError::Arguments("limit must be 1..=100".into()))
             })
             .transpose()?
