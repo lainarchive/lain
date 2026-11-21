@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use crate::provider::{CompletionResponse, Message, Role, ToolDefinition};
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ToolError {
     #[error("duplicate tool: {0}")]
     Duplicate(String),
@@ -28,6 +29,19 @@ pub enum ToolError {
     Execution(String),
     #[error("tool timed out")]
     Timeout,
+}
+
+impl ToolError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Duplicate(_) => "TOOL_DUPLICATE",
+            Self::Unknown(_) => "TOOL_NOT_FOUND",
+            Self::Schema(_) => "TOOL_SCHEMA_INVALID",
+            Self::Arguments(_) => "TOOL_ARGUMENTS_INVALID",
+            Self::Execution(_) => "TOOL_EXECUTION_FAILED",
+            Self::Timeout => "TOOL_TIMEOUT",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
