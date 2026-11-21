@@ -338,6 +338,22 @@ async fn powershell_concurrent_capture_and_timeout() -> Result<(), Box<dyn std::
 }
 
 #[cfg(target_os = "linux")]
+fn process_disappeared(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(3)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn vanished_process_errors() {
+    for code in [2, 3] {
+        assert!(process_disappeared(&std::io::Error::from_raw_os_error(
+            code
+        )));
+    }
+    assert!(!process_disappeared(&std::io::Error::from_raw_os_error(13)));
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -367,7 +383,7 @@ async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error
                     break;
                 }
                 Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) if process_disappeared(&error) => break,
                 Err(error) => return Err(error),
             }
         }
