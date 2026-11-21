@@ -1214,8 +1214,8 @@ mod tests {
         assert!(outcomes
             .iter()
             .all(|o| matches!(o, ToolOutcome::Skipped { .. })));
-        let tail = &agent.state().messages[agent.state().messages.len() - 2..];
-        assert!(tail.iter().all(|m| m.role == Role::Tool));
+        let messages = &agent.state().messages;
+        assert!(messages.iter().rev().take(2).all(|m| m.role == Role::Tool));
     }
 
     #[tokio::test]
