@@ -316,15 +316,18 @@ fn insert(db: &Connection, m: &MemoryRecord) -> Result<()> {
             m.content_hash
         ],
     )?;
-    index(db, m)
+    insert_fts(db, m)
 }
-fn index(db: &Connection, m: &MemoryRecord) -> Result<()> {
-    db.execute("DELETE FROM memories_fts WHERE id=?", [&m.id])?;
+fn insert_fts(db: &Connection, m: &MemoryRecord) -> Result<()> {
     db.execute(
         "INSERT INTO memories_fts VALUES (?,?,?)",
         params![m.id, m.title, m.content],
     )?;
     Ok(())
+}
+fn index(db: &Connection, m: &MemoryRecord) -> Result<()> {
+    db.execute("DELETE FROM memories_fts WHERE id=?", [&m.id])?;
+    insert_fts(db, m)
 }
 
 #[derive(Debug)]
@@ -608,6 +611,34 @@ mod tests {
         let mut i = input("id");
         i.title.clear();
         assert!(prepare(&db, i).is_err());
+    }
+
+    #[test]
+    fn fresh_insert_and_update_keep_one_fts_row() {
+        let mut store = MemoryStore::open(":memory:").unwrap();
+        store.remember(input("id")).unwrap();
+        let count = store
+            .db()
+            .unwrap()
+            .query_row("SELECT count(*) FROM memories_fts WHERE id='id'", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+        let mut updated = input("id");
+        updated.content = "updated content".into();
+        store.remember(updated).unwrap();
+        let (count, content) = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT count(*), content FROM memories_fts WHERE id='id'",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(content, "updated content");
     }
 
     #[test]
