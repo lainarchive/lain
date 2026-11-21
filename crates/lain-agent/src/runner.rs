@@ -90,7 +90,6 @@ pub struct AgentRunner {
     events: broadcast::Sender<AgentEvent>,
     started: Option<Instant>,
     procedural_rules: Vec<String>,
-    repo_map: Option<String>,
     scratchpad_notice: Option<String>,
     feedback: Option<UserFeedback>,
 }
@@ -168,7 +167,6 @@ impl AgentRunner {
             started: None,
             cancel: Canceller::default(),
             procedural_rules: Vec::new(),
-            repo_map: None,
             scratchpad_notice: None,
             feedback: None,
         })
@@ -358,6 +356,7 @@ impl AgentRunner {
             .await?;
         self.state.inputs = input_number;
         self.state.messages.push(Message::text(Role::User, input));
+        let mut initial_repo_map = None;
         if input_number == 1
             && self.config.coding_session
             && self
@@ -369,7 +368,7 @@ impl AgentRunner {
                 .bounded(self.tools.dispatch(REPO_MAP_TOOL_NAME, json!({})))
                 .await
             {
-                Ok(Ok(outline)) => self.repo_map = Some(outline.content),
+                Ok(Ok(outline)) => initial_repo_map = Some(outline.content),
                 Ok(Err(_)) => {} // The outline is optional; a direct tool call can report the scan error.
                 Err(reason) => return Ok(self.stop(reason, 0)),
             }
@@ -385,7 +384,7 @@ impl AgentRunner {
                 session_id: self.state.session_id.clone(),
                 turn,
             });
-            let Ok(request) = self.request() else {
+            let Ok(request) = self.request(initial_repo_map.take().as_deref()) else {
                 return Ok(self.stop(
                     TerminationReason::BudgetExhausted {
                         budget: BudgetKind::ContextWindow,
@@ -490,7 +489,10 @@ impl AgentRunner {
         Ok(self.stop(TerminationReason::MaxTurns, self.config.max_turns))
     }
 
-    fn request(&mut self) -> Result<CompletionRequest, lain_context::ContextOverflow> {
+    fn request(
+        &mut self,
+        initial_repo_map: Option<&str>,
+    ) -> Result<CompletionRequest, lain_context::ContextOverflow> {
         let mut prefix = Vec::new();
         let has_system_prompt = !self.config.system_prompt.trim().is_empty();
         if has_system_prompt {
@@ -533,7 +535,7 @@ impl AgentRunner {
                 .get(usize::from(has_system_prompt)..)
                 .unwrap_or_default(),
             prefix.join("\n\n"),
-            self.repo_map.as_deref(),
+            initial_repo_map,
             self.config.context_window_tokens,
             hermes,
         )?;
@@ -1524,6 +1526,35 @@ mod tests {
                 Some("Where does startup begin?")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_repo_map_refresh_reaches_the_provider_without_the_startup_snapshot() {
+        use lain_core::tools::RepoMapTool;
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("app.rs");
+        std::fs::write(&source, "pub fn original() {}").unwrap();
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(Arc::new(RepoMapTool::new(directory.path())))
+            .unwrap();
+        let mut config = config();
+        config.coding_session = true;
+        let mut refresh = calls(None, &[REPO_MAP_TOOL_NAME]).unwrap();
+        refresh.message.tool_calls.first_mut().unwrap().arguments = json!({});
+        let provider = ScriptedProvider::new(vec![text("Seen"), Ok(refresh), text("Refreshed")]);
+        let mut agent =
+            AgentRunner::new(config, provider.clone(), Arc::new(tools), memory(), "s1").unwrap();
+
+        agent.run("Inspect the outline").await.unwrap();
+        std::fs::write(&source, "pub fn renamed() {}").unwrap();
+        agent.run("Refresh the outline").await.unwrap();
+        let requests = provider.requests();
+        assert!(serde_json::to_string(requests.first().unwrap()).unwrap().contains("fn original()"));
+        let follow_ups = serde_json::to_string(requests.get(1..).unwrap()).unwrap();
+        assert!(!follow_ups.contains("fn original()"));
+        assert!(follow_ups.contains("fn renamed()"));
     }
 
     #[tokio::test]
