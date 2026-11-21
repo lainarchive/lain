@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
-use lain_core::provider::{ModelProvider, OpenAiCompatibleProvider};
+use lain_core::{
+    plugin::manifest::Capability,
+    provider::{ModelProvider, OpenAiCompatibleProvider},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::AgentError;
@@ -9,6 +12,10 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 16_384;
 
 fn default_context_window() -> usize {
     DEFAULT_CONTEXT_WINDOW_TOKENS
+}
+
+fn default_creator_mode() -> bool {
+    cfg!(debug_assertions)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -81,6 +88,10 @@ pub struct AgentConfig {
     /// Opt in to sending a workspace's source outline to this session's provider.
     #[serde(default)]
     pub coding_session: bool,
+    #[serde(default = "default_creator_mode")]
+    pub allow_creator_mode: bool,
+    #[serde(default)]
+    pub plugin_permissions: BTreeSet<Capability>,
     pub budget: BudgetLimits,
 }
 
@@ -97,6 +108,8 @@ impl AgentConfig {
             tool_call_mode: ToolCallMode::Native,
             context_window_tokens: default_context_window(),
             coding_session: false,
+            allow_creator_mode: default_creator_mode(),
+            plugin_permissions: BTreeSet::new(),
             budget: BudgetLimits::default(),
         }
     }

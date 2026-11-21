@@ -1,5 +1,17 @@
 # Current Project State
 
+## Rust dynamic plugin increment
+
+- The daemon loads local JSON/YAML manifests per session with explicit operator capability grants.
+  Script and CLI backends run with host permissions and require all four grants; webhooks require
+  network access. The daemon is not an OS sandbox.
+- Creator Mode tests script tool arguments and execution before publishing the script and manifest.
+  The active agent advertises the new schema on its next model request. Configuration and the
+  script protocol are documented in [the CLI README](../../crates/lain-cli/README.md#dynamic-plugins-and-creator-mode).
+- Linux workspace tests (126) and Clippy passed. The Node verification gate reproduced the
+  baseline's 12 Node test failures and its fallback secret-scan failure without gitleaks.
+  Native Windows and Node/PowerShell script execution were not exercised.
+
 ## Rust repo context increment
 
 - `lain-context` builds bounded Tree-sitter outlines for Rust, TypeScript, and TSX and measures prompt candidates
