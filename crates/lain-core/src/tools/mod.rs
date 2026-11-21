@@ -16,6 +16,10 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::provider::{CompletionResponse, Message, Role, ToolDefinition};
 
+mod repo_map;
+
+pub use repo_map::{REPO_MAP_TOOL_NAME, RepoMapTool};
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ToolError {

@@ -1,6 +1,7 @@
 pub mod config;
 pub mod event;
 mod hermes;
+mod prompt;
 mod reflection;
 pub mod runner;
 pub mod state;

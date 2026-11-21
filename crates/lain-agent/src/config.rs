@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::AgentError;
 
+const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 16_384;
+
+fn default_context_window() -> usize {
+    DEFAULT_CONTEXT_WINDOW_TOKENS
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -69,6 +75,12 @@ pub struct AgentConfig {
     pub memory_context_limit: i64,
     #[serde(default)]
     pub tool_call_mode: ToolCallMode,
+    /// Model context window, including room reserved for the generated response.
+    #[serde(default = "default_context_window")]
+    pub context_window_tokens: usize,
+    /// Opt in to sending a workspace's source outline to this session's provider.
+    #[serde(default)]
+    pub coding_session: bool,
     pub budget: BudgetLimits,
 }
 
@@ -83,6 +95,8 @@ impl AgentConfig {
             max_consecutive_tool_errors: 3,
             memory_context_limit: 5,
             tool_call_mode: ToolCallMode::Native,
+            context_window_tokens: default_context_window(),
+            coding_session: false,
             budget: BudgetLimits::default(),
         }
     }
@@ -101,11 +115,29 @@ impl AgentConfig {
         if !(0..=100).contains(&self.memory_context_limit) {
             return fail("memory_context_limit must be 0..=100");
         }
+        if self.context_window_tokens < 4 {
+            return fail("context_window_tokens must be at least 4");
+        }
+        if self
+            .budget
+            .max_completion_tokens
+            .is_some_and(|max| max == 0 || max as usize >= self.context_window_tokens)
+        {
+            return fail(
+                "max_completion_tokens must be positive and smaller than context_window_tokens",
+            );
+        }
         if let Some(t) = self.temperature {
             if !(0.0..=2.0).contains(&t) {
                 return fail("temperature must be 0.0..=2.0");
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn completion_token_limit(&self) -> u32 {
+        self.budget
+            .max_completion_tokens
+            .unwrap_or_else(|| (self.context_window_tokens / 4).min(4_096) as u32)
     }
 }
