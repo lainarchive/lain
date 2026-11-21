@@ -27,7 +27,10 @@ export const ALLOWED_RUNTIME_DEPENDENCIES = /** @type {string[]} */ (['@opentui/
 /** The complete list of development dependencies this project permits. */
 export const ALLOWED_DEV_DEPENDENCIES = ['typescript', '@types/node'];
 
-export const ALLOWED_RUST_DEPENDENCIES = ['rusqlite', 'thiserror'];
+export const ALLOWED_RUST_DEPENDENCIES = [
+  'async-stream', 'async-trait', 'futures', 'jsonschema', 'lain-memory',
+  'reqwest', 'rusqlite', 'serde', 'serde_json', 'thiserror', 'tokio',
+];
 export const ALLOWED_RUST_DEV_DEPENDENCIES = ['tempfile'];
 
 /**
@@ -90,7 +93,8 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
         'unexpected dependency not detected',
       ],
       ['empty runtime deps', unexpectedDependencies([], []).length === 0, 'false positive on empty set'],
-      ['rust dependency rule', unexpectedDependencies(['rusqlite', 'tokio'], ALLOWED_RUST_DEPENDENCIES).length === 1, 'unapproved Rust dependency missed'],
+      ['rust dependency rule', unexpectedDependencies(['rusqlite', 'unapproved-crate'], ALLOWED_RUST_DEPENDENCIES).length === 1, 'unapproved Rust dependency missed'],
+      ['core dependency rule', unexpectedDependencies(['tokio', 'lain-memory', 'jsonschema'], ALLOWED_RUST_DEPENDENCIES).length === 0, 'approved Core dependency rejected'],
       ['rust dev dependency rule', unexpectedDependencies(['tempfile', 'anyhow'], ALLOWED_RUST_DEV_DEPENDENCIES).length === 1, 'unapproved Rust dev dependency missed'],
     ];
     const failed = checks.filter(([, ok]) => !ok);
@@ -148,6 +152,8 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
   // The lockfile is the reproducibility artifact; its absence is a failure.
   const cargo = spawnSync('cargo', ['metadata', '--format-version=1', '--locked'], {
     cwd: root, encoding: 'utf8', windowsHide: true, shell: false,
+    // I keep the full graph for lock validation; lain-core exceeds Node's 1 MiB default.
+    maxBuffer: 16 * 1024 * 1024,
   });
   if (cargo.status !== 0) {
     result.fail('Cargo workspace metadata unavailable', { message: cargo.error?.message ?? cargo.stderr.trim() });
