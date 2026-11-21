@@ -1,10 +1,12 @@
 use std::{
     collections::HashSet,
+    future::Future,
+    pin::pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use lain_core::{
@@ -13,7 +15,7 @@ use lain_core::{
 };
 use lain_memory::{MemoryInput, MemoryRecord, MemoryStore, SearchOptions, StoreError};
 use serde_json::json;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 
 use crate::{
     AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind, TerminationReason,
@@ -34,7 +36,40 @@ pub struct RunOutcome {
     pub turns: u32,
 }
 
+/// `run` holds the runner mutably for its whole duration, so cancelling an in-flight run needs a handle taken before.
+#[derive(Debug, Clone, Default)]
+pub struct Canceller(Arc<CancelSignal>);
+
+#[derive(Debug, Default)]
+struct CancelSignal {
+    flag: AtomicBool,
+    notify: Notify,
+}
+
+impl Canceller {
+    /// Interrupts a pending provider call or tool at once; the run returns `Terminated(Cancelled)`.
+    pub fn cancel(&self) {
+        self.0.flag.store(true, Ordering::SeqCst);
+        self.0.notify.notify_waiters();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.flag.load(Ordering::SeqCst)
+    }
+
+    async fn cancelled(&self) {
+        let mut notified = pin!(self.0.notify.notified());
+        // Registered before the flag check, so a cancel landing between the two still wakes this waiter.
+        notified.as_mut().enable();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
+    }
+}
+
 pub struct AgentRunner {
+    cancel: Canceller,
     config: AgentConfig,
     provider: Arc<dyn ModelProvider>,
     tools: Arc<ToolRegistry>,
@@ -95,6 +130,7 @@ impl AgentRunner {
             state: AgentState::new(session_id),
             events,
             started: None,
+            cancel: Canceller::default(),
         })
     }
 
@@ -120,7 +156,12 @@ impl AgentRunner {
         &self.config
     }
 
+    pub fn canceller(&self) -> Canceller {
+        self.cancel.clone()
+    }
+
     pub fn terminate(&mut self) {
+        self.cancel.cancel();
         if !matches!(self.state.status, AgentStatus::Terminated(_)) {
             self.stop(TerminationReason::Cancelled, 0);
         }
@@ -131,6 +172,12 @@ impl AgentRunner {
     pub async fn run(&mut self, input: impl Into<String>) -> Result<RunOutcome, AgentError> {
         if let AgentStatus::Terminated(reason) = &self.state.status {
             return Err(AgentError::Terminated(reason.clone()));
+        }
+        // Still `Running` means an earlier run's future was dropped mid-turn: its transcript may hold tool calls
+        // with no answers, which a provider rejects, so the session cannot continue.
+        if self.state.status == AgentStatus::Running {
+            self.stop(TerminationReason::Cancelled, 0);
+            return Err(AgentError::Terminated(TerminationReason::Cancelled));
         }
         let input = input.into();
         if input.trim().is_empty() {
@@ -180,8 +227,8 @@ impl AgentRunner {
         self.state.messages.push(Message::text(Role::User, input));
 
         for run_turn in 1..=self.config.max_turns {
-            if let Some(budget) = self.spent_budget() {
-                return Ok(self.stop(TerminationReason::BudgetExhausted { budget }, run_turn - 1));
+            if let Some(reason) = self.interrupted() {
+                return Ok(self.stop(reason, run_turn - 1));
             }
             self.state.turn_count += 1;
             let turn = self.state.turn_count;
@@ -189,16 +236,17 @@ impl AgentRunner {
                 session_id: self.state.session_id.clone(),
                 turn,
             });
-            let response = self
-                .provider
-                .complete(CompletionRequest {
-                    model: self.config.model.clone(),
-                    messages: self.state.messages.clone(),
-                    tools: self.tools.definitions(),
-                    temperature: self.config.temperature,
-                    max_tokens: self.config.budget.max_completion_tokens,
-                })
-                .await?;
+            let request = CompletionRequest {
+                model: self.config.model.clone(),
+                messages: self.state.messages.clone(),
+                tools: self.tools.definitions(),
+                temperature: self.config.temperature,
+                max_tokens: self.config.budget.max_completion_tokens,
+            };
+            let response = match self.bounded(self.provider.complete(request)).await {
+                Ok(response) => response?,
+                Err(reason) => return Ok(self.stop(reason, run_turn)),
+            };
             if let Some(usage) = &response.usage {
                 self.state.tokens_used = self.state.tokens_used.saturating_add(usage.total_tokens);
             }
@@ -259,6 +307,10 @@ impl AgentRunner {
         for (index, call) in calls.iter().enumerate() {
             let outcome = if let Some(reason) = &halt {
                 skipped(reason)
+            } else if let Some(reason) = self.interrupted() {
+                let outcome = skipped(&reason);
+                halt = Some(reason);
+                outcome
             } else if self
                 .config
                 .budget
@@ -279,16 +331,21 @@ impl AgentRunner {
                     arguments: call.arguments.clone(),
                 });
                 self.state.tool_calls += 1;
-                let outcome = match self
-                    .tools
-                    .dispatch(&call.name, call.arguments.clone())
-                    .await
-                {
-                    Ok(output) => ToolOutcome::Succeeded(output),
-                    Err(error) => ToolOutcome::Failed {
+                let dispatched = self
+                    .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
+                    .await;
+                let outcome = match dispatched {
+                    Ok(Ok(output)) => ToolOutcome::Succeeded(output),
+                    Ok(Err(error)) => ToolOutcome::Failed {
                         code: error.code().into(),
                         message: error.to_string(),
                     },
+                    // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
+                    Err(reason) => {
+                        let outcome = skipped(&reason);
+                        halt = Some(reason);
+                        outcome
+                    }
                 };
                 if outcome.is_error() {
                     self.state.consecutive_tool_errors += 1;
@@ -330,22 +387,45 @@ impl AgentRunner {
         Ok(halt)
     }
 
-    fn spent_budget(&self) -> Option<BudgetKind> {
-        let budget = &self.config.budget;
-        if budget
+    fn interrupted(&self) -> Option<TerminationReason> {
+        if self.cancel.is_cancelled() {
+            return Some(TerminationReason::Cancelled);
+        }
+        let budget = if self
+            .config
+            .budget
             .max_total_tokens
             .is_some_and(|max| self.state.tokens_used >= max)
         {
-            return Some(BudgetKind::TotalTokens);
+            BudgetKind::TotalTokens
+        } else if self.deadline().is_some_and(|d| Instant::now() >= d) {
+            BudgetKind::WallTime
+        } else {
+            return None;
+        };
+        Some(TerminationReason::BudgetExhausted { budget })
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        let max = self.config.budget.max_wall_time_ms?;
+        Some(self.started? + Duration::from_millis(max))
+    }
+
+    /// Races provider and tool work against cancellation and the wall-time deadline, so neither can outlive them.
+    async fn bounded<T>(&self, work: impl Future<Output = T>) -> Result<T, TerminationReason> {
+        let deadline = self.deadline();
+        let expired = async {
+            match deadline {
+                Some(at) => tokio::time::sleep_until(at.into()).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => Err(TerminationReason::Cancelled),
+            () = expired => Err(TerminationReason::BudgetExhausted { budget: BudgetKind::WallTime }),
+            output = work => Ok(output),
         }
-        let elapsed = self.started.map_or(0, |s| s.elapsed().as_millis());
-        if budget
-            .max_wall_time_ms
-            .is_some_and(|max| elapsed >= u128::from(max))
-        {
-            return Some(BudgetKind::WallTime);
-        }
-        None
     }
 
     fn stop(&mut self, reason: TerminationReason, turns: u32) -> RunOutcome {
@@ -1061,5 +1141,106 @@ mod tests {
         assert_eq!(clip_utf16("a😀b", 2), "a");
         assert_eq!(clip_utf16("a😀b", 3), "a😀");
         assert_eq!(clip_utf16("abc", 10), "abc");
+    }
+
+    #[derive(Debug)]
+    struct Hang;
+
+    #[async_trait]
+    impl ModelProvider for Hang {
+        async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, CoreError> {
+            std::future::pending().await
+        }
+        async fn stream(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<BoxStream<'static, Result<Token, CoreError>>, CoreError> {
+            std::future::pending().await
+        }
+    }
+
+    #[async_trait]
+    impl Tool for Hang {
+        fn name(&self) -> &str {
+            "hang"
+        }
+        fn description(&self) -> &str {
+            "never returns"
+        }
+        fn parameters_schema(&self) -> Value {
+            json!({"type":"object"})
+        }
+        async fn execute(&self, _: Value) -> Result<ToolOutput, ToolError> {
+            std::future::pending().await
+        }
+    }
+
+    fn hung_runner(config: AgentConfig, provider: Arc<dyn ModelProvider>) -> AgentRunner {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Hang)).unwrap();
+        registry
+            .register(Arc::new(StubTool {
+                name: "ok",
+                result: Ok(None),
+            }))
+            .unwrap();
+        AgentRunner::new(config, provider, Arc::new(registry), memory(), "s1").unwrap()
+    }
+
+    const WALL_TIME: TerminationReason = TerminationReason::BudgetExhausted {
+        budget: BudgetKind::WallTime,
+    };
+
+    #[tokio::test]
+    async fn wall_time_interrupts_a_hung_provider() {
+        let mut config = config();
+        config.budget.max_wall_time_ms = Some(50);
+        let mut agent = hung_runner(config, Arc::new(Hang));
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::Terminated(WALL_TIME));
+    }
+
+    #[tokio::test]
+    async fn wall_time_interrupts_a_hung_tool_and_skips_the_rest() {
+        let mut config = config();
+        config.budget.max_wall_time_ms = Some(50);
+        let provider = ScriptedProvider::new(vec![calls(None, &["hang", "ok"])]);
+        let mut agent = hung_runner(config, provider);
+        let mut rx = agent.subscribe();
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::Terminated(WALL_TIME));
+        let outcomes = outcomes(&drain(&mut rx));
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes
+            .iter()
+            .all(|o| matches!(o, ToolOutcome::Skipped { .. })));
+        let tail = &agent.state().messages[agent.state().messages.len() - 2..];
+        assert!(tail.iter().all(|m| m.role == Role::Tool));
+    }
+
+    #[tokio::test]
+    async fn canceller_interrupts_an_in_flight_run() {
+        let mut agent = hung_runner(config(), Arc::new(Hang));
+        let canceller = agent.canceller();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            canceller.cancel();
+        });
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_run_cannot_be_resumed() {
+        let mut agent = hung_runner(config(), Arc::new(Hang));
+        let dropped = tokio::time::timeout(Duration::from_millis(20), agent.run("hi")).await;
+        assert!(dropped.is_err());
+        assert!(matches!(
+            agent.run("again").await,
+            Err(AgentError::Terminated(TerminationReason::Cancelled))
+        ));
     }
 }
