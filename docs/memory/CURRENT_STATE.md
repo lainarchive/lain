@@ -1,5 +1,44 @@
 # Current Project State
 
+## Rust Windows IPC / CLI increment
+
+- On `feat/windows-ipc-cli`, `lain-ipc` provides versioned bounded IPC over Windows named pipes or Unix sockets;
+  `lain-core` adds bounded PowerShell execution. The new `crates/lain-cli` binary provides daemon, interactive start,
+  query, and memory inspection with configured `lain-agent` runners, cancellation, reflection, and TTY/plain rendering.
+- The daemon reads `LAIN_CONFIG` / `--config` (default `lain.json`) and `LAIN_MEMORY_DB` (default `.lain/memory.db`).
+  No provider is called until a configured session receives input. The README contains the explicit local-provider example.
+  `lain-memory/src/agent.rs` adds bounded recent transcript/rule inspection without promoting untrusted episodes.
+- Interactive turns now select stdin alongside IPC events: `/cancel` sends immediately while a turn is running;
+  other in-flight input is ignored. Status and termination messages render readable labels instead of raw JSON.
+- Shell execution now requires the operator's `LAIN_ALLOW_SHELL=1` opt-in (ADR-004); the default factory registers only
+  memory search. PowerShell execution has a drop guard that kills its process tree on cancellation as well as timeout.
+  Turn errors select a fresh session. The daemon removes terminated sessions, caps live sessions at 32 with oldest-idle
+  eviction, refuses overflow when all are running, and leaves idle sessions' cancellation flags untouched.
+  Unix default sockets now use `XDG_RUNTIME_DIR` or a user-scoped temporary name; the Windows pipe name is unchanged.
+- Scratchpad clipping/padding uses character display widths, including common East Asian/emoji wide ranges and combining marks;
+  accented Latin text no longer pulls the right border left. Narrow-width alignment tests include `café résumé` and `界界 wide row`.
+- Windows launcher correction: native testing showed that null stdio still allowed other inheritable client pipe handles
+  into a directly spawned daemon. Windows now uses system PowerShell `Start-Process` without redirection, safely quoted
+  arguments and a UTF-16LE encoded script; successful launcher exit does not end the existing Ping/backoff readiness wait.
+  Unix spawning is unchanged. `tests/windows_spawn.rs` covers EOF while the daemon remains alive and requires native execution.
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (105 tests), including eighteen CLI
+  tests. Daemon tests use an injected provider and make no network calls. The descendant timeout test now accepts ESRCH
+  as an already-exited child during Linux `/proc` inspection and passed 30/30 repetitions. The timeout kill helper already
+  ignores gone-process errors. Daemon error events now keep codes separate from messages, with no duplicate printed code.
+  A mock IPC test requires `/cancel` before completion and covers EOF and input errors; status formatting has unit tests.
+  The real-pwsh dropped-future descendant test ran on Linux. Session tests cover 32 active runners, overflow refusal,
+  idle eviction, removal after cancellation, and an idle cancel followed by a successful turn. Recovery tests cover a
+  provider Error before SessionCompleted followed by a successful prompt on a fresh session.
+  PowerShell working-directory assertions canonicalize both paths to handle Windows short/long names. The shared daemon
+  spawn path already detached all three streams; a Linux subprocess regression now proves `start`, `query`, and memory
+  inspection reach captured-output EOF while their spawned daemon still responds to Ping. Native Windows recheck is pending.
+  Whole-workspace Windows cross-Clippy passed with `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0A00`.
+  Repository hygiene and its seven verification-meta tests passed. Linux smoke: empty memory inspection exited 0,
+  missing-config query returned `CONFIG_NOT_FOUND` and exited 1, Ctrl-C stopped the daemon and removed its socket.
+- Native Windows execution and interactive terminal appearance remain unverified. Next: Windows runtime checks for
+  named-pipe startup, detached console hiding, PowerShell cancellation, and interactive rendering. This increment does
+  not change accepted architecture decisions or the earlier Node containment guarantees; Lain is not a sandbox.
+
 **Record status:** Implementation record, verified 2026-11-08. Supersedes the planning baseline of 2026-11-05.
 **Repository revision inspected:** `d12fda0086b88ed3f6ee12cc9caee1e93c7f38d5` at the start of the V-1 session; V-1 itself is
 `2b90c9b5416a77992fa8f62a8be0c04f7a86fe90` (`feat: run one authorized task end to end without a model`), followed by
