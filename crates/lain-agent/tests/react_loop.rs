@@ -13,6 +13,7 @@ mod tests {
         ToolOutcome, UserFeedback,
     };
     use lain_core::{
+        plugin::{manifest::HOST_PROCESS_PERMISSIONS, PluginManager},
         provider::{
             CompletionRequest, CompletionResponse, Message, ModelProvider, Role, Token, ToolCall,
         },
@@ -91,6 +92,116 @@ mod tests {
         );
         config.system_prompt = "Use tools, then answer.".into();
         config
+    }
+
+    #[tokio::test]
+    async fn creator_tests_then_registers_a_tool_in_the_running_agent(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if !["python3", "python"].iter().any(|name| {
+            std::process::Command::new(name)
+                .arg("-I")
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        }) {
+            return Ok(());
+        }
+        let workspace = tempfile::tempdir()?;
+        let store = Arc::new(Mutex::new(MemoryStore::open(":memory:")?));
+        let registry = Arc::new(ToolRegistry::new());
+        let manager = PluginManager::new(
+            workspace.path(),
+            HOST_PROCESS_PERMISSIONS.into_iter().collect(),
+        );
+        registry.register_creator_tools(manager.clone())?;
+        let source = r#"
+import json, sys
+request = json.load(sys.stdin)
+print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*request["params"]["number"]}}))
+"#;
+        let script_args = |source| {
+            json!({
+                "name":"double_number","description":"Double a number",
+                "parameters":{"type":"object","properties":{"number":{"type":"integer"}},"required":["number"]},
+                "source":source,"interpreter":"python","test_args":{"number":2}
+            })
+        };
+        let tools_dir = workspace.path().join(".lain/tools");
+        let not_written = tools_dir.clone();
+        let steps: Vec<(Check, Message)> = vec![
+            (
+                Box::new(|req| {
+                    assert!(req.tools.iter().any(|t| t.name == "create_tool"));
+                    assert!(req.tools.iter().any(|t| t.name == "test_tool"));
+                }),
+                call(
+                    "bad",
+                    "create_tool",
+                    script_args("raise RuntimeError('correct the script')"),
+                ),
+            ),
+            (
+                Box::new(move |req| {
+                    assert!(last_tool_output(req, "bad").contains("correct the script"));
+                    assert!(!req.tools.iter().any(|t| t.name == "double_number"));
+                    assert!(!not_written.exists());
+                }),
+                call("dry", "test_tool", script_args(source)),
+            ),
+            (
+                Box::new(|req| {
+                    assert!(last_tool_output(req, "dry").contains("doubled"));
+                    assert!(!req.tools.iter().any(|t| t.name == "double_number"));
+                }),
+                call("new", "create_tool", script_args(source)),
+            ),
+            (
+                Box::new(|req| {
+                    assert!(last_tool_output(req, "new").contains("tool-double_number.py"));
+                    assert!(req.tools.iter().any(|t| t.name == "double_number"));
+                }),
+                call("run", "double_number", json!({"number":6})),
+            ),
+            (
+                Box::new(|req| {
+                    let tool_output = last_tool_output(req, "run");
+                    let output: lain_core::tools::ToolOutput =
+                        serde_json::from_str(&tool_output).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&output.content).unwrap(),
+                        json!({"doubled":12})
+                    );
+                }),
+                Message::text(Role::Assistant, "The answer is 12."),
+            ),
+        ];
+        let provider = Arc::new(PlannedProvider {
+            steps: Mutex::new(steps.into()),
+            calls: Mutex::default(),
+        });
+        let mut runner = AgentRunner::new(config(), provider, registry.clone(), store, "creator")?;
+        assert_eq!(
+            runner
+                .run("Create and use a doubling tool.")
+                .await?
+                .output
+                .as_deref(),
+            Some("The answer is 12.")
+        );
+        assert_eq!(
+            std::fs::read_to_string(tools_dir.join("tool-double_number.py"))?,
+            source
+        );
+        let reloaded = ToolRegistry::new();
+        reloaded.register_plugins(&manager)?;
+        let output = reloaded
+            .dispatch("double_number", json!({"number":9}))
+            .await?;
+        assert_eq!(
+            serde_json::from_str::<Value>(&output.content)?,
+            json!({"doubled":18})
+        );
+        Ok(())
     }
 
     #[tokio::test]

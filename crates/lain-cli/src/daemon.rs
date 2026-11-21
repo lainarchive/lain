@@ -15,6 +15,7 @@ use lain_agent::{
     runner::{new_session_id, Canceller},
     AgentConfig, AgentEvent, AgentRunner, AgentStatus, ToolOutcome,
 };
+use lain_core::plugin::PluginManager;
 #[cfg(unix)]
 use lain_core::tools::BashTool;
 #[cfg(windows)]
@@ -68,6 +69,21 @@ impl ConfigFactory {
         }
         Ok(tools)
     }
+
+    fn session_tools(
+        &self,
+        memory: SharedMemory,
+        config: &AgentConfig,
+    ) -> Result<Arc<ToolRegistry>, Error> {
+        let tools = Arc::new(self.tools(memory, config.coding_session)?);
+        let manager =
+            PluginManager::new(&self.working_directory, config.plugin_permissions.clone());
+        if config.allow_creator_mode {
+            tools.register_creator_tools(manager.clone())?;
+        }
+        tools.register_plugins(&manager)?;
+        Ok(tools)
+    }
 }
 
 impl RunnerFactory for ConfigFactory {
@@ -85,13 +101,8 @@ impl RunnerFactory for ConfigFactory {
         let config: AgentConfig = serde_json::from_slice(&bytes)
             .map_err(|error| Error::failure("CONFIG_INVALID", error))?;
         config.validate()?;
-        let tools = self.tools(memory.clone(), config.coding_session)?;
-        Ok(AgentRunner::from_config(
-            config,
-            Arc::new(tools),
-            memory,
-            id,
-        )?)
+        let tools = self.session_tools(memory.clone(), &config)?;
+        Ok(AgentRunner::from_config(config, tools, memory, id)?)
     }
 }
 
@@ -446,6 +457,39 @@ mod tests {
             .map(|tool| tool.name)
             .collect();
         assert_eq!(names, ["memory_read", "repo_map"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn creator_mode_can_be_disabled_and_has_no_implicit_capabilities() -> Result<(), Error> {
+        let memory = Arc::new(Mutex::new(MemoryStore::open(":memory:")?));
+        let factory = ConfigFactory::new("unused.json", ".");
+        let mut config = AgentConfig::new(
+            lain_agent::ProviderSelection::OpenAiCompatible {
+                base_url: "http://127.0.0.1:9/v1".into(),
+                api_key_env: None,
+            },
+            "test",
+        );
+        assert_eq!(config.allow_creator_mode, cfg!(debug_assertions));
+        config.allow_creator_mode = false;
+        let tools = factory.session_tools(memory.clone(), &config)?;
+        assert!(!tools.contains("create_tool"));
+        assert!(!tools.contains("test_tool"));
+        config.allow_creator_mode = true;
+        let tools = factory.session_tools(memory, &config)?;
+        assert!(tools.contains("create_tool"));
+        let error = tools
+            .dispatch(
+                "test_tool",
+                json!({
+                    "name":"example", "description":"Example", "interpreter":"python",
+                    "source":"print('not executed')", "parameters":{"type":"object"}, "test_args":{}
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "TOOL_PERMISSION_DENIED");
         Ok(())
     }
 

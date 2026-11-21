@@ -68,6 +68,59 @@ Shell tools are **disabled by default**. Set `LAIN_ALLOW_SHELL=1` in the daemon'
 authorize Bash (Unix) or PowerShell (Windows). Other values do not grant access.
 An already-running daemon must be restarted to change this authorization.
 
+### Dynamic plugins and Creator Mode
+
+On each new session the daemon discovers JSON and YAML manifests in
+`.lain/plugins/` and `.lain/tools/` in its working directory. Plugin discovery
+is off unless the operator grants `read_fs` in `plugin_permissions` in the main
+config. Each manifest declares `name`, `version`, `author`, `permissions`, and
+`tools`. The daemon rejects invalid manifests, missing grants, and duplicate
+tool names. For example, a webhook manifest can be written as:
+
+```yaml
+name: inventory
+version: 1.0.0
+author: Local operator
+permissions: [network]
+tools:
+  - name: lookup_inventory
+    description: Look up one item by SKU
+    parameters:
+      type: object
+      properties:
+        sku: {type: string}
+      required: [sku]
+    backend:
+      kind: webhook
+      url: http://127.0.0.1:8090/lookup
+```
+
+This example requires `"plugin_permissions": ["read_fs", "network"]`. The
+webhook receives a JSON POST; redirects are not followed. A `cli` backend takes
+an absolute `program` and optional fixed `args`. It receives the tool's JSON
+arguments on stdin and returns stdout and stderr. A `script` backend takes an
+`interpreter` (`python`, `powershell`, or `node`) and a standalone script
+`path` relative to the manifest directory. It reads a single JSON-RPC 2.0
+request from stdin to EOF. The method is the export name, `params` is the tool
+arguments, and stdout must contain one JSON-RPC response with the same ID and
+either `result` or `error`. Send diagnostics to stderr.
+
+Script and CLI processes run with host user permissions, **not in a sandbox**.
+They require all four capabilities in both the manifest and the operator's
+`plugin_permissions`: `read_fs`, `write_fs`, `network`, and `subprocess`.
+Grant these only in a trusted workspace for a trusted agent. This is separate
+from `LAIN_ALLOW_SHELL`; neither setting grants the other.
+
+`allow_creator_mode` defaults to true in debug builds and false in release
+builds. Set it to false explicitly for strict operation, and keep
+`plugin_permissions` empty to prevent loading plugins. Creator Mode requires
+the same explicit four grants as script plugins. `test_tool` runs a proposed
+script without saving it. `create_tool` validates the argument schema, runs with
+the supplied `test_args`, and on success writes the script and manifest to
+`.lain/tools/` and registers the tool in the active session. It becomes
+available to the model on its next request and to new sessions on discovery.
+On failure the agent receives diagnostics rather than a registered tool.
+
 Set `coding_session: true` to attach a compact Rust/TypeScript outline to the
 first model prompt and enable `repo_map` to request a fresh scan. The tool takes no
 path argument; the workspace is the daemon's original working directory. The
