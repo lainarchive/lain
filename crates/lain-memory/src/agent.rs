@@ -1,7 +1,9 @@
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
 
-use crate::{MemoryStore, Result, StoreError, compat, transaction, validate};
+use crate::{
+    MemoryRecord, MemoryStore, Result, StoreError, compat, row_memory, transaction, validate,
+};
 
 pub const SCRATCHPAD_MAX_UTF16: usize = 2000;
 const RULE_LIMIT: usize = 3;
@@ -17,6 +19,47 @@ CREATE TABLE IF NOT EXISTS procedural_rules (
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_rules_fts USING fts5(topic);";
 
 impl MemoryStore {
+    /// Transcript inspection includes untrusted episodes; these are not recalled as approved facts.
+    pub fn recent_episodes(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>> {
+        if !(1..=100).contains(&limit) {
+            return Err(StoreError::InvalidShape("limit"));
+        }
+        if let Some(id) = session_id {
+            validate(id, "session id", 120, true)?;
+        }
+        let source = session_id.map(|id| format!("lain-agent:{id}"));
+        let mut stmt = self.db()?.prepare(
+            "SELECT * FROM memories WHERE source GLOB 'lain-agent:*' AND (?1 IS NULL OR source=?1)
+             AND superseded_by IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?2",
+        )?;
+        Ok(stmt
+            .query_map(params![source, limit as i64], row_memory)?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn recent_procedural_rules(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        if !(1..=100).contains(&limit) {
+            return Err(StoreError::InvalidShape("limit"));
+        }
+        if let Some(id) = session_id {
+            validate(id, "session id", 120, true)?;
+        }
+        let mut stmt = self.db()?.prepare(
+            "SELECT rule FROM procedural_rules WHERE (?1 IS NULL OR session_id=?1) ORDER BY id DESC LIMIT ?2",
+        )?;
+        Ok(stmt
+            .query_map(params![session_id, limit as i64], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn scratchpad(&self, session_id: &str) -> Result<Option<String>> {
         validate(session_id, "session id", 120, true)?;
         Ok(self
@@ -177,6 +220,45 @@ impl MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_inspection_filters_and_limits() -> Result<()> {
+        let mut store = MemoryStore::open(":memory:")?;
+        assert!(store.recent_episodes(None, 5)?.is_empty());
+        assert!(store.recent_procedural_rules(None, 5)?.is_empty());
+        for session in ["a", "b"] {
+            store.remember(crate::MemoryInput {
+                title: "episode".into(),
+                content: session.into(),
+                source: format!("lain-agent:{session}"),
+                ..crate::MemoryInput::default()
+            })?;
+            store.replace_procedural_rules(session, "topic", &[format!("Check {session}.")])?;
+        }
+        store.remember(crate::MemoryInput {
+            title: "not an episode".into(),
+            content: "fact".into(),
+            source: "owner".into(),
+            ..crate::MemoryInput::default()
+        })?;
+        assert_eq!(store.recent_episodes(None, 100)?.len(), 2);
+        assert_eq!(store.recent_episodes(None, 1)?.len(), 1);
+        assert!(
+            store
+                .recent_episodes(Some("a"), 5)?
+                .iter()
+                .all(|record| record.content == "a")
+        );
+        assert_eq!(store.recent_procedural_rules(Some("a"), 5)?, ["Check a."]);
+        for limit in [0, 101] {
+            assert!(store.recent_episodes(None, limit).is_err());
+            assert!(store.recent_procedural_rules(None, limit).is_err());
+        }
+        store.close()?;
+        assert!(store.recent_episodes(None, 1).is_err());
+        assert!(store.recent_procedural_rules(None, 1).is_err());
+        Ok(())
+    }
 
     #[test]
     fn scratchpad_replace_clear_and_redact() {

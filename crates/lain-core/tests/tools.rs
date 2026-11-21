@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use lain_core::{provider::*, tools::*};
 use lain_memory::{MemoryInput, MemoryStore};
 use serde_json::{Value, json};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -189,6 +191,239 @@ async fn bash_marks_truncation_after_lossy_utf8_expansion() {
     let content: Value = serde_json::from_str(&output.content).unwrap();
     assert_eq!(content.get("stdout").unwrap(), "�\n[truncated]");
     assert_eq!(content.get("stderr").unwrap(), "");
+}
+
+#[tokio::test]
+async fn powershell_schema_registration_and_missing_interpreter()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let tool = PowerShellTool::new(directory.path());
+    assert_eq!(tool.timeout, PowerShellTool::DEFAULT_TIMEOUT);
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(tool.clone()))?;
+    assert!(matches!(
+        registry.register(Arc::new(tool)),
+        Err(ToolError::Duplicate(_))
+    ));
+    let definitions = registry.definitions();
+    let definition = definitions.first().ok_or("missing PowerShell definition")?;
+    assert_eq!(definition.name, "powershell");
+    let validator = jsonschema::validator_for(&definition.parameters)?;
+    for args in [
+        json!({"command":""}),
+        json!({"command":"exit 0","timeout_ms":1000}),
+        json!({"command":"exit 0","timeout_ms":u64::MAX}),
+    ] {
+        assert!(validator.is_valid(&args));
+    }
+    for args in [
+        json!({}),
+        json!({"command":1}),
+        json!({"command":"","extra":1}),
+        json!({"command":"","timeout_ms":0}),
+        json!({"command":"","timeout_ms":-1}),
+        json!({"command":"","timeout_ms":1.5}),
+        json!({"command":"","timeout_ms":"100"}),
+    ] {
+        assert!(matches!(
+            registry.dispatch("powershell", args).await,
+            Err(ToolError::Arguments(_))
+        ));
+    }
+    let missing =
+        PowerShellTool::with_interpreter(directory.path(), directory.path().join("missing-pwsh"));
+    assert!(
+        matches!(missing.interpreter(), Err(ToolError::Execution(message)) if message.contains("PowerShell interpreter"))
+    );
+    assert!(matches!(
+        missing.execute(json!({"command":"exit 0"})).await,
+        Err(ToolError::Execution(_))
+    ));
+    assert!(matches!(
+        missing.execute(json!({})).await,
+        Err(ToolError::Arguments(_))
+    ));
+    assert!(matches!(
+        missing.execute(json!({"command":"","timeout_ms":0})).await,
+        Err(ToolError::Arguments(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn powershell_output_exit_code_and_override() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut tool = PowerShellTool::new(directory.path());
+    let Ok(interpreter) = tool.interpreter() else {
+        return Ok(());
+    };
+    tool.output_byte_cap = 5;
+    let output = tool.execute(json!({"command":"[Console]::Out.Write('éééé'); [Console]::Error.Write('error'); exit 7"})).await?;
+    assert_eq!(output.exit_code, Some(7));
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.content)?,
+        json!({"stdout":"éé\n[truncated]","stderr":"error"})
+    );
+    let mut explicit = PowerShellTool::with_interpreter(directory.path(), interpreter);
+    explicit.timeout = Duration::from_millis(1);
+    let output = explicit
+        .execute(json!({"command":"", "timeout_ms":10000}))
+        .await?;
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.content)?,
+        json!({"stdout":"","stderr":""})
+    );
+    explicit.timeout = Duration::MAX;
+    let output = explicit.execute(json!({"command":"using namespace System.Text\nparam()\n[Console]::Out.Write([StringBuilder]::new('ok'))"})).await?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.content)?,
+        json!({"stdout":"ok","stderr":""})
+    );
+    let output = explicit
+        .execute(
+            json!({"command":"[Console]::Out.Write((Get-Location).Path)", "timeout_ms":u64::MAX}),
+        )
+        .await?;
+    let content: Value = serde_json::from_str(&output.content)?;
+    assert_eq!(
+        std::fs::canonicalize(
+            content
+                .get("stdout")
+                .and_then(Value::as_str)
+                .ok_or("missing stdout")?
+        )?,
+        std::fs::canonicalize(directory.path())?
+    );
+    explicit.working_directory = directory.path().join("missing");
+    assert!(matches!(
+        explicit.execute(json!({"command":"exit 0"})).await,
+        Err(ToolError::Execution(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn powershell_concurrent_capture_and_timeout() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut tool = PowerShellTool::new(directory.path());
+    if tool.interpreter().is_err() {
+        return Ok(());
+    }
+    tool.output_byte_cap = 128;
+    let output = tool.execute(json!({"command":"[Console]::Out.Write(('o' * 131072)); [Console]::Error.Write(('e' * 131072)); exit 3"})).await?;
+    assert_eq!(output.exit_code, Some(3));
+    let content: Value = serde_json::from_str(&output.content)?;
+    assert_eq!(
+        content.get("stdout"),
+        Some(&json!(format!("{}\n[truncated]", "o".repeat(128))))
+    );
+    assert_eq!(
+        content.get("stderr"),
+        Some(&json!(format!("{}\n[truncated]", "e".repeat(128))))
+    );
+    tool.timeout = Duration::from_millis(100);
+    assert!(matches!(
+        tool.execute(json!({"command":"Start-Sleep -Seconds 10"}))
+            .await,
+        Err(ToolError::Timeout)
+    ));
+    tool.timeout = PowerShellTool::DEFAULT_TIMEOUT;
+    assert!(matches!(
+        tool.execute(json!({"command":"Start-Sleep -Seconds 10", "timeout_ms":100}))
+            .await,
+        Err(ToolError::Timeout)
+    ));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn process_disappeared(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(3)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn vanished_process_errors() {
+    for code in [2, 3] {
+        assert!(process_disappeared(&std::io::Error::from_raw_os_error(
+            code
+        )));
+    }
+    assert!(!process_disappeared(&std::io::Error::from_raw_os_error(13)));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let interpreter = directory.path().join("interpreter");
+    std::fs::write(
+        &interpreter,
+        "#!/bin/sh\nsleep 30 &\necho $! > child.pid\nwait\n",
+    )?;
+    std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o700))?;
+    let mut tool = PowerShellTool::with_interpreter(directory.path(), interpreter);
+    tool.timeout = Duration::from_millis(500);
+    assert!(matches!(
+        tool.execute(json!({"command":"ignored"})).await,
+        Err(ToolError::Timeout)
+    ));
+    let pid = std::fs::read_to_string(directory.path().join("child.pid"))?
+        .trim()
+        .parse::<u32>()?;
+    wait_for_process_exit(pid).await
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_process_exit(pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match std::fs::read_to_string(format!("/proc/{pid}/status")) {
+                Ok(status)
+                    if status
+                        .lines()
+                        .any(|line| line.starts_with("State:") && line.contains("Z (zombie)")) =>
+                {
+                    break;
+                }
+                Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                Err(error) if process_disappeared(&error) => break,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await??;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn powershell_dropped_future_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let tool = PowerShellTool::new(directory.path());
+    if tool.interpreter().is_err() {
+        return Ok(());
+    }
+    let execution = tokio::spawn(async move {
+        tool.execute(json!({"command": "$p = Start-Process /bin/sleep -ArgumentList '30' -PassThru; Set-Content child.pid $p.Id; Start-Sleep -Seconds 30"})).await
+    });
+    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let pid = std::fs::read_to_string(directory.path().join("child.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok());
+            if let Some(pid) = pid {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    execution.abort();
+    assert!(execution.await.is_err_and(|error| error.is_cancelled()));
+    wait_for_process_exit(pid).await
 }
 
 #[tokio::test]
