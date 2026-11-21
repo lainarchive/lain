@@ -667,6 +667,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lain-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "lain-core",
+ "lain-memory",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "lain-core"
 version = "0.1.0"
 dependencies = [
