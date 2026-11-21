@@ -287,13 +287,13 @@ async fn powershell_output_exit_code_and_override() -> Result<(), Box<dyn std::e
         .await?;
     let content: Value = serde_json::from_str(&output.content)?;
     assert_eq!(
-        std::path::PathBuf::from(
+        std::fs::canonicalize(
             content
                 .get("stdout")
                 .and_then(Value::as_str)
                 .ok_or("missing stdout")?
-        ),
-        directory.path()
+        )?,
+        std::fs::canonicalize(directory.path())?
     );
     explicit.working_directory = directory.path().join("missing");
     assert!(matches!(
