@@ -304,6 +304,26 @@ pub fn report_error(error: &Error) -> io::Result<()> {
     writeln!(io::stderr().lock(), "Error: {}", clean(&error.to_string()))
 }
 
+async fn finish_interactive_turn(
+    client: &mut IpcClient,
+    renderer: &mut Renderer,
+    session: &mut String,
+    result: Result<(bool, Option<String>), Error>,
+) -> Result<String, Error> {
+    let (ok, plan) = match result {
+        Ok(result) => result,
+        Err(error) => {
+            renderer.clear()?;
+            report_error(&error)?;
+            (false, None)
+        }
+    };
+    if !ok {
+        *session = start_session(client, renderer).await?;
+    }
+    Ok(plan.unwrap_or_default())
+}
+
 pub async fn interactive(client: &mut IpcClient, renderer: &mut Renderer) -> Result<(), Error> {
     let mut session = start_session(client, renderer).await?;
     let (sender, mut lines) = tokio::sync::mpsc::channel(16);
@@ -366,16 +386,11 @@ pub async fn interactive(client: &mut IpcClient, renderer: &mut Renderer) -> Res
             )
             .await
             .map(|_| ()),
-            _ => match turn_with_input(client, &session, line, renderer, &mut lines).await {
-                Ok((ok, plan)) => {
-                    scratchpad = plan.unwrap_or_default();
-                    if !ok {
-                        session = start_session(client, renderer).await?;
-                    }
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            },
+            _ => {
+                let turn = turn_with_input(client, &session, line, renderer, &mut lines).await;
+                scratchpad = finish_interactive_turn(client, renderer, &mut session, turn).await?;
+                Ok(())
+            }
         };
         if let Err(error) = result {
             renderer.clear()?;
@@ -405,8 +420,23 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
             Box::pin(async move {
                 match command {
+                    Command::StartSession { .. } => {
+                        let _ = events
+                            .send(Event::SessionStarted {
+                                session_id: "fresh".into(),
+                            })
+                            .await;
+                    }
                     Command::SendMessage { session_id, text } => {
                         self.started.notify_one();
+                        if text == "fail" {
+                            let _ = events
+                                .send(Event::Error {
+                                    code: "PROVIDER_FAILED".into(),
+                                    message: "provider failed".into(),
+                                })
+                                .await;
+                        }
                         if text == "wait" {
                             self.cancelled.notified().await;
                         }
@@ -436,7 +466,7 @@ mod tests {
     async fn turn_consumes_cancel_input_before_completion() -> Result<(), Box<dyn std::error::Error>>
     {
         timeout(Duration::from_secs(5), async {
-            for mode in ["cancel", "eof", "error"] {
+            for mode in ["cancel", "eof", "error", "provider_error"] {
                 let directory = tempfile::tempdir()?;
                 #[cfg(unix)]
                 let endpoint = Endpoint(directory.path().join("ipc.sock"));
@@ -461,9 +491,16 @@ mod tests {
                     }
                     Ok::<(), mpsc::error::SendError<io::Result<String>>>(())
                 });
-                let text = if mode == "eof" { "normal" } else { "wait" };
+                let text = match mode { "eof" => "normal", "provider_error" => "fail", _ => "wait" };
                 let result = turn_with_input(&mut client, "s", text.into(), &mut Renderer::new(true), &mut lines).await;
-                if mode == "error" {
+                if mode == "provider_error" {
+                    assert!(result.is_err());
+                    let mut session = "failed".into();
+                    let mut renderer = Renderer::new(true);
+                    finish_interactive_turn(&mut client, &mut renderer, &mut session, result).await?;
+                    assert_eq!(session, "fresh");
+                    assert!(turn(&mut client, &session, "normal".into(), &mut renderer).await?.0);
+                } else if mode == "error" {
                     assert!(matches!(result, Err(Error::Io(error)) if error.kind() == io::ErrorKind::InvalidData));
                 } else {
                     assert_eq!(result?, (mode == "eof", None));
