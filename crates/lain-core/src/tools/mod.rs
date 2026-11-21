@@ -241,7 +241,15 @@ impl Tool for MemoryReadTool {
         "Search trusted, current memory by query, ranked by relevance then recency"
     }
     fn parameters_schema(&self) -> Value {
-        json!({"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1000},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["query"],"additionalProperties":false})
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 1000},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
     }
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let query = args
