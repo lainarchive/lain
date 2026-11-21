@@ -191,6 +191,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sse_accepts_cr_and_crlf_streams() {
+        for ending in ["\r", "\r\n"] {
+            let event = json!({"choices": [{"delta": {"content": "hello"}}]});
+            let body = format!("data: {event}{ending}{ending}data: [DONE]{ending}{ending}");
+            let (url, handle) = server("200 OK", body, true).await;
+            let tokens: Vec<_> = OpenAiCompatibleProvider::new(url, Some("test-key".into()))
+                .stream(request())
+                .await
+                .unwrap()
+                .collect()
+                .await;
+            let tokens: Vec<_> = tokens.into_iter().collect::<Result<_, _>>().unwrap();
+            assert_eq!(tokens, vec![Token::Text("hello".into())]);
+            handle.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn provider_errors_and_empty_stream() {
         for (status, body) in [
             ("401 Unauthorized", "denied"),
