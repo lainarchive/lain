@@ -156,6 +156,11 @@ async fn bash_output_limits_exit_environment_and_timeout() {
         tool.execute(json!({})).await,
         Err(ToolError::Arguments(_))
     ));
+    let killed = tool.execute(json!({"command":"kill -KILL $$"})).await;
+    assert!(
+        matches!(&killed, Err(ToolError::Execution(message)) if message.contains("without an exit code")),
+        "{killed:?}"
+    );
     tool.timeout = Duration::from_millis(30);
     assert!(matches!(
         tool.execute(json!({"command":"exec sleep 10"})).await,
