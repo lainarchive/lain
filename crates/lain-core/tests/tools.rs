@@ -372,6 +372,11 @@ async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error
     let pid = std::fs::read_to_string(directory.path().join("child.pid"))?
         .trim()
         .parse::<u32>()?;
+    wait_for_process_exit(pid).await
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_process_exit(pid: u32) -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             match std::fs::read_to_string(format!("/proc/{pid}/status")) {
@@ -391,6 +396,33 @@ async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error
     })
     .await??;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn powershell_dropped_future_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let tool = PowerShellTool::new(directory.path());
+    if tool.interpreter().is_err() {
+        return Ok(());
+    }
+    let execution = tokio::spawn(async move {
+        tool.execute(json!({"command": "$p = Start-Process /bin/sleep -ArgumentList '30' -PassThru; Set-Content child.pid $p.Id; Start-Sleep -Seconds 30"})).await
+    });
+    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(directory.path().join("child.pid")) {
+                if let Ok(pid) = text.trim().parse::<u32>() {
+                    break pid;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    execution.abort();
+    assert!(execution.await.is_err_and(|error| error.is_cancelled()));
+    wait_for_process_exit(pid).await
 }
 
 #[tokio::test]
