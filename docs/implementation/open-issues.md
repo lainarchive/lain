@@ -1,5 +1,34 @@
 # Open issues
 
+## Rust memory port verification on Linux
+
+The owner-approved `lain-memory` port encountered existing Node gate failures on
+Ubuntu with Node 26.13.1. Unchanged `main` (`3c63800`) and the Rust branch both
+report `tests 433`, `pass 385`, `fail 12`, `skipped 36` under `npm test`, with
+the same failing test names. No Node runtime or existing test was changed.
+
+Failures: AT-V2-APR-03, AT-V1-E2E-01/02, AT-V2-CAN-05,
+AT-V3-BND-06/07, AT-V3-HL-09/03, AT-V1-TOOL-08/10, the hard-link
+directory-listing refusal test, and the malformed GPU reading test. Examples:
+`INTERPRETER_MISSING` names `C:\Python315\python.exe` on Linux; the GPU
+fixture receives `nvidia-smi could not be run (ENOENT)` instead of a parse
+failure. These need a separate platform-fixture/guard review, not changes in
+the memory port.
+
+`gitleaks` is absent here. Both unchanged main and the Rust branch also report
+three fallback `assigned-secret` candidates in existing synthetic fixtures:
+`test/model/credentials-dpapi.test.mjs:90`,
+`test/model/gemini-live.test.mjs:24`, and
+`test/model/openai-live.test.mjs:26`. Neither advisory `npm run check` nor
+required `npm run verify` passes (`checks=8 pass=6 fail=2`). No secret-scanner
+suppression or unrelated test fix was added. Full-history scanning remains
+unverified; rerun on the intended Windows environment with gitleaks installed.
+
+Evidence: `artifacts/verify/rust-node-tests.log`,
+`artifacts/verify/rust-baseline-node-tests.log`,
+`artifacts/verify/rust-baseline-secrets.log`, and
+`artifacts/verify/rust-check.log` (local ignored verification logs).
+
 Known limitations and unresolved guarantees, with what each one needs. An issue
 is closed only by evidence; a limitation that is documented is still a
 limitation, and it is listed here so that no claim depends on the reader not
