@@ -63,7 +63,6 @@ const TEXT_EXTENSIONS = new Set(['.mjs', '.js', '.cjs', '.json', '.md', '.txt', 
 const OWNED_ROOT_FILES = new Set([
   'package.json',
   'Cargo.toml',
-  'Cargo.lock',
   'clippy.toml',
   'tsconfig.json',
   '.node-version',
