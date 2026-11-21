@@ -17,7 +17,11 @@
   Unix default sockets now use `XDG_RUNTIME_DIR` or a user-scoped temporary name; the Windows pipe name is unchanged.
 - Scratchpad clipping/padding uses character display widths, including common East Asian/emoji wide ranges and combining marks;
   accented Latin text no longer pulls the right border left. Narrow-width alignment tests include `café résumé` and `界界 wide row`.
-- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (101 tests), including fourteen CLI
+- Windows launcher correction: native testing showed that null stdio still allowed other inheritable client pipe handles
+  into a directly spawned daemon. Windows now uses system PowerShell `Start-Process` without redirection, safely quoted
+  arguments and a UTF-16LE encoded script; successful launcher exit does not end the existing Ping/backoff readiness wait.
+  Unix spawning is unchanged. `tests/windows_spawn.rs` covers EOF while the daemon remains alive and requires native execution.
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (105 tests), including eighteen CLI
   tests. Daemon tests use an injected provider and make no network calls. The descendant timeout test now accepts ESRCH
   as an already-exited child during Linux `/proc` inspection and passed 30/30 repetitions. The timeout kill helper already
   ignores gone-process errors. Daemon error events now keep codes separate from messages, with no duplicate printed code.
