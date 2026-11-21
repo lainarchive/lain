@@ -179,6 +179,11 @@ async fn memory_search_respects_trust_and_errors() {
     let records: Vec<Value> = serde_json::from_str(&output.content).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records.first().unwrap().get("trust").unwrap(), "trusted");
+    let float_limit_output = registry
+        .dispatch("memory_read", json!({"query":"apple","limit":1.0}))
+        .await
+        .unwrap();
+    assert_eq!(float_limit_output, output);
     assert_eq!(
         registry
             .dispatch("memory_read", json!({"query":"absent"}))
@@ -191,6 +196,8 @@ async fn memory_search_respects_trust_and_errors() {
         json!({}),
         json!({"query":""}),
         json!({"query":"apple","limit":0}),
+        json!({"query":"apple","limit":1.5}),
+        json!({"query":"apple","limit":101.0}),
     ] {
         assert!(matches!(
             registry.dispatch("memory_read", args).await,
