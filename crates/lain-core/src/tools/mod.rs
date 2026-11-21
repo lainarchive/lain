@@ -153,6 +153,7 @@ async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io:
     let mut text = String::from_utf8_lossy(&stored).into_owned();
     while text.len() > cap {
         text.pop();
+        truncated = true;
     }
     if truncated {
         text.push_str("\n[truncated]");
