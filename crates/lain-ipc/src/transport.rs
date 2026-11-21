@@ -12,8 +12,67 @@ impl Default for Endpoint {
         #[cfg(windows)]
         let path = PathBuf::from(DEFAULT_PIPE_NAME);
         #[cfg(unix)]
-        let path = std::env::temp_dir().join("lain-ipc.sock");
+        let path = {
+            use std::os::unix::fs::MetadataExt;
+            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from);
+            let user = std::env::var_os("HOME")
+                .and_then(|home| std::fs::metadata(home).ok())
+                .map(|metadata| metadata.uid().to_string())
+                .or_else(|| std::env::var("UID").ok())
+                .or_else(|| std::env::var("USER").ok())
+                .unwrap_or_else(|| format!("pid-{}", std::process::id()));
+            unix_default_path(runtime, std::env::temp_dir(), &user)
+        };
         Self(path)
+    }
+}
+
+#[cfg(unix)]
+fn unix_default_path(runtime: Option<PathBuf>, temporary: PathBuf, user: &str) -> PathBuf {
+    if let Some(runtime) = runtime {
+        return runtime.join("lain-ipc.sock");
+    }
+    let user: String = user
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        .take(32)
+        .collect();
+    let user = if user.is_empty() {
+        format!("pid-{}", std::process::id())
+    } else {
+        user
+    };
+    temporary.join(format!("lain-ipc-{user}.sock"))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_socket_is_runtime_or_user_scoped() {
+        assert_eq!(
+            unix_default_path(Some("/run/user/1000".into()), "/tmp".into(), "1000"),
+            PathBuf::from("/run/user/1000/lain-ipc.sock")
+        );
+        assert_eq!(
+            unix_default_path(None, "/tmp".into(), "1000"),
+            PathBuf::from("/tmp/lain-ipc-1000.sock")
+        );
+        assert_ne!(
+            unix_default_path(None, "/tmp".into(), "1000"),
+            unix_default_path(None, "/tmp".into(), "1001")
+        );
+        assert_eq!(
+            unix_default_path(None, "/tmp".into(), "alice"),
+            PathBuf::from("/tmp/lain-ipc-alice.sock")
+        );
+        assert!(unix_default_path(None, "/tmp".into(), "../alice").starts_with("/tmp"));
+        assert!(unix_default_path(None, "/tmp".into(), "")
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("lain-ipc-pid-")));
     }
 }
 
