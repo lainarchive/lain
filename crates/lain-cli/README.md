@@ -19,7 +19,10 @@ Global options are `--endpoint`, `--config`, `--plain`, and `--help`.
 Endpoint/config defaults come from `LAIN_IPC_ENDPOINT` / `LAIN_CONFIG`, otherwise
 the IPC platform default / `lain.json` in the daemon's working directory.
 `LAIN_MEMORY_DB` overrides the default `.lain/memory.db` in that directory.
-Windows uses `\\.\pipe\lain-ipc`; Unix uses the temporary directory's `lain-ipc.sock`.
+Windows uses `\\.\pipe\lain-ipc`; Unix uses `$XDG_RUNTIME_DIR/lain-ipc.sock` when set,
+otherwise the temporary directory's `lain-ipc-<uid>.sock` (home-directory owner UID,
+then `UID` or `USER`; without any identity information, a process-scoped fallback
+requires an explicit shared `--endpoint` to connect separate processes).
 Do not expose the endpoint to untrusted local users: connected clients can ask
 the configured agent to execute host-permission tools. Lain is not a sandbox.
 
