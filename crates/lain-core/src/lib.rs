@@ -1,6 +1,8 @@
 pub mod provider;
 pub mod tools;
 
+pub use lain_plugin as plugin;
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CoreError {
