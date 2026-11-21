@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError, RwLock},
     time::Duration,
 };
 
@@ -16,9 +16,14 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::provider::{CompletionResponse, Message, Role, ToolDefinition};
 
+mod creator;
+mod plugins;
 mod repo_map;
 
+pub use creator::{CreateToolTool, TestToolTool};
 pub use repo_map::{REPO_MAP_TOOL_NAME, RepoMapTool};
+
+pub const UPDATE_SCRATCHPAD_TOOL_NAME: &str = "UpdateScratchpad";
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -31,6 +36,8 @@ pub enum ToolError {
     Schema(String),
     #[error("invalid arguments: {0}")]
     Arguments(String),
+    #[error("permission denied: {0}")]
+    Permission(String),
     #[error("tool execution: {0}")]
     Execution(String),
     #[error("tool timed out")]
@@ -44,6 +51,7 @@ impl ToolError {
             Self::Unknown(_) => "TOOL_NOT_FOUND",
             Self::Schema(_) => "TOOL_SCHEMA_INVALID",
             Self::Arguments(_) => "TOOL_ARGUMENTS_INVALID",
+            Self::Permission(_) => "TOOL_PERMISSION_DENIED",
             Self::Execution(_) => "TOOL_EXECUTION_FAILED",
             Self::Timeout => "TOOL_TIMEOUT",
         }
@@ -70,15 +78,41 @@ struct RegisteredTool {
     validator: jsonschema::Validator,
 }
 
+impl RegisteredTool {
+    fn new(tool: Arc<dyn Tool>) -> Result<Self, ToolError> {
+        let parameters = tool.parameters_schema();
+        let validator =
+            jsonschema::validator_for(&parameters).map_err(|e| ToolError::Schema(e.to_string()))?;
+        let definition = ToolDefinition {
+            name: tool.name().into(),
+            description: tool.description().into(),
+            parameters,
+        };
+        Ok(Self {
+            tool,
+            definition,
+            validator,
+        })
+    }
+
+    async fn dispatch(&self, args: Value) -> Result<ToolOutput, ToolError> {
+        self.validator
+            .validate(&args)
+            .map_err(|e| ToolError::Arguments(e.to_string()))?;
+        self.tool.execute(args).await
+    }
+}
+
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: BTreeMap<String, RegisteredTool>,
+    tools: RwLock<BTreeMap<String, Arc<RegisteredTool>>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tools = self.tools.read().unwrap_or_else(PoisonError::into_inner);
         f.debug_struct("ToolRegistry")
-            .field("names", &self.tools.keys())
+            .field("names", &tools.keys())
             .finish()
     }
 }
@@ -90,30 +124,48 @@ impl ToolRegistry {
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), ToolError> {
         let name = tool.name().to_owned();
-        if self.tools.contains_key(&name) {
+        let tools = self.tools.get_mut().unwrap_or_else(PoisonError::into_inner);
+        if tools.contains_key(&name) {
             return Err(ToolError::Duplicate(name));
         }
-        let parameters = tool.parameters_schema();
-        let validator =
-            jsonschema::validator_for(&parameters).map_err(|e| ToolError::Schema(e.to_string()))?;
-        let definition = ToolDefinition {
-            name: name.clone(),
-            description: tool.description().into(),
-            parameters,
-        };
-        self.tools.insert(
-            name,
-            RegisteredTool {
-                tool,
-                definition,
-                validator,
-            },
-        );
+        tools.insert(name, Arc::new(RegisteredTool::new(tool)?));
         Ok(())
+    }
+
+    fn register_batch<T>(
+        &self,
+        entries: Vec<RegisteredTool>,
+        before_insert: impl FnOnce() -> Result<T, ToolError>,
+    ) -> Result<T, ToolError> {
+        let mut new = BTreeMap::new();
+        for entry in entries {
+            let name = entry.definition.name.clone();
+            if name == UPDATE_SCRATCHPAD_TOOL_NAME
+                || new.insert(name.clone(), Arc::new(entry)).is_some()
+            {
+                return Err(ToolError::Duplicate(name));
+            }
+        }
+        let mut tools = self.tools.write().unwrap_or_else(PoisonError::into_inner);
+        if let Some(name) = new.keys().find(|name| tools.contains_key(*name)) {
+            return Err(ToolError::Duplicate(name.clone()));
+        }
+        let result = before_insert()?;
+        tools.append(&mut new);
+        Ok(result)
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(name)
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .map(|entry| entry.definition.clone())
             .collect()
@@ -122,13 +174,12 @@ impl ToolRegistry {
     pub async fn dispatch(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
         let entry = self
             .tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(name)
+            .cloned()
             .ok_or_else(|| ToolError::Unknown(name.into()))?;
-        entry
-            .validator
-            .validate(&args)
-            .map_err(|e| ToolError::Arguments(e.to_string()))?;
-        entry.tool.execute(args).await
+        entry.dispatch(args).await
     }
 
     pub async fn tool_messages(&self, response: &CompletionResponse) -> Vec<Message> {
