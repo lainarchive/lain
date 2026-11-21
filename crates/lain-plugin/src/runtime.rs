@@ -129,9 +129,12 @@ async fn webhook(url: &Url, args: &Value) -> Result<Value, PluginError> {
 
 fn write_script(path: &Path, interpreter: ScriptInterpreter, source: &[u8]) -> io::Result<()> {
     const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
+    const BOMS: &[&[u8]] = &[UTF8_BOM, b"\xff\xfe", b"\xfe\xff", b"\x00\x00\xfe\xff"];
     let mut file = fs::File::create(path)?;
     // Windows PowerShell reads an unmarked script using the local ANSI code page.
-    if matches!(interpreter, ScriptInterpreter::Powershell) && !source.starts_with(UTF8_BOM) {
+    if matches!(interpreter, ScriptInterpreter::Powershell)
+        && !BOMS.iter().any(|bom| source.starts_with(bom))
+    {
         file.write_all(UTF8_BOM)?;
     }
     file.write_all(source)
@@ -380,10 +383,31 @@ fn decode_rpc(output: &ProcessOutput) -> Result<Value, PluginError> {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn powershell_script_gets_utf8_bom_only_when_unmarked() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("main.ps1");
+        let marked: &[&[u8]] = &[
+            b"\xef\xbb\xbfX",
+            b"\xff\xfeX\x00",
+            b"\xfe\xff\x00X",
+            b"\xff\xfe\x00\x00X\x00\x00\x00",
+            b"\x00\x00\xfe\xff\x00\x00\x00X",
+        ];
+        for source in marked {
+            write_script(&path, ScriptInterpreter::Powershell, source)?;
+            assert_eq!(fs::read(&path)?, *source);
+        }
+        write_script(&path, ScriptInterpreter::Powershell, b"X")?;
+        assert_eq!(fs::read(&path)?, b"\xef\xbb\xbfX");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn plugin_timeout_and_cancellation_kill_descendants(
     ) -> Result<(), Box<dyn std::error::Error>> {
