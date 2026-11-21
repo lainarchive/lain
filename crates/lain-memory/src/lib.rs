@@ -1,4 +1,7 @@
+mod agent;
 mod compat;
+
+pub use agent::SCRATCHPAD_MAX_UTF16;
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use std::{collections::HashSet, path::Path, sync::Mutex};
@@ -356,6 +359,7 @@ impl MemoryStore {
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
         )?;
         db.execute_batch(SCHEMA)?;
+        db.execute_batch(agent::SCHEMA)?;
         Ok(Self { db: Some(db) })
     }
     fn db(&self) -> Result<&Connection> {

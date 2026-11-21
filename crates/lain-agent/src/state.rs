@@ -34,6 +34,11 @@ pub enum AgentStatus {
     Terminated(TerminationReason),
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Scratchpad {
+    pub plan: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentState {
     pub session_id: String,
@@ -44,6 +49,10 @@ pub struct AgentState {
     pub tool_calls: u32,
     pub tokens_used: u64,
     pub consecutive_tool_errors: u32,
+    #[serde(default)]
+    pub tool_errors: u32,
+    #[serde(default)]
+    pub scratchpad: Scratchpad,
 }
 
 impl AgentState {
@@ -57,6 +66,8 @@ impl AgentState {
             tool_calls: 0,
             tokens_used: 0,
             consecutive_tool_errors: 0,
+            tool_errors: 0,
+            scratchpad: Scratchpad::default(),
         }
     }
 }
