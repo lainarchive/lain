@@ -239,12 +239,7 @@ impl DaemonHandler {
             }
         }
         if let Err(error) = result {
-            events
-                .send(Event::Error {
-                    code: error.code().into(),
-                    message: error.to_string(),
-                })
-                .await?;
+            events.send(Error::from(error).into_event()).await?;
         }
         if runner.state().inputs > 0
             && matches!(
@@ -265,14 +260,7 @@ impl DaemonHandler {
                         })
                         .await?
                 }
-                Err(error) => {
-                    events
-                        .send(Event::Error {
-                            code: error.code().into(),
-                            message: error.to_string(),
-                        })
-                        .await?
-                }
+                Err(error) => events.send(Error::from(error).into_event()).await?,
             }
         }
         let reason = if runner.state().status == AgentStatus::AwaitingInput {
@@ -356,12 +344,7 @@ impl CommandHandler for DaemonHandler {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             if let Err(error) = self.dispatch(command, &events).await {
-                let _ = events
-                    .send(Event::Error {
-                        code: error.code().into(),
-                        message: error.to_string(),
-                    })
-                    .await;
+                let _ = events.send(error.into_event()).await;
             }
         })
     }

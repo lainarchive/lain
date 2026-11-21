@@ -22,6 +22,15 @@ pub enum Error {
 }
 
 impl Error {
+    pub(crate) fn into_event(self) -> lain_ipc::Event {
+        let code = self.code().into();
+        let message = match self {
+            Self::Failure { message, .. } => message,
+            other => other.to_string(),
+        };
+        lain_ipc::Event::Error { code, message }
+    }
+
     pub fn failure(code: &'static str, message: impl ToString) -> Self {
         Self::Failure {
             code,
