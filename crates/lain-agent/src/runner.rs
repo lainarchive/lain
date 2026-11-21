@@ -183,6 +183,18 @@ impl AgentRunner {
         if input.trim().is_empty() {
             return Err(AgentError::EmptyInput);
         }
+        // Transcript ids are numbered from 1 per session and the store upserts by id, so a reused session id
+        // would silently overwrite the earlier conversation.
+        if self.state.inputs == 0 {
+            let first = format!("{}/input/1", self.state.session_id);
+            let taken = with_store(self.memory.clone(), move |store| {
+                store.get(&first).map(|r| r.is_some())
+            })
+            .await?;
+            if taken {
+                return Err(AgentError::SessionExists(self.state.session_id.clone()));
+            }
+        }
         self.started.get_or_insert_with(Instant::now);
         self.state.status = AgentStatus::Running;
         match self.react(input).await {
@@ -247,8 +259,16 @@ impl AgentRunner {
                 Ok(response) => response?,
                 Err(reason) => return Ok(self.stop(reason, run_turn)),
             };
-            if let Some(usage) = &response.usage {
-                self.state.tokens_used = self.state.tokens_used.saturating_add(usage.total_tokens);
+            match &response.usage {
+                Some(usage) => {
+                    self.state.tokens_used =
+                        self.state.tokens_used.saturating_add(usage.total_tokens);
+                }
+                // Counting unreported usage as zero would leave the cap unenforced, so I fail closed instead.
+                None if self.config.budget.max_total_tokens.is_some() => {
+                    return Ok(self.stop(TerminationReason::UsageUnreported, run_turn));
+                }
+                None => {}
             }
             let message = response.message;
             let turn_id = format!("{}/turn/{turn}", self.state.session_id);
@@ -1242,5 +1262,47 @@ mod tests {
             agent.run("again").await,
             Err(AgentError::Terminated(TerminationReason::Cancelled))
         ));
+    }
+
+    #[tokio::test]
+    async fn token_cap_fails_closed_when_usage_is_unreported() {
+        let unmetered = || {
+            let mut response = text("hi").unwrap();
+            response.usage = None;
+            Ok(response)
+        };
+        let (mut agent, _) = runner(config(), ScriptedProvider::new(vec![unmetered()]));
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+
+        let mut capped = config();
+        capped.budget.max_total_tokens = Some(1000);
+        let (mut agent, _) = runner(capped, ScriptedProvider::new(vec![unmetered()]));
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::UsageUnreported)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reused_session_id_is_refused_not_overwritten() {
+        let (mut first, store) = runner(config(), ScriptedProvider::new(vec![text("a")]));
+        first.run("original").await.unwrap();
+        let mut second = AgentRunner::new(
+            config(),
+            ScriptedProvider::new(vec![text("b")]),
+            registry(),
+            store.clone(),
+            "s1",
+        )
+        .unwrap();
+        assert!(matches!(
+            second.run("replacement").await,
+            Err(AgentError::SessionExists(id)) if id == "s1"
+        ));
+        assert_eq!(second.state().status, AgentStatus::Idle);
+        let kept = store.lock().unwrap().get("s1/input/1").unwrap().unwrap();
+        assert_eq!(kept.content, "original");
     }
 }

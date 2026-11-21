@@ -15,10 +15,14 @@ pub enum BudgetKind {
 pub enum TerminationReason {
     MaxTurns,
     ToolErrorLimit,
-    BudgetExhausted { budget: BudgetKind },
+    BudgetExhausted {
+        budget: BudgetKind,
+    },
     ProviderFailed,
     MemoryFailed,
     Cancelled,
+    /// A token cap is set but the provider reported no usage, so the cap could not be enforced.
+    UsageUnreported,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
