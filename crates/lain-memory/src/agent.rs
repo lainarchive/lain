@@ -39,7 +39,9 @@ impl MemoryStore {
         if !plan.is_empty() {
             validate(&plan, "scratchpad plan", SCRATCHPAD_MAX_UTF16, false)?;
         }
-        if compat::has_secret(&compat::quote(&plan)) {
+        if compat::has_secret(&compat::quote(session_id))
+            || compat::has_secret(&compat::quote(&plan))
+        {
             return Err(StoreError::SecretRefused);
         }
         self.db()?.execute(
@@ -71,7 +73,8 @@ impl MemoryStore {
                 return Err(StoreError::InvalidShape("procedural rule"));
             }
         }
-        if compat::has_secret(&compat::quote(&topic))
+        if compat::has_secret(&compat::quote(session_id))
+            || compat::has_secret(&compat::quote(&topic))
             || rules
                 .iter()
                 .any(|rule| compat::has_secret(&compat::quote(rule)))
@@ -87,7 +90,7 @@ impl MemoryStore {
             "DELETE FROM procedural_rules WHERE session_id=?",
             [session_id],
         )?;
-        for (priority, rule) in rules.iter().enumerate() {
+        for (priority, rule) in (0_i32..).zip(rules) {
             tx.execute(
                 "INSERT INTO procedural_rules (session_id,priority,rule) VALUES (?,?,?)",
                 params![session_id, priority, rule],
@@ -119,18 +122,23 @@ impl MemoryStore {
         let mut terms = HashSet::new();
         let query = query
             .split(|c: char| !c.is_alphanumeric())
-            .filter(|word| word.chars().count() >= 4)
+            .filter(|word| word.chars().count() >= 3)
             .map(str::to_lowercase)
             .filter(|word| {
                 !matches!(
                     word.as_str(),
                     "about"
+                        | "and"
+                        | "are"
+                        | "can"
+                        | "for"
                         | "from"
                         | "have"
                         | "please"
                         | "this"
                         | "that"
                         | "the"
+                        | "use"
                         | "what"
                         | "when"
                         | "which"
@@ -175,6 +183,10 @@ mod tests {
         let mut store = MemoryStore::open(":memory:").unwrap();
         let secret = format!("sk-{}", "a".repeat(24));
         assert_eq!(store.scratchpad("a").unwrap(), None);
+        assert!(matches!(
+            store.set_scratchpad(&secret, "plan"),
+            Err(StoreError::SecretRefused)
+        ));
         assert_eq!(
             store
                 .set_scratchpad("a", &format!("  Never paste {secret}  "))
@@ -208,7 +220,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             store.search_procedural_rules("cargo release", 3).unwrap(),
-            [rule.clone()]
+            std::slice::from_ref(&rule)
+        );
+        store
+            .replace_procedural_rules("c", "cargo", std::slice::from_ref(&replacement))
+            .unwrap();
+        assert_eq!(
+            store.search_procedural_rules("cargo release", 1).unwrap(),
+            std::slice::from_ref(&rule)
         );
         assert!(
             store
