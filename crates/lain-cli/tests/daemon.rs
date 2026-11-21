@@ -62,9 +62,9 @@ async fn ping_status_memory_and_missing_config() -> TestResult {
     timeout(Duration::from_secs(10), async {
         let directory = tempfile::tempdir()?;
         let endpoint = endpoint(&directory);
-        let handler = Arc::new(DaemonHandler::new(memory(&directory)?, Arc::new(ConfigFactory {
-            config_path: directory.path().join("missing.json"), working_directory: directory.path().into(),
-        })));
+        let handler = Arc::new(DaemonHandler::new(memory(&directory)?, Arc::new(ConfigFactory::new(
+            directory.path().join("missing.json"), directory.path(),
+        ))));
         let (stop, receiver) = watch::channel(false);
         let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
         let mut client = IpcClient::connect(&endpoint).await?;
