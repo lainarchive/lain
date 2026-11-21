@@ -26,6 +26,7 @@ const KNOWN_TOP_LEVEL = new Set([
   'SECURITY_MODEL.md', 'SYSTEM_BOUNDARIES.md', 'docs', 'examples', 'node_modules',
   'package-lock.json', 'package.json', 'src', 'test', 'tools', 'tsconfig.json',
   'artifacts', 'RESOURCE_BUDGET.md',
+  'Cargo.toml', 'Cargo.lock', 'clippy.toml', 'crates', 'target',
 ]);
 
 /** Patterns that must never be tracked in this repository. */
@@ -71,7 +72,7 @@ async function walk(dir, root, out, ignore) {
       // SCM store, or the designated evidence directory: `artifacts/` is where
       // verification writes its own logs, and a check must not fail on its own
       // output. That directory is intentionally not secret-scanned either.
-      if (['.lain-audit', 'node_modules', '.git', 'artifacts'].includes(rel)) continue;
+      if (['.lain-audit', 'node_modules', '.git', 'artifacts', 'target'].includes(rel)) continue;
       await walk(full, root, out, ignore);
     } else {
       out.push(rel);
