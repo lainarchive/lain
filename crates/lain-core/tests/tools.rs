@@ -145,6 +145,24 @@ async fn bash_output_limits_exit_environment_and_timeout() {
 }
 
 #[tokio::test]
+async fn bash_marks_truncation_after_lossy_utf8_expansion() {
+    let directory = tempfile::tempdir().unwrap();
+    let tool = BashTool {
+        working_directory: directory.path().into(),
+        timeout: Duration::from_secs(2),
+        output_byte_cap: 4,
+    };
+    let output = tool
+        .execute(json!({"command": r"printf '\xff\xff\xff\xff'"}))
+        .await
+        .unwrap();
+    assert_eq!(output.exit_code, Some(0));
+    let content: Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(content.get("stdout").unwrap(), "�\n[truncated]");
+    assert_eq!(content.get("stderr").unwrap(), "");
+}
+
+#[tokio::test]
 async fn memory_search_respects_trust_and_errors() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = MemoryStore::open(directory.path().join("memory.db")).unwrap();
