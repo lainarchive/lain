@@ -40,8 +40,8 @@ const HIGH_CONFIDENCE = [
   { id: 'assigned-secret', pattern: /(?:api[_-]?key|secret|passwd|password|token)\s*[:=]\s*["'][A-Za-z0-9_\-./+]{20,}["']/i },
 ];
 
-const SCAN_EXTENSIONS = new Set(['.mjs', '.js', '.cjs', '.json', '.md', '.txt', '.yml', '.yaml', '.sql', '.env', '.sh', '.ps1', '.example']);
-const SKIP_DIRS = new Set(['.git', 'node_modules', '.lain-audit', 'artifacts']);
+const SCAN_EXTENSIONS = new Set(['.mjs', '.js', '.cjs', '.json', '.md', '.txt', '.yml', '.yaml', '.sql', '.env', '.sh', '.ps1', '.example', '.rs', '.toml']);
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.lain-audit', 'artifacts', 'target']);
 
 /**
  * @param {string} root
