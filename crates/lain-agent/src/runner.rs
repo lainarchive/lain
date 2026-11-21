@@ -1128,6 +1128,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scratchpad_in_a_tool_batch_preserves_native_call_pairing_and_the_breaker() {
+        let mut response = calls(None, &["fail", "fail"]).unwrap();
+        response.message.tool_calls.insert(
+            1,
+            ToolCall {
+                id: "plan".into(),
+                name: UPDATE_SCRATCHPAD.into(),
+                arguments: json!({"plan": "try another approach"}),
+            },
+        );
+        let provider = ScriptedProvider::new(vec![Ok(response)]);
+        let mut config = config();
+        config.max_consecutive_tool_errors = 2;
+        let (mut agent, store) = runner(config, provider.clone());
+        let outcome = agent.run("check the code").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::ToolErrorLimit)
+        );
+        assert_eq!(agent.state().tool_calls, 3);
+        let calls: Vec<_> = agent
+            .state()
+            .messages
+            .iter()
+            .flat_map(|message| &message.tool_calls)
+            .map(|call| call.id.as_str())
+            .collect();
+        let results: Vec<_> = agent
+            .state()
+            .messages
+            .iter()
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect();
+        assert_eq!(calls, ["call-0", "call-1"]);
+        assert_eq!(results, calls);
+        let store = store.lock().unwrap();
+        assert!(store.get("s1/turn/1/tool/1").unwrap().is_none());
+        assert!(!store.procedural_rules("s1").unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn tool_turn_events_messages_and_records() {
         let provider =
             ScriptedProvider::new(vec![calls(Some("check first"), &["ok"]), text("done")]);
