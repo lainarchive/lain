@@ -339,31 +339,37 @@ impl<'a> Outline<'a> {
 
     fn ts_header(&self, node: Node<'_>) -> Cow<'a, str> {
         let header = self.header(node);
-        let Some(parameters) = node.child_by_field_name("parameters") else {
-            return Cow::Borrowed(header);
-        };
-        let mut cursor = parameters.walk();
-        let mut written = node.start_byte();
+        let start = node.start_byte();
+        let end = start + header.len();
+        let mut cursor = node.walk();
+        let mut written = start;
         let mut signature = String::new();
-        for parameter in parameters.named_children(&mut cursor) {
-            if let Some(default) = parameter.child_by_field_name("value") {
-                let Some(before) = self.source.get(written..default.start_byte()) else {
-                    continue;
-                };
-                signature.push_str(before);
+        'header: loop {
+            let child = cursor.node();
+            if child.start_byte() >= end {
+                break;
+            }
+            if child.end_byte() <= end && ts_expression(child) {
+                signature.push_str(
+                    self.source
+                        .get(written..child.start_byte())
+                        .unwrap_or_default(),
+                );
                 signature.push('…');
-                written = default.end_byte();
+                written = child.end_byte();
+            } else if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    break 'header;
+                }
             }
         }
         if signature.is_empty() {
             return Cow::Borrowed(header);
         }
-        // A TypeScript default can contain a function body even before the outer body's AST node.
-        signature.push_str(
-            header
-                .get(written - node.start_byte()..)
-                .unwrap_or_default(),
-        );
+        signature.push_str(header.get(written - start..).unwrap_or_default());
         Cow::Owned(signature)
     }
 
@@ -472,7 +478,7 @@ impl<'a> Outline<'a> {
             | "abstract_class_declaration"
             | "class"
             | "interface_declaration" => {
-                self.push("", &format!("{prefix}{}", self.header(node)), doc);
+                self.push("", &format!("{prefix}{}", self.ts_header(node)), doc);
                 let Some(body) = node.child_by_field_name("body") else {
                     return;
                 };
@@ -540,6 +546,40 @@ impl<'a> Outline<'a> {
             _ => {}
         }
     }
+}
+
+fn ts_expression(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "decorator" | "computed_property_name" | "statement_block" | "class_body"
+    ) || node.parent().is_some_and(|parent| match parent.kind() {
+        "required_parameter" | "optional_parameter" => {
+            parent.child_by_field_name("value") == Some(node)
+        }
+        "assignment_pattern" | "object_assignment_pattern" => {
+            parent.child_by_field_name("right") == Some(node)
+        }
+        "extends_clause" => {
+            parent.child_by_field_name("value") == Some(node) && !qualified_name(node)
+        }
+        _ => false,
+    })
+}
+
+fn qualified_name(mut node: Node<'_>) -> bool {
+    while node.kind() == "member_expression" {
+        if !node
+            .child_by_field_name("property")
+            .is_some_and(|property| property.kind() == "property_identifier")
+        {
+            return false;
+        }
+        let Some(object) = node.child_by_field_name("object") else {
+            return false;
+        };
+        node = object;
+    }
+    node.kind() == "identifier"
 }
 
 fn block_doc<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
@@ -656,6 +696,29 @@ export enum State { Active, Done }
                 "export enum State",
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn hides_expressions_embedded_in_typescript_headers() -> Result<(), RepoMapError> {
+        let (lines, truncated) = Index::new()?.symbols(
+            Language::TypeScript,
+            r#"
+@decorate(() => { bodyOnly(); })
+export class A extends (() => { bodyOnly(); return Base; })() implements Task {
+    [(() => { bodyOnly(); return "name"; })()]() {}
+}
+export class B extends api.Base<string> {}
+"#,
+        );
+        assert!(!truncated);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("class A extends … implements Task")));
+        assert!(lines
+            .iter()
+            .any(|line| line == "export class B extends api.Base<string>"));
+        assert!(!lines.join("\n").contains("bodyOnly"));
         Ok(())
     }
 
