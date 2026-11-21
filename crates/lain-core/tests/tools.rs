@@ -8,6 +8,30 @@ use std::{
 };
 
 struct TestTool(Value);
+
+#[test]
+fn tool_error_reason_codes() {
+    for (error, code) in [
+        (ToolError::Duplicate("bash".into()), "TOOL_DUPLICATE"),
+        (ToolError::Unknown("missing".into()), "TOOL_NOT_FOUND"),
+        (
+            ToolError::Schema("bad schema".into()),
+            "TOOL_SCHEMA_INVALID",
+        ),
+        (
+            ToolError::Arguments("bad args".into()),
+            "TOOL_ARGUMENTS_INVALID",
+        ),
+        (
+            ToolError::Execution("failed".into()),
+            "TOOL_EXECUTION_FAILED",
+        ),
+        (ToolError::Timeout, "TOOL_TIMEOUT"),
+    ] {
+        assert_eq!(error.code(), code);
+    }
+}
+
 #[async_trait]
 impl Tool for TestTool {
     fn name(&self) -> &str {
