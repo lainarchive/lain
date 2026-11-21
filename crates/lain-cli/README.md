@@ -67,6 +67,29 @@ by the factory. Set `LAIN_ALLOW_SHELL=1` in the daemon's environment to explicit
 authorize Bash (Unix) or PowerShell (Windows). Other values do not grant access.
 An already-running daemon must be restarted to change this authorization.
 
+On Windows the client uses the system Windows PowerShell `Start-Process` launcher
+without redirection to start a hidden daemon. Null stdio on a direct Rust spawn
+does not prevent other inheritable redirected pipe handles from reaching the
+daemon. The short-lived launcher exits after spawning; clients still wait for a
+successful IPC Ping, not just launcher success. Paths are quoted as literal data,
+and the script uses UTF-16LE `-EncodedCommand`. Unix spawning is unchanged.
+
+### Windows handle-inheritance verification
+
+From this branch on a native Windows machine, run:
+
+```powershell
+cargo test -p lain-cli --test windows_spawn windows_clients_reach_eof_before_daemon_exit -- --exact --nocapture
+```
+
+Expect **1 passed**. The test copies `lain.exe` into a directory containing spaces,
+an apostrophe and non-ASCII text; it captures both stdout and stderr from `start`,
+`query`, and `memory inspect`. Each client must reach EOF within 12 seconds while
+its spawned daemon still answers Ping. `start` and `query` intentionally use a
+missing config and exit nonzero without contacting a provider; memory inspection
+must succeed. The test uses unique pipe names and stops its daemons through CIM
+after each case. It needs the standard Windows PowerShell/CIM components.
+
 ## Interaction and output
 
 Interactive commands: `/quit`, `/status`, `/memory`, `/cancel`. Ctrl-C during a turn
