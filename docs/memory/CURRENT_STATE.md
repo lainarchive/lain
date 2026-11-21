@@ -17,7 +17,7 @@
   Unix default sockets now use `XDG_RUNTIME_DIR` or a user-scoped temporary name; the Windows pipe name is unchanged.
 - Scratchpad clipping/padding uses character display widths, including common East Asian/emoji wide ranges and combining marks;
   accented Latin text no longer pulls the right border left. Narrow-width alignment tests include `café résumé` and `界界 wide row`.
-- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (100 tests), including thirteen CLI
+- Verification: formatting and workspace Clippy passed; `cargo test --workspace` passed (101 tests), including fourteen CLI
   tests. Daemon tests use an injected provider and make no network calls. The descendant timeout test now accepts ESRCH
   as an already-exited child during Linux `/proc` inspection and passed 30/30 repetitions. The timeout kill helper already
   ignores gone-process errors. Daemon error events now keep codes separate from messages, with no duplicate printed code.
@@ -25,6 +25,9 @@
   The real-pwsh dropped-future descendant test ran on Linux. Session tests cover 32 active runners, overflow refusal,
   idle eviction, removal after cancellation, and an idle cancel followed by a successful turn. Recovery tests cover a
   provider Error before SessionCompleted followed by a successful prompt on a fresh session.
+  PowerShell working-directory assertions canonicalize both paths to handle Windows short/long names. The shared daemon
+  spawn path already detached all three streams; a Linux subprocess regression now proves `start`, `query`, and memory
+  inspection reach captured-output EOF while their spawned daemon still responds to Ping. Native Windows recheck is pending.
   Whole-workspace Windows cross-Clippy passed with `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0A00`.
   Repository hygiene and its seven verification-meta tests passed. Linux smoke: empty memory inspection exited 0,
   missing-config query returned `CONFIG_NOT_FOUND` and exited 1, Ctrl-C stopped the daemon and removed its socket.

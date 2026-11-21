@@ -193,6 +193,7 @@ pub async fn connect_or_spawn(options: &Options) -> Result<IpcClient, Error> {
         return Ok(client);
     }
     let mut child = std::process::Command::new(std::env::current_exe()?);
+    // I detach every stream so a caller capturing the client can see EOF while the daemon lives.
     child
         .arg("daemon")
         .arg("--endpoint")
