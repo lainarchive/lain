@@ -11,7 +11,10 @@ use std::{
 
 use lain_core::{
     provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall, ToolDefinition},
-    tools::{ToolOutput, ToolRegistry, REPO_MAP_TOOL_NAME},
+    tools::{
+        ToolOutput, ToolRegistry, REPO_MAP_TOOL_NAME,
+        UPDATE_SCRATCHPAD_TOOL_NAME as UPDATE_SCRATCHPAD,
+    },
     CoreError,
 };
 use lain_memory::{
@@ -32,7 +35,6 @@ const QUERY_MAX_UTF16: usize = 1000;
 const CONTENT_MAX_UTF16: usize = 999_000;
 const RECALL_TERMS: usize = 8;
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
-const UPDATE_SCRATCHPAD: &str = "UpdateScratchpad";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,7 +86,7 @@ pub struct AgentRunner {
     config: AgentConfig,
     provider: Arc<dyn ModelProvider>,
     tools: Arc<ToolRegistry>,
-    tool_definitions: Vec<ToolDefinition>,
+    scratchpad_definition: ToolDefinition,
     memory: Arc<Mutex<MemoryStore>>,
     state: AgentState,
     events: broadcast::Sender<AgentEvent>,
@@ -136,16 +138,12 @@ impl AgentRunner {
                 "session_id must be 1..=120 of [A-Za-z0-9._-]".into(),
             ));
         }
-        let mut tool_definitions = tools.definitions();
-        if tool_definitions
-            .iter()
-            .any(|tool| tool.name == UPDATE_SCRATCHPAD)
-        {
+        if tools.contains(UPDATE_SCRATCHPAD) {
             return Err(AgentError::Config(format!(
                 "{UPDATE_SCRATCHPAD} is a reserved built-in tool name"
             )));
         }
-        tool_definitions.push(ToolDefinition {
+        let scratchpad_definition = ToolDefinition {
             name: UPDATE_SCRATCHPAD.into(),
             description: "Replace the active plan without adding a chat message. Use an empty plan to clear it.".into(),
             parameters: json!({
@@ -154,13 +152,13 @@ impl AgentRunner {
                 "required":["plan"],
                 "additionalProperties":false
             }),
-        });
+        };
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Ok(Self {
             config,
             provider,
             tools,
-            tool_definitions,
+            scratchpad_definition,
             memory,
             state: AgentState::new(session_id),
             events,
@@ -359,10 +357,7 @@ impl AgentRunner {
         let mut initial_repo_map = None;
         if input_number == 1
             && self.config.coding_session
-            && self
-                .tool_definitions
-                .iter()
-                .any(|tool| tool.name == REPO_MAP_TOOL_NAME)
+            && self.tools.contains(REPO_MAP_TOOL_NAME)
         {
             match self
                 .bounded(self.tools.dispatch(REPO_MAP_TOOL_NAME, json!({})))
@@ -499,8 +494,10 @@ impl AgentRunner {
             prefix.push(self.config.system_prompt.clone());
         }
         let hermes = self.config.tool_call_mode == ToolCallMode::HermesTags;
+        let mut tool_definitions = self.tools.definitions();
+        tool_definitions.push(self.scratchpad_definition.clone());
         if hermes {
-            prefix.push(hermes::instructions(&self.tool_definitions));
+            prefix.push(hermes::instructions(&tool_definitions));
         }
         if !self.procedural_rules.is_empty() {
             prefix.push(format!(
@@ -520,11 +517,7 @@ impl AgentRunner {
         let mut request = CompletionRequest {
             model: self.config.model.clone(),
             messages: Vec::new(),
-            tools: if hermes {
-                Vec::new()
-            } else {
-                self.tool_definitions.clone()
-            },
+            tools: if hermes { Vec::new() } else { tool_definitions },
             temperature: self.config.temperature,
             max_tokens: Some(self.config.completion_token_limit()),
         };

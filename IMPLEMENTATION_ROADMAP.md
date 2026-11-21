@@ -36,7 +36,7 @@ Deliver reusable specialists, shallow delegation, scheduler, context packaging, 
 
 ## Phase 6: Extensibility
 Deliver skill format, plugin manifest/validation, MCP integration, capability permissions, lifecycle management, Creator Engine candidate workflow.
-**Exit:** create and validate an extension in isolation; inspect permissions; require approval before activation; revoke cleanly.
+**Exit:** create and validate an extension in isolation; inspect permissions; require approval before activation except as specified by ADR-012; revoke cleanly.
 
 ## Phase 7: Intelligence systems
 Deliver model registry, evaluation harness, research records, hardware inspection, inference-engine adapters, experiment registry.
