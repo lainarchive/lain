@@ -314,6 +314,31 @@ fn parse_event(data: &str) -> Result<Vec<Token>, CoreError> {
     Ok(tokens)
 }
 
+#[derive(Default)]
+struct SseLines {
+    pending: Vec<u8>,
+    skip_lf: bool,
+}
+
+impl SseLines {
+    fn push(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+        let mut lines = Vec::new();
+        for &byte in chunk {
+            if self.skip_lf && byte == b'\n' {
+                self.skip_lf = false;
+                continue;
+            }
+            self.skip_lf = byte == b'\r';
+            if byte == b'\r' || byte == b'\n' {
+                lines.push(std::mem::take(&mut self.pending));
+            } else {
+                self.pending.push(byte);
+            }
+        }
+        lines
+    }
+}
+
 #[async_trait]
 impl ModelProvider for OpenAiCompatibleProvider {
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, CoreError> {
@@ -337,13 +362,11 @@ impl ModelProvider for OpenAiCompatibleProvider {
     ) -> Result<BoxStream<'static, Result<Token, CoreError>>, CoreError> {
         let mut source = self.send(req, true).await?.bytes_stream();
         Ok(Box::pin(async_stream::try_stream! {
-            let mut pending = Vec::new();
+            let mut lines = SseLines::default();
             let mut data = Vec::new();
             while let Some(chunk) = source.next().await {
-                pending.extend_from_slice(&chunk?);
-                while let Some(end) = pending.iter().position(|b| *b == b'\n') {
-                    let bytes: Vec<u8> = pending.drain(..=end).collect();
-                    let line = std::str::from_utf8(&bytes).map_err(|e| CoreError::Protocol(e.to_string()))?.trim_end_matches(['\r', '\n']);
+                for bytes in lines.push(&chunk?) {
+                    let line = std::str::from_utf8(&bytes).map_err(|e| CoreError::Protocol(e.to_string()))?;
                     if line.is_empty() {
                         if data.is_empty() { continue; }
                         let event = data.join("\n");
@@ -364,6 +387,29 @@ impl ModelProvider for OpenAiCompatibleProvider {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn sse_line_endings_across_chunks() {
+        for ending in ["\r", "\n", "\r\n"] {
+            let input = format!("first{ending}second{ending}{ending}");
+            for split in 0..=input.len() {
+                let mut lines = SseLines::default();
+                let (first, second) = input.as_bytes().split_at(split);
+                let mut actual = lines.push(first);
+                actual.extend(lines.push(second));
+                assert_eq!(
+                    actual,
+                    vec![b"first".to_vec(), b"second".to_vec(), Vec::new()]
+                );
+                assert!(lines.pending.is_empty());
+            }
+        }
+        let mut lines = SseLines::default();
+        assert!(lines.push(b"partial").is_empty());
+        assert_eq!(lines.push(b"\r"), vec![b"partial".to_vec()]);
+        assert!(lines.push(b"\n").is_empty());
+        assert_eq!(lines.push(b"\r"), vec![Vec::<u8>::new()]);
+    }
 
     #[test]
     fn tool_wire_arguments_and_definition_round_trip() {
