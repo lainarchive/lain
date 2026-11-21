@@ -316,25 +316,61 @@ impl PowerShellTool {
     }
 }
 
+fn powershell_tree_killer(pid: u32) -> std::process::Command {
+    #[cfg(unix)]
+    let mut command = {
+        let mut command = std::process::Command::new("/bin/kill");
+        command.args(["-KILL", "--", &format!("-{pid}")]);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        // I use taskkill for the tree, but descendants can survive if their parent exits first; this is not a Windows Job Object.
+        let mut command = std::process::Command::new("taskkill.exe");
+        command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        command.creation_flags(0x08000000);
+        command
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+struct PowerShellTreeGuard(Option<u32>);
+
+impl Drop for PowerShellTreeGuard {
+    fn drop(&mut self) {
+        let Some(pid) = self.0 else {
+            return;
+        };
+        // I finish tree cleanup before Child drops; taskkill needs the interpreter alive to find descendants.
+        if let Ok(mut killer) = powershell_tree_killer(pid).spawn() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                match killer.try_wait() {
+                    Ok(Some(_)) => break,
+                    _ if std::time::Instant::now() >= deadline => {
+                        let _ = killer.kill();
+                        let _ = killer.wait();
+                        break;
+                    }
+                    _ => std::thread::sleep(Duration::from_millis(5)),
+                }
+            }
+        }
+    }
+}
+
 async fn kill_powershell_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
     if let Some(pid) = pid {
-        #[cfg(unix)]
-        let mut kill = {
-            let mut command = tokio::process::Command::new("/bin/kill");
-            command.args(["-KILL", "--", &format!("-{pid}")]);
-            command
-        };
         #[cfg(windows)]
-        let mut kill = {
-            // I use taskkill for the tree, but descendants can survive if their parent exits first; this is not a Windows Job Object.
-            if child.id() != Some(pid) {
-                return;
-            }
-            let mut command = tokio::process::Command::new("taskkill.exe");
-            command.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            command.creation_flags(0x08000000);
-            command
-        };
+        if child.id() != Some(pid) {
+            return;
+        }
+        let mut kill = tokio::process::Command::from(powershell_tree_killer(pid));
         let _ = tokio::time::timeout(
             Duration::from_secs(2),
             kill.stdin(Stdio::null())
@@ -414,6 +450,7 @@ impl Tool for PowerShellTool {
             .spawn()
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         let pid = child.id();
+        let mut tree_guard = PowerShellTreeGuard(pid);
         let stdout = child
             .stdout
             .take()
@@ -431,18 +468,22 @@ impl Tool for PowerShellTool {
         })
         .await;
         match result {
-            Ok(Ok((status, stdout, stderr))) => match status.code() {
-                Some(code) => Ok(ToolOutput {
-                    content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
-                    exit_code: Some(code),
-                }),
-                None => Err(ToolError::Execution(format!(
-                    "command ended without an exit code ({status}); stderr: {stderr}"
-                ))),
-            },
+            Ok(Ok((status, stdout, stderr))) => {
+                tree_guard.0 = None;
+                match status.code() {
+                    Some(code) => Ok(ToolOutput {
+                        content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
+                        exit_code: Some(code),
+                    }),
+                    None => Err(ToolError::Execution(format!(
+                        "command ended without an exit code ({status}); stderr: {stderr}"
+                    ))),
+                }
+            }
             Ok(Err(error)) => Err(ToolError::Execution(error.to_string())),
             Err(_) => {
                 kill_powershell_tree(&mut child, pid).await;
+                tree_guard.0 = None;
                 Err(ToolError::Timeout)
             }
         }
