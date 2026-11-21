@@ -255,35 +255,7 @@ impl Index {
             lines: Vec::new(),
             truncated: root.has_error(),
         };
-        let mut doc = String::new();
-        let mut cursor = root.walk();
-        for node in root.named_children(&mut cursor) {
-            if outline.full() {
-                outline.truncated = true;
-                break;
-            }
-            if matches!(language, Language::Rust) && node.child_by_field_name("inner").is_some() {
-                let text = outline.text(node);
-                if let Some(summary) = text
-                    .strip_prefix("//!")
-                    .map(str::trim)
-                    .or_else(|| block_doc(text, "/*!"))
-                {
-                    if outline.lines.is_empty() {
-                        outline.push("", &format!("//! {}", compact(summary, MAX_DOC_BYTES)), "");
-                    }
-                    continue;
-                }
-            }
-            if outline.collect_doc(node, language, &mut doc) {
-                continue;
-            }
-            match language {
-                Language::Rust => outline.rust(node, &doc),
-                _ => outline.typescript(node, "", &doc),
-            }
-            doc.clear();
-        }
+        outline.scope(root, language, 0);
         (outline.lines, outline.truncated)
     }
 }
@@ -301,6 +273,43 @@ impl<'a> Outline<'a> {
 
     fn text(&self, node: Node<'_>) -> &'a str {
         self.source.get(node.byte_range()).unwrap_or_default()
+    }
+
+    fn scope(&mut self, root: Node<'_>, language: Language, depth: usize) {
+        let mut doc = String::new();
+        let mut cursor = root.walk();
+        let first_line = self.lines.len();
+        for node in root.named_children(&mut cursor) {
+            if self.full() {
+                self.truncated = true;
+                break;
+            }
+            if matches!(language, Language::Rust) && node.child_by_field_name("inner").is_some() {
+                let text = self.text(node);
+                if let Some(summary) = text
+                    .strip_prefix("//!")
+                    .map(str::trim)
+                    .or_else(|| block_doc(text, "/*!"))
+                {
+                    if self.lines.len() == first_line {
+                        self.push(
+                            &"  ".repeat(depth),
+                            &format!("//! {}", compact(summary, MAX_DOC_BYTES)),
+                            "",
+                        );
+                    }
+                    continue;
+                }
+            }
+            if self.collect_doc(node, language, &mut doc) {
+                continue;
+            }
+            match language {
+                Language::Rust => self.rust(node, &doc, depth),
+                _ => self.typescript(node, "", &doc),
+            }
+            doc.clear();
+        }
     }
 
     fn collect_doc(&self, node: Node<'_>, language: Language, doc: &mut String) -> bool {
@@ -389,7 +398,8 @@ impl<'a> Outline<'a> {
         }
     }
 
-    fn rust(&mut self, node: Node<'_>, doc: &str) {
+    fn rust(&mut self, node: Node<'_>, doc: &str, depth: usize) {
+        let indent = "  ".repeat(depth);
         match node.kind() {
             "function_item"
             | "function_signature_item"
@@ -397,7 +407,17 @@ impl<'a> Outline<'a> {
             | "enum_item"
             | "union_item"
             | "type_item" => {
-                self.push("", self.header(node), doc);
+                self.push(&indent, self.header(node), doc);
+            }
+            "mod_item" => {
+                self.push(&indent, self.header(node), doc);
+                if let Some(body) = node.child_by_field_name("body") {
+                    if depth < MAX_DEPTH {
+                        self.scope(body, Language::Rust, depth + 1);
+                    } else {
+                        self.truncated = true;
+                    }
+                }
             }
             "trait_item" | "impl_item" => {
                 let trait_item = node.kind() == "trait_item";
@@ -407,7 +427,7 @@ impl<'a> Outline<'a> {
                 };
                 let mut heading = false;
                 if trait_item {
-                    self.push("", self.header(node), doc);
+                    self.push(&indent, self.header(node), doc);
                     heading = true;
                 }
                 let mut method_doc = String::new();
@@ -420,10 +440,10 @@ impl<'a> Outline<'a> {
                         && (in_trait || self.modifier(method, "visibility_modifier") == Some("pub"))
                     {
                         if !heading {
-                            self.push("", self.header(node), doc);
+                            self.push(&indent, self.header(node), doc);
                             heading = true;
                         }
-                        self.push("  ", self.header(method), &method_doc);
+                        self.push(&format!("{indent}  "), self.header(method), &method_doc);
                     }
                     method_doc.clear();
                     if self.full() {
@@ -471,6 +491,7 @@ impl<'a> Outline<'a> {
             | "function_signature"
             | "function_expression"
             | "generator_function_declaration"
+            | "type_alias_declaration"
             | "enum_declaration" => {
                 self.push("", &format!("{prefix}{}", self.ts_header(node)), doc);
             }
@@ -660,6 +681,37 @@ pub fn top(value: i32) -> i32 { fn nested() {} value }
     }
 
     #[test]
+    fn preserves_inline_module_scope_and_docs_without_function_bodies() -> Result<(), RepoMapError>
+    {
+        let (lines, truncated) = Index::new()?.symbols(
+            Language::Rust,
+            r#"
+/// Public API.
+pub mod api {
+    //! Module overview.
+    pub mod settings {
+        /// Start Lain.
+        pub fn start() { body_only(); }
+    }
+    mod separate;
+}
+"#,
+        );
+        assert!(!truncated);
+        assert_eq!(
+            lines,
+            [
+                "pub mod api — Public API.",
+                "  //! Module overview.",
+                "  pub mod settings",
+                "    pub fn start() — Start Lain.",
+                "  mod separate",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn extracts_typescript_exports_methods_signatures_and_jsdoc() -> Result<(), RepoMapError> {
         let mut index = Index::new()?;
         let (lines, truncated) = index.symbols(
@@ -680,6 +732,8 @@ export declare function ready(): boolean;
 export const format = (value: string): string => value.toUpperCase();
 export function build(init: () => void = () => { bodyOnly(); }): Job { return new Job(); }
 export enum State { Active, Done }
+/** Public task handle. */
+export type Handle<T> = Promise<T>;
 "#,
         );
         assert!(!truncated);
@@ -694,6 +748,7 @@ export enum State { Active, Done }
                 "export const format = (value: string): string =>",
                 "export function build(init: () => void = …): Job",
                 "export enum State",
+                "export type Handle<T> = Promise<T> — Public task handle.",
             ]
         );
         Ok(())
