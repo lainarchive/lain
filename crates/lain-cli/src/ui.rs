@@ -192,19 +192,29 @@ pub async fn connect_or_spawn(options: &Options) -> Result<IpcClient, Error> {
     if let Ok(Ok(client)) = timeout(Duration::from_millis(300), ping(options)).await {
         return Ok(client);
     }
-    let mut child = std::process::Command::new(std::env::current_exe()?);
-    // I detach every stream so a caller capturing the client can see EOF while the daemon lives.
+    #[cfg(unix)]
+    let mut child = {
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        command
+            .arg("daemon")
+            .arg("--endpoint")
+            .arg(&options.endpoint.0)
+            .arg("--config")
+            .arg(&options.config);
+        command.process_group(0);
+        command
+    };
+    // I use Start-Process on Windows because null stdio alone still inherits the client's other pipe handles.
+    #[cfg(windows)]
+    let mut child = crate::windows_launcher::command(
+        &std::env::current_exe()?,
+        &options.endpoint.0,
+        &options.config,
+    )?;
     child
-        .arg("daemon")
-        .arg("--endpoint")
-        .arg(&options.endpoint.0)
-        .arg("--config")
-        .arg(&options.config)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    child.process_group(0);
     #[cfg(windows)]
     child.creation_flags(0x08000200);
     let mut child = child.spawn()?;
@@ -224,10 +234,18 @@ pub async fn connect_or_spawn(options: &Options) -> Result<IpcClient, Error> {
             return Ok(client);
         }
         if let Some(status) = child.try_wait()? {
-            return Err(Error::failure(
-                "DAEMON_START_FAILED",
-                format!("Daemon exited: {status}; run lain daemon in the foreground for details"),
-            ));
+            #[cfg(windows)]
+            let failed = !status.success();
+            #[cfg(unix)]
+            let failed = true;
+            if failed {
+                return Err(Error::failure(
+                    "DAEMON_START_FAILED",
+                    format!(
+                        "Daemon exited: {status}; run lain daemon in the foreground for details"
+                    ),
+                ));
+            }
         }
         tokio::time::sleep(delay.min(remaining)).await;
         delay = (delay * 2).min(Duration::from_millis(400));

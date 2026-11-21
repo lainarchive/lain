@@ -2,6 +2,8 @@ pub mod args;
 pub mod daemon;
 pub mod render;
 pub mod ui;
+#[cfg(any(windows, test))]
+mod windows_launcher;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
