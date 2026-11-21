@@ -220,10 +220,17 @@ impl Tool for BashTool {
         })
         .await;
         match result {
-            Ok(Ok((status, stdout, stderr))) => Ok(ToolOutput {
-                content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
-                exit_code: status.code(),
-            }),
+            // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
+            // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
+            Ok(Ok((status, stdout, stderr))) => match status.code() {
+                Some(code) => Ok(ToolOutput {
+                    content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
+                    exit_code: Some(code),
+                }),
+                None => Err(ToolError::Execution(format!(
+                    "command ended without an exit code ({status}); stderr: {stderr}"
+                ))),
+            },
             Ok(Err(error)) => Err(ToolError::Execution(error.to_string())),
             Err(_) => {
                 child
