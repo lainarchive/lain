@@ -412,7 +412,10 @@ impl AgentRunner {
             if message.role != Role::Assistant {
                 return Err(CoreError::Protocol("expected an assistant response".into()).into());
             }
-            if self.config.tool_call_mode == ToolCallMode::HermesTags
+            let truncated = response.finish_reason.as_deref() == Some("length");
+            if truncated {
+                message.tool_calls.clear();
+            } else if self.config.tool_call_mode == ToolCallMode::HermesTags
                 && message.tool_calls.is_empty()
             {
                 let extracted = message
@@ -451,6 +454,16 @@ impl AgentRunner {
                     tool_calls: 0,
                     tokens_used: self.state.tokens_used,
                 });
+                if truncated {
+                    let mut outcome = self.stop(
+                        TerminationReason::BudgetExhausted {
+                            budget: BudgetKind::CompletionTokens,
+                        },
+                        run_turn,
+                    );
+                    outcome.output = Some(text);
+                    return Ok(outcome);
+                }
                 self.state.status = AgentStatus::AwaitingInput;
                 return Ok(RunOutcome {
                     status: self.state.status.clone(),
@@ -1511,6 +1524,24 @@ mod tests {
                 Some("Where does startup begin?")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_length_limited_completion_reports_partial_output_and_does_not_run_tools() {
+        let mut response = calls(Some("Partial answer"), &["read"]).unwrap();
+        response.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![Ok(response)]);
+        let (mut agent, _) = runner(config(), provider.clone());
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Partial answer"));
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::CompletionTokens,
+            }),
+        );
+        assert_eq!(provider.requests().len(), 1);
+        assert!(agent.state().messages.last().unwrap().tool_calls.is_empty());
     }
 
     #[tokio::test]
