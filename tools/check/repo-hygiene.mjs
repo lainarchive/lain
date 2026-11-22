@@ -28,7 +28,7 @@ export const ALLOWED_RUNTIME_DEPENDENCIES = /** @type {string[]} */ (['@opentui/
 export const ALLOWED_DEV_DEPENDENCIES = ['typescript', '@types/node'];
 
 export const ALLOWED_RUST_DEPENDENCIES = [
-  'axum', 'futures-util', 'tower-http', 'ts-rs',
+  'axum', 'futures-util', 'getrandom', 'tower-http', 'ts-rs',
   'async-stream', 'async-trait', 'cap-std', 'crossterm', 'futures', 'jsonschema', 'lain-agent', 'lain-context', 'lain-core', 'lain-ipc',
   'lain-memory', 'lain-plugin', 'reqwest', 'rusqlite', 'serde', 'serde_json', 'serde_yaml_ng', 'tempfile', 'thiserror', 'tiktoken-rs', 'tokio',
   'tree-sitter', 'tree-sitter-rust', 'tree-sitter-typescript',
@@ -96,7 +96,7 @@ if (isEntryPoint(import.meta.url)) await main('repo-hygiene', async ({ result, s
       ],
       ['empty runtime deps', unexpectedDependencies([], []).length === 0, 'false positive on empty set'],
       ['rust dependency rule', unexpectedDependencies(['rusqlite', 'unapproved-crate'], ALLOWED_RUST_DEPENDENCIES).length === 1, 'unapproved Rust dependency missed'],
-      ['core dependency rule', unexpectedDependencies(['tokio', 'lain-memory', 'jsonschema'], ALLOWED_RUST_DEPENDENCIES).length === 0, 'approved Core dependency rejected'],
+      ['core dependency rule', unexpectedDependencies(['tokio', 'lain-memory', 'jsonschema', 'getrandom'], ALLOWED_RUST_DEPENDENCIES).length === 0, 'approved Core dependency rejected'],
       ['rust dev dependency rule', unexpectedDependencies(['tempfile', 'anyhow'], ALLOWED_RUST_DEV_DEPENDENCIES).length === 1, 'unapproved Rust dev dependency missed'],
     ];
     const failed = checks.filter(([, ok]) => !ok);
