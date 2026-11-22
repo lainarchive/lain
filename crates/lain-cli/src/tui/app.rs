@@ -76,7 +76,13 @@ pub struct Command {
     pub action: Action,
 }
 
-pub const COMMANDS: [Command; 18] = [
+pub const COMMANDS: [Command; 19] = [
+    Command {
+        id: "dashboard",
+        title: "Show dashboard login URL",
+        hint: "Bots status card · private credential",
+        action: Action::Go(Screen::Bots),
+    },
     Command {
         id: "dag",
         title: "Toggle DAG drawer",

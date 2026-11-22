@@ -55,6 +55,29 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn dashboard_access_command_renders_and_disconnect_clears_credentials(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    assert!(app::matching("dashboard")
+        .iter()
+        .any(|command| command.id == "dashboard"));
+    state.composer = "/dashboard".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Bots);
+    state.inspect.dashboard.accept(None, Duration::ZERO);
+    assert!(render(&state)?.contains("Dashboard disabled or unavailable"));
+    let url = format!("http://127.0.0.1:4040/#token={}", "a".repeat(64));
+    state
+        .inspect
+        .dashboard
+        .accept(Some(url.clone()), Duration::ZERO);
+    assert!(render(&state)?.contains(&url));
+    state.inspect.reset_socket();
+    assert!(!render(&state)?.contains("#token="));
+    Ok(())
+}
+
+#[test]
 fn token_deltas_join_and_whole_messages_replace_only_the_pending_block(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_launch()?;

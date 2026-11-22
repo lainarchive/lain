@@ -157,6 +157,7 @@ impl Drop for ActiveTurn<'_> {
 
 pub struct DaemonHandler {
     pub dashboard: DashboardHub,
+    pub(crate) dashboard_url: Mutex<Option<String>>,
     memory: SharedMemory,
     factory: Arc<dyn RunnerFactory>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
@@ -174,6 +175,7 @@ impl DaemonHandler {
     pub fn new(memory: SharedMemory, factory: Arc<dyn RunnerFactory>) -> Self {
         Self {
             dashboard: DashboardHub::default(),
+            dashboard_url: Mutex::new(None),
             memory,
             factory,
             sessions: RwLock::new(HashMap::new()),
@@ -202,6 +204,16 @@ impl DaemonHandler {
             Command::ListTools { session_id } => self.list_tools(session_id, events).await?,
             Command::ListPlugins => self.list_plugins(events).await?,
             Command::ListSessions => self.list_sessions(events).await?,
+            Command::GetDashboardUrl => {
+                let url = self
+                    .dashboard_url
+                    .lock()
+                    .map_err(|_| {
+                        Error::failure("DASHBOARD_ACCESS", "Dashboard access unavailable")
+                    })?
+                    .clone();
+                events.send(Event::DashboardUrl { url }).await?;
+            }
             Command::TestToolProposal {
                 session_id,
                 proposal,

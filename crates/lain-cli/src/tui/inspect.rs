@@ -119,6 +119,7 @@ pub struct Inspect {
     pub demo: bool,
     pub sessions: Resource<Vec<SessionRow>>,
     pub daemon: Resource<String>,
+    pub dashboard: Resource<Option<String>>,
     pub memory: Resource<Vec<MemoryEntry>>,
     pub config: Resource<Vec<ConfigModel>>,
     pub config_path: PathBuf,
@@ -149,11 +150,13 @@ impl Inspect {
         }
         refresh(&mut self.sessions);
         refresh(&mut self.daemon);
+        refresh(&mut self.dashboard);
         refresh(&mut self.memory);
     }
     pub fn reset_socket(&mut self) {
         self.sessions.reset();
         self.daemon.reset();
+        self.dashboard.reset();
         self.memory.reset();
         self.session_selected = 0;
         self.memory_selected = 0;
@@ -163,6 +166,9 @@ impl Inspect {
 
     pub fn demo_refresh(&mut self, screen: Screen, now: Duration) {
         self.demo = true;
+        if matches!(self.dashboard.state, ReadState::Idle) {
+            self.dashboard.accept(None, now);
+        }
         if matches!(screen, Screen::Sessions | Screen::Bots)
             && matches!(self.sessions.state, ReadState::Idle)
         {
@@ -384,6 +390,7 @@ impl Inspect {
 enum Kind {
     Sessions,
     Daemon,
+    Dashboard,
     Memory,
 }
 #[derive(Default)]
@@ -403,6 +410,14 @@ impl Requests {
         now: Duration,
     ) -> Result<(), Error> {
         let mut commands = vec![];
+        if screen == Screen::Bots && matches!(view.dashboard.state, ReadState::Idle) {
+            view.dashboard.state = ReadState::Loading;
+            commands.push((
+                Kind::Dashboard,
+                view.dashboard.generation,
+                Command::GetDashboardUrl,
+            ));
+        }
         if matches!(screen, Screen::Sessions | Screen::Bots) {
             if matches!(view.sessions.state, ReadState::Idle) {
                 view.sessions.state = ReadState::Loading;
@@ -456,6 +471,12 @@ impl Requests {
             _ => "Unsupported response from daemon".into(),
         };
         match kind {
+            Kind::Dashboard if generation == view.dashboard.generation => match event {
+                Event::DashboardUrl { url } => view
+                    .dashboard
+                    .accept(url.as_ref().map(|url| clean(url)), now),
+                _ => view.dashboard.unavailable(error),
+            },
             Kind::Sessions if generation == view.sessions.generation => match event {
                 Event::Sessions { sessions } => {
                     let selected = view
@@ -898,6 +919,44 @@ pub fn models(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dashboard_access_errors_and_stale_replies_clear_credentials() {
+        let mut requests = Requests::default();
+        let mut view = Inspect::default();
+        requests.pending.insert(1, (Kind::Dashboard, 0));
+        requests.event(
+            1,
+            &Event::DashboardUrl {
+                url: Some("private-url".into()),
+            },
+            &mut view,
+            Duration::ZERO,
+        );
+        assert_eq!(view.dashboard.data.as_deref(), Some("private-url"));
+        requests.pending.insert(2, (Kind::Dashboard, 0));
+        requests.event(
+            2,
+            &Event::Error {
+                code: "unsupported".into(),
+                message: "old daemon".into(),
+            },
+            &mut view,
+            Duration::ZERO,
+        );
+        assert!(view.dashboard.data.is_none());
+        assert!(matches!(view.dashboard.state, ReadState::Unavailable(_)));
+        requests.pending.insert(3, (Kind::Dashboard, 0));
+        view.reset_socket();
+        requests.event(
+            3,
+            &Event::DashboardUrl {
+                url: Some("stale-private-url".into()),
+            },
+            &mut view,
+            Duration::ZERO,
+        );
+        assert!(view.dashboard.data.is_none());
+    }
     #[test]
     fn replies_are_correlated_and_stale_refreshes_do_not_replace_data() {
         let mut requests = Requests::default();

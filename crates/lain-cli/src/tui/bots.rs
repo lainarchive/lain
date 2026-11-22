@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
@@ -33,7 +33,7 @@ fn status(value: Option<SessionStatus>) -> (&'static str, ratatui::style::Color)
 
 pub fn draw(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
     let parts = Layout::vertical([
-        Constraint::Length(8),
+        Constraint::Length(10),
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(1),
@@ -126,12 +126,22 @@ pub fn draw(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
             view.memory.state.label(now)
         )));
     }
+    lines.push(Line::raw(if view.dashboard.state.ready() {
+        match &view.dashboard.data {
+            Some(url) => format!("Dashboard (private): {url}"),
+            None => "Dashboard disabled or unavailable".into(),
+        }
+    } else {
+        format!("Dashboard · {}", view.dashboard.state.label(now))
+    }));
     frame.render_widget(
-        Paragraph::new(lines).block(panel(if view.demo {
-            " Bots · /bots · OFFLINE DEMO "
-        } else {
-            " Bots · /bots · daemon overview "
-        })),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(panel(if view.demo {
+                " Bots · /bots · OFFLINE DEMO "
+            } else {
+                " Bots · /bots · daemon overview "
+            })),
         *header,
     );
     let Some(table) = parts.get(2) else {

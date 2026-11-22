@@ -23,7 +23,13 @@ fn powershell_literal(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
-fn launch_script(exe: &Path, endpoint: &Path, config: &Path, cwd: &Path) -> Result<String, Error> {
+fn launch_script(
+    exe: &Path,
+    endpoint: &Path,
+    config: &Path,
+    cwd: &Path,
+    log: &Path,
+) -> Result<String, Error> {
     let path_text = |path: &Path| {
         path.to_str().map(str::to_owned).ok_or_else(|| {
             Error::failure(
@@ -36,14 +42,15 @@ fn launch_script(exe: &Path, endpoint: &Path, config: &Path, cwd: &Path) -> Resu
     let endpoint = path_text(endpoint)?;
     let config = path_text(config)?;
     let cwd = path_text(cwd)?;
+    let log = path_text(log)?;
     let arguments = ["daemon", "--endpoint", &endpoint, "--config", &config]
         .into_iter()
         .map(windows_argument)
         .collect::<Vec<_>>()
         .join(" ");
     Ok(format!(
-        "$ErrorActionPreference = 'Stop'; Start-Process -FilePath {} -ArgumentList {} -WorkingDirectory {} -WindowStyle Hidden",
-        powershell_literal(&exe), powershell_literal(&arguments), powershell_literal(&cwd),
+        "$ErrorActionPreference = 'Stop'; Start-Process -FilePath {} -ArgumentList {} -WorkingDirectory {} -WindowStyle Hidden -RedirectStandardError {}",
+        powershell_literal(&exe), powershell_literal(&arguments), powershell_literal(&cwd), powershell_literal(&log),
     ))
 }
 
@@ -71,6 +78,7 @@ pub(crate) fn command(
     exe: &Path,
     endpoint: &Path,
     config: &Path,
+    log: &Path,
 ) -> Result<std::process::Command, Error> {
     let root = std::env::var_os("SystemRoot").ok_or_else(|| {
         Error::failure(
@@ -95,6 +103,7 @@ pub(crate) fn command(
             endpoint,
             config,
             &std::env::current_dir()?,
+            log,
         )?));
     Ok(command)
 }
@@ -124,11 +133,13 @@ mod tests {
             Path::new(r"\\.\pipe\lain-$`;,()"),
             Path::new(r"C:\config ' $x; stop-process.json"),
             Path::new(r"C:\working ' é"),
+            Path::new(r"C:\state ' é\daemon.log"),
         )?;
         assert_eq!(script, concat!(
             "$ErrorActionPreference = 'Stop'; Start-Process -FilePath 'C:\\space '' é\\lain.exe' ",
             "-ArgumentList '\"daemon\" \"--endpoint\" \"\\\\.\\pipe\\lain-$`;,()\" ",
-            "\"--config\" \"C:\\config '' $x; stop-process.json\"' -WorkingDirectory 'C:\\working '' é' -WindowStyle Hidden",
+            "\"--config\" \"C:\\config '' $x; stop-process.json\"' -WorkingDirectory 'C:\\working '' é' -WindowStyle Hidden ",
+            "-RedirectStandardError 'C:\\state '' é\\daemon.log'",
         ));
         Ok(())
     }
@@ -152,7 +163,8 @@ mod tests {
             invalid,
             Path::new("pipe"),
             Path::new("config"),
-            Path::new("cwd")
+            Path::new("cwd"),
+            Path::new("log")
         )
         .is_err());
     }
@@ -166,7 +178,8 @@ mod tests {
             &invalid,
             Path::new("pipe"),
             Path::new("config"),
-            Path::new("cwd")
+            Path::new("cwd"),
+            Path::new("log")
         )
         .is_err());
     }
