@@ -308,12 +308,15 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) {
         plan.push(Line::styled(line, Style::default().fg(color)));
     }
     if let Some(rect) = sections.first() {
-        frame.render_widget(
-            Paragraph::new(plan)
-                .wrap(Wrap { trim: false })
-                .block(panel(" Scratchpad ")),
-            *rect,
-        );
+        let plan = Paragraph::new(plan).wrap(Wrap { trim: false });
+        let title = if plan.line_count(rect.width.saturating_sub(2))
+            > usize::from(rect.height.saturating_sub(2))
+        {
+            " Scratchpad … more below "
+        } else {
+            " Scratchpad "
+        };
+        frame.render_widget(plan.block(panel(title)), *rect);
     }
     let rules = if state.rules.is_empty() {
         "No procedural rules recalled".into()
@@ -326,12 +329,15 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) {
             .join("\n")
     };
     if let Some(rect) = sections.get(1) {
-        frame.render_widget(
-            Paragraph::new(rules)
-                .wrap(Wrap { trim: false })
-                .block(panel(" Procedural rules ")),
-            *rect,
-        );
+        let rules = Paragraph::new(rules).wrap(Wrap { trim: false });
+        let title = if rules.line_count(rect.width.saturating_sub(2))
+            > usize::from(rect.height.saturating_sub(2))
+        {
+            " Procedural rules … more below "
+        } else {
+            " Procedural rules "
+        };
+        frame.render_widget(rules.block(panel(title)), *rect);
     }
     if let (Some(tool), Some(rect)) = (tool, sections.get(2)) {
         let output = Paragraph::new(tool.output.as_str()).wrap(Wrap { trim: false });
