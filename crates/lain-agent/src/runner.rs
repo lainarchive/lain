@@ -569,6 +569,9 @@ impl AgentRunner {
                 "provider stream ended before finish reason".into(),
             ));
         }
+        if finish_reason.as_deref() == Some("length") {
+            calls.clear();
+        }
         let tool_calls = calls
             .into_values()
             .map(|(id, name, arguments)| {
@@ -1222,14 +1225,25 @@ mod tests {
     async fn length_truncated_streamed_arguments_take_the_budget_path() {
         let provider = Arc::new(StreamProvider(vec![
             Token::Text("Partial answer".into()),
-            Token::ToolCall { index: 0, id: Some("c".into()), name: Some("ok".into()), arguments: Some("{\"n\":".into()) },
+            Token::ToolCall {
+                index: 0,
+                id: Some("c".into()),
+                name: Some("ok".into()),
+                arguments: Some("{\"n\":".into()),
+            },
             Token::Finished("length".into()),
         ]));
-        let mut agent = AgentRunner::new(config(), provider, registry(), memory(), "length").unwrap();
+        let mut agent =
+            AgentRunner::new(config(), provider, registry(), memory(), "length").unwrap();
         agent.set_streaming(true);
         let outcome = agent.run("hi").await.unwrap();
         assert_eq!(outcome.output.as_deref(), Some("Partial answer"));
-        assert_eq!(outcome.status, AgentStatus::Terminated(TerminationReason::BudgetExhausted { budget: BudgetKind::CompletionTokens }));
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::CompletionTokens
+            })
+        );
         assert_eq!(agent.state().tool_calls, 0);
     }
 
