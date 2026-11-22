@@ -9,6 +9,7 @@ use futures::stream::BoxStream;
 use lain_agent::{AgentConfig, AgentRunner, ProviderSelection};
 use lain_cli::{
     daemon::{ConfigFactory, DaemonHandler, RunnerFactory, SharedMemory},
+    dashboard::Intervention,
     Error,
 };
 use lain_core::{
@@ -121,6 +122,111 @@ impl ModelProvider for ScriptedProvider {
 }
 
 struct ScriptedFactory(Arc<Notify>);
+
+#[tokio::test]
+async fn dashboard_interventions_validate_steering_and_idle_cancel_preserves_session() -> TestResult
+{
+    timeout(Duration::from_secs(10), async {
+        let directory = tempfile::tempdir()?;
+        let endpoint = endpoint(&directory);
+        let handler = Arc::new(DaemonHandler::new(
+            memory(&directory)?,
+            Arc::new(ScriptedFactory(Arc::new(Notify::new()))),
+        ));
+        let (stop, receiver) = watch::channel(false);
+        let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler.clone(), receiver));
+        let mut client = IpcClient::connect(&endpoint).await?;
+        client
+            .request(Command::StartSession {
+                session_id: Some("s".into()),
+            })
+            .await?;
+        handler
+            .intervene(Intervention::Pause {
+                session_id: "s".into(),
+            })
+            .await?;
+        assert!(
+            handler
+                .dashboard_status()
+                .await
+                .sessions
+                .first()
+                .ok_or("no session")?
+                .control
+                .paused
+        );
+        handler
+            .intervene(Intervention::Resume {
+                session_id: "s".into(),
+            })
+            .await?;
+        assert!(
+            !handler
+                .dashboard_status()
+                .await
+                .sessions
+                .first()
+                .ok_or("no session")?
+                .control
+                .paused
+        );
+        for text in [" ".into(), "x".repeat(8001)] {
+            assert_eq!(
+                handler
+                    .intervene(Intervention::Steer {
+                        session_id: "s".into(),
+                        text
+                    })
+                    .await
+                    .err()
+                    .ok_or("accepted invalid steering")?
+                    .code(),
+                "INTERVENTION_REJECTED"
+            );
+        }
+        assert_eq!(
+            handler
+                .intervene(Intervention::Approve {
+                    session_id: "s".into(),
+                    call_id: "stale".into()
+                })
+                .await
+                .err()
+                .ok_or("accepted stale approval")?
+                .code(),
+            "INTERVENTION_REJECTED"
+        );
+        handler
+            .intervene(Intervention::Steer {
+                session_id: "s".into(),
+                text: "continue".into(),
+            })
+            .await?;
+        handler
+            .intervene(Intervention::Cancel {
+                session_id: "s".into(),
+            })
+            .await?;
+        let events = client
+            .request(Command::SendMessage {
+                session_id: "s".into(),
+                text: "hello".into(),
+            })
+            .await?;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::StreamToken { text, .. } if text == "Done.")),
+            "{events:?}"
+        );
+        client.close().await?;
+        stop.send(true)?;
+        server.await??;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+    .await?
+}
 
 #[tokio::test]
 async fn sessions_are_bounded_and_terminated_sessions_are_removed() -> TestResult {

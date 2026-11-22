@@ -10,7 +10,8 @@ Usage:
   lain start
   lain query \"prompt\"
   lain memory inspect [--limit N] [--session ID]
-  lain daemon                         (internal)
+  lain ui                             Dashboard at http://127.0.0.1:4040
+  lain daemon [--serve-ui]             (internal)
 
 Options (before or after the command):
   --endpoint PATH   IPC endpoint; defaults to LAIN_IPC_ENDPOINT or the OS default
@@ -41,6 +42,7 @@ pub struct Options {
     pub endpoint: Endpoint,
     pub config: PathBuf,
     pub plain: bool,
+    pub serve_ui: bool,
 }
 
 impl Options {
@@ -55,6 +57,7 @@ impl Options {
             .unwrap_or_else(|| "lain.json".into());
         let mut plain = false;
         let mut help = false;
+        let mut serve_ui = false;
         let mut positional = Vec::new();
         let mut limit = None;
         let mut session = None;
@@ -62,6 +65,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => help = true,
                 "--plain" => plain = true,
+                "--serve-ui" => serve_ui = true,
                 "--endpoint" | "--config" | "--limit" | "--session" => {
                     let value = args
                         .next()
@@ -105,6 +109,10 @@ impl Options {
                 .as_slice()
             {
                 ["daemon"] => Action::Daemon,
+                ["ui"] => {
+                    serve_ui = true;
+                    Action::Daemon
+                }
                 ["start"] => Action::Start,
                 ["query", prompt] if !prompt.trim().is_empty() => Action::Query((*prompt).into()),
                 ["memory", "inspect"] => Action::Memory {
@@ -119,6 +127,12 @@ impl Options {
                 }
             }
         };
+        if serve_ui && !matches!(action, Action::Daemon | Action::Help) {
+            return Err(Error::failure(
+                "CLI_ARGUMENTS",
+                "--serve-ui requires daemon",
+            ));
+        }
         if !matches!(action, Action::Memory { .. } | Action::Help)
             && (limit.is_some() || session.is_some())
         {
@@ -132,6 +146,7 @@ impl Options {
             endpoint,
             config,
             plain,
+            serve_ui,
         })
     }
 }

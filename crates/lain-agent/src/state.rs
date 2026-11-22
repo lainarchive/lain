@@ -1,7 +1,7 @@
 use lain_core::provider::Message;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetKind {
     CompletionTokens,
@@ -11,7 +11,7 @@ pub enum BudgetKind {
     WallTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TerminationReason {
@@ -27,7 +27,7 @@ pub enum TerminationReason {
     UsageUnreported,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentStatus {
     Idle,

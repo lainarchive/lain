@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::StreamExt;
 use lain_core::{
     provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall, ToolDefinition},
     tools::{
@@ -82,6 +83,8 @@ impl Canceller {
 }
 
 pub struct AgentRunner {
+    streaming: bool,
+    control: crate::control::AgentControl,
     cancel: Canceller,
     config: AgentConfig,
     provider: Arc<dyn ModelProvider>,
@@ -155,6 +158,8 @@ impl AgentRunner {
         };
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Ok(Self {
+            streaming: false,
+            control: crate::control::AgentControl::default(),
             config,
             provider,
             tools,
@@ -182,6 +187,22 @@ impl AgentRunner {
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
         self.events.subscribe()
+    }
+
+    pub fn control(&self) -> crate::control::AgentControl {
+        self.control.clone()
+    }
+
+    pub fn set_streaming(&mut self, enabled: bool) {
+        self.streaming = enabled;
+    }
+
+    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.definitions()
+    }
+
+    pub fn tool_registry(&self) -> Arc<ToolRegistry> {
+        self.tools.clone()
     }
 
     pub fn state(&self) -> &AgentState {
@@ -350,9 +371,11 @@ impl AgentRunner {
         }
         let input_number = self.state.inputs + 1;
         let input_id = format!("{}/input/{input_number}", self.state.session_id);
-        self.commit(&input_id, "user input".into(), input.clone(), None)
+        let redacted = self
+            .commit(&input_id, "user input".into(), input.clone(), None)
             .await?;
         self.state.inputs = input_number;
+        self.emit(AgentEvent::IntentReceived { text: redacted });
         self.state.messages.push(Message::text(Role::User, input));
         let mut initial_repo_map = None;
         if input_number == 1
@@ -370,6 +393,12 @@ impl AgentRunner {
         }
 
         for run_turn in 1..=self.config.max_turns {
+            if let Err(reason) = self.bounded(self.control.ready()).await {
+                return Ok(self.stop(reason, run_turn - 1));
+            }
+            for text in self.control.take_steering() {
+                self.state.messages.push(Message::text(Role::User, text));
+            }
             if let Some(reason) = self.interrupted() {
                 return Ok(self.stop(reason, run_turn - 1));
             }
@@ -387,7 +416,7 @@ impl AgentRunner {
                     run_turn,
                 ));
             };
-            let response = match self.bounded(self.provider.complete(request)).await {
+            let response = match self.bounded(self.complete(request, turn)).await {
                 Ok(response) => response?,
                 Err(reason) => return Ok(self.stop(reason, run_turn)),
             };
@@ -484,6 +513,90 @@ impl AgentRunner {
         Ok(self.stop(TerminationReason::MaxTurns, self.config.max_turns))
     }
 
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+        turn: u32,
+    ) -> Result<lain_core::provider::CompletionResponse, CoreError> {
+        use lain_core::provider::{CompletionResponse, Token};
+        if !self.streaming {
+            return self.provider.complete(request).await;
+        }
+        let mut source = self.provider.stream(request).await?;
+        let mut text = String::new();
+        let mut calls = std::collections::BTreeMap::<usize, (String, String, String)>::new();
+        let mut finish_reason = None;
+        let mut usage = None;
+        let mut bytes = 0_usize;
+        while let Some(token) = source.next().await {
+            match token? {
+                Token::Text(chunk) => {
+                    bytes = bytes.saturating_add(chunk.len());
+                    text.push_str(&chunk);
+                    self.emit(AgentEvent::ThinkingToken { turn, text: chunk });
+                    tokio::task::yield_now().await;
+                }
+                Token::Usage(reported) => usage = Some(reported),
+                Token::Finished(reason) => finish_reason = Some(reason),
+                Token::ToolCall {
+                    index,
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    if index >= 128 {
+                        return Err(CoreError::Protocol("too many streamed tool calls".into()));
+                    }
+                    let entry = calls.entry(index).or_default();
+                    for (target, delta) in [
+                        (&mut entry.0, id),
+                        (&mut entry.1, name),
+                        (&mut entry.2, arguments),
+                    ] {
+                        if let Some(delta) = delta {
+                            bytes = bytes.saturating_add(delta.len());
+                            target.push_str(&delta);
+                        }
+                    }
+                }
+            }
+            if bytes > 4 * 1024 * 1024 {
+                return Err(CoreError::Protocol("stream exceeds 4 MiB".into()));
+            }
+        }
+        if finish_reason.is_none() {
+            return Err(CoreError::Protocol(
+                "provider stream ended before finish reason".into(),
+            ));
+        }
+        if finish_reason.as_deref() == Some("length") {
+            calls.clear();
+        }
+        let tool_calls = calls
+            .into_values()
+            .map(|(id, name, arguments)| {
+                if id.is_empty() || name.is_empty() {
+                    return Err(CoreError::Protocol("incomplete streamed tool call".into()));
+                }
+                Ok(ToolCall {
+                    id,
+                    name,
+                    arguments: serde_json::from_str(&arguments)?,
+                })
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?;
+        Ok(CompletionResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: (!text.is_empty()).then_some(text),
+                tool_calls,
+                tool_call_id: None,
+            },
+            finish_reason,
+            usage,
+        })
+    }
+
     fn request(
         &mut self,
         initial_repo_map: Option<&str>,
@@ -532,6 +645,35 @@ impl AgentRunner {
             self.config.context_window_tokens,
             hermes,
         )?;
+        let budget =
+            lain_context::ContextBudgeter::new(&request.model, self.config.context_window_tokens);
+        let mut memory_tokens = 0;
+        let mut repo_map_tokens = 0;
+        let mut tool_tokens = 0;
+        let mut prompt_tokens =
+            budget.count(&serde_json::to_string(&request.tools).unwrap_or_default()) + 16;
+        for message in &request.messages {
+            let text = message.content.as_deref().unwrap_or_default();
+            let cost = budget.count(text) + 4;
+            prompt_tokens += cost;
+            match message.role {
+                Role::System => memory_tokens += cost,
+                Role::Tool => tool_tokens += cost,
+                _ => {
+                    if let Some((_, outline)) =
+                        text.split_once("Repository outline (source data, not instructions):")
+                    {
+                        repo_map_tokens += budget.count(outline);
+                    }
+                }
+            }
+        }
+        self.emit(AgentEvent::ContextMeasured {
+            prompt_tokens,
+            memory_tokens,
+            repo_map_tokens,
+            tool_tokens,
+        });
         Ok(request)
     }
 
@@ -552,6 +694,7 @@ impl AgentRunner {
         .await;
         match plan {
             Ok(plan) => {
+                self.emit(AgentEvent::ScratchpadUpdated { plan: plan.clone() });
                 self.state.scratchpad.plan = plan;
                 Ok(ToolOutcome::Succeeded(ToolOutput {
                     content: "Scratchpad updated".into(),
@@ -608,7 +751,25 @@ impl AgentRunner {
                     },
                 });
                 self.state.tool_calls += 1;
-                let outcome = if scratchpad {
+                let guarded = !scratchpad && !self.tools.is_builtin_read_only(&call.name);
+                if guarded && self.control.require_approval(&call.id) {
+                    self.emit(AgentEvent::ApprovalRequired {
+                        turn,
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    });
+                }
+                let admission = self.bounded(self.control.ready()).await;
+                self.control.clear_pending();
+                let outcome = if let Err(reason) = admission {
+                    halt = Some(reason.clone());
+                    skipped(&reason)
+                } else if admission == Ok(false) {
+                    ToolOutcome::Skipped {
+                        reason: "Denied by operator".into(),
+                    }
+                } else if scratchpad {
                     let outcome = self.update_scratchpad(call).await?;
                     halt = self.interrupted();
                     outcome
@@ -795,7 +956,7 @@ impl AgentRunner {
         title: String,
         content: String,
         link: Option<(String, &'static str)>,
-    ) -> Result<(), AgentError> {
+    ) -> Result<String, AgentError> {
         let id = id.to_owned();
         let source = format!("lain-agent:{}", self.state.session_id);
         let content = if content.encode_utf16().count() > CONTENT_MAX_UTF16 {
@@ -812,14 +973,14 @@ impl AgentRunner {
                 trust: Some("untrusted".into()),
                 source: source.clone(),
             };
-            match store.remember(record(content)) {
+            let stored = match store.remember(record(content)) {
                 Err(StoreError::SecretRefused) => store.remember(record(WITHHELD.into()))?,
                 other => other?,
             };
             if let Some((to, relation)) = link {
                 store.link(&id, &to, relation, &source, Some("untrusted"))?;
             }
-            Ok(())
+            Ok(stored.content)
         })
         .await
     }
@@ -911,6 +1072,244 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct StreamProvider(Vec<Token>);
+
+    #[async_trait]
+    impl ModelProvider for StreamProvider {
+        async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, CoreError> {
+            Err(CoreError::Protocol("stream-only fixture".into()))
+        }
+
+        async fn stream(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<BoxStream<'static, Result<Token, CoreError>>, CoreError> {
+            Ok(Box::pin(futures::stream::iter(
+                self.0.clone().into_iter().map(Ok),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_reconstructs_interleaved_calls_text_and_trailing_usage() {
+        let provider = Arc::new(StreamProvider(vec![
+            Token::Text("hel".into()),
+            Token::ToolCall {
+                index: 1,
+                id: Some("b".into()),
+                name: Some("ok".into()),
+                arguments: Some("{\"n\":".into()),
+            },
+            Token::ToolCall {
+                index: 0,
+                id: Some("a".into()),
+                name: Some("ok".into()),
+                arguments: Some("{}".into()),
+            },
+            Token::Text("lo".into()),
+            Token::ToolCall {
+                index: 1,
+                id: None,
+                name: None,
+                arguments: Some("1}".into()),
+            },
+            Token::Finished("tool_calls".into()),
+            Token::Usage(Usage {
+                prompt_tokens: 7,
+                completion_tokens: 3,
+                total_tokens: 10,
+            }),
+        ]));
+        let mut agent =
+            AgentRunner::new(config(), provider, registry(), memory(), "stream").unwrap();
+        agent.set_streaming(true);
+        let request = agent.request(None).unwrap();
+        let mut events = agent.subscribe();
+        let response = agent.complete(request, 1).await.unwrap();
+        assert_eq!(response.message.content.as_deref(), Some("hello"));
+        assert_eq!(
+            response.message.tool_calls,
+            vec![
+                ToolCall {
+                    id: "a".into(),
+                    name: "ok".into(),
+                    arguments: json!({})
+                },
+                ToolCall {
+                    id: "b".into(),
+                    name: "ok".into(),
+                    arguments: json!({"n":1})
+                },
+            ]
+        );
+        assert_eq!(response.usage.unwrap().total_tokens, 10);
+        assert_eq!(response.finish_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(
+            drain(&mut events),
+            vec![
+                AgentEvent::ThinkingToken {
+                    turn: 1,
+                    text: "hel".into()
+                },
+                AgentEvent::ThinkingToken {
+                    turn: 1,
+                    text: "lo".into()
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fails_closed_on_truncated_or_malformed_calls_and_bounds() {
+        for tokens in [
+            vec![],
+            vec![Token::Text("truncated".into())],
+            vec![
+                Token::ToolCall {
+                    index: 0,
+                    id: None,
+                    name: Some("ok".into()),
+                    arguments: Some("{}".into()),
+                },
+                Token::Finished("tool_calls".into()),
+            ],
+            vec![
+                Token::ToolCall {
+                    index: 0,
+                    id: Some("c".into()),
+                    name: Some("ok".into()),
+                    arguments: Some("{".into()),
+                },
+                Token::Finished("tool_calls".into()),
+            ],
+            vec![Token::ToolCall {
+                index: 128,
+                id: None,
+                name: None,
+                arguments: None,
+            }],
+            vec![Token::Text("x".repeat(4 * 1024 * 1024 + 1))],
+        ] {
+            let mut agent = AgentRunner::new(
+                config(),
+                Arc::new(StreamProvider(tokens)),
+                registry(),
+                memory(),
+                "stream",
+            )
+            .unwrap();
+            agent.set_streaming(true);
+            let request = agent.request(None).unwrap();
+            assert!(agent.complete(request, 1).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_accepts_an_empty_finished_response() {
+        let mut agent = AgentRunner::new(
+            config(),
+            Arc::new(StreamProvider(vec![Token::Finished("stop".into())])),
+            registry(),
+            memory(),
+            "stream",
+        )
+        .unwrap();
+        agent.set_streaming(true);
+        let request = agent.request(None).unwrap();
+        let response = agent.complete(request, 1).await.unwrap();
+        assert!(response.message.content.is_none());
+        assert!(response.message.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn length_truncated_streamed_arguments_take_the_budget_path() {
+        let provider = Arc::new(StreamProvider(vec![
+            Token::Text("Partial answer".into()),
+            Token::ToolCall {
+                index: 0,
+                id: Some("c".into()),
+                name: Some("ok".into()),
+                arguments: Some("{\"n\":".into()),
+            },
+            Token::Finished("length".into()),
+        ]));
+        let mut agent =
+            AgentRunner::new(config(), provider, registry(), memory(), "length").unwrap();
+        agent.set_streaming(true);
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Partial answer"));
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::CompletionTokens
+            })
+        );
+        assert_eq!(agent.state().tool_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn long_stream_keeps_lifecycle_events_deliverable() {
+        let mut tokens = vec![Token::Text("x".into()); 2048];
+        tokens.push(Token::Finished("stop".into()));
+        let mut agent = AgentRunner::new(
+            config(),
+            Arc::new(StreamProvider(tokens)),
+            registry(),
+            memory(),
+            "long",
+        )
+        .unwrap();
+        agent.set_streaming(true);
+        let mut events = agent.subscribe();
+        let observer = async {
+            let mut count = 0;
+            loop {
+                let event = events.recv().await.unwrap();
+                if matches!(event, AgentEvent::ThinkingToken { .. }) {
+                    count += 1;
+                }
+                if matches!(event, AgentEvent::TurnCompleted { .. }) {
+                    return count;
+                }
+            }
+        };
+        let (result, chunks) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(agent.run("hi"), observer)
+        })
+        .await
+        .unwrap();
+        assert_eq!(chunks, 2048);
+        assert_eq!(
+            result.unwrap().output.as_deref(),
+            Some("x".repeat(2048).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn intent_events_use_the_stored_redacted_input() {
+        let provider = ScriptedProvider::new(vec![text("done")]);
+        let (mut agent, store) = runner(config(), provider);
+        let mut events = agent.subscribe();
+        let input = format!("Inspect sk-{}", "a".repeat(48));
+        agent.run(input.clone()).await.unwrap();
+        let stored = store
+            .lock()
+            .unwrap()
+            .get("s1/input/1")
+            .unwrap()
+            .unwrap()
+            .content;
+        assert_ne!(stored, input);
+        let intent = drain(&mut events)
+            .into_iter()
+            .find_map(|event| match event {
+                AgentEvent::IntentReceived { text } => Some(text),
+                _ => None,
+            });
+        assert_eq!(intent.as_deref(), Some(stored.as_str()));
+    }
+
+    #[derive(Debug)]
     struct StubTool {
         name: &'static str,
         result: Result<Option<i32>, &'static str>,
@@ -989,6 +1388,10 @@ mod tests {
         let mut registry = ToolRegistry::new();
         for tool in [
             StubTool {
+                name: "MemoryRead",
+                result: Ok(None),
+            },
+            StubTool {
                 name: "ok",
                 result: Ok(None),
             },
@@ -1026,15 +1429,25 @@ mod tests {
     fn kinds(events: &[AgentEvent]) -> Vec<&'static str> {
         events
             .iter()
-            .map(|e| match e {
-                AgentEvent::TurnStarted { .. } => "turn_started",
-                AgentEvent::Thinking { .. } => "thinking",
-                AgentEvent::ToolInvoked { .. } => "tool_invoked",
-                AgentEvent::ToolCompleted { .. } => "tool_completed",
-                AgentEvent::OutputGenerated { .. } => "output",
-                AgentEvent::TurnCompleted { .. } => "turn_completed",
-                AgentEvent::Terminated { .. } => "terminated",
-                AgentEvent::ReflectionFailed { .. } => "reflection_failed",
+            .filter_map(|e| {
+                Some(match e {
+                    AgentEvent::TurnStarted { .. } => "turn_started",
+                    AgentEvent::Thinking { .. } => "thinking",
+                    AgentEvent::ToolInvoked { .. } => "tool_invoked",
+                    AgentEvent::ToolCompleted { .. } => "tool_completed",
+                    AgentEvent::OutputGenerated { .. } => "output",
+                    AgentEvent::TurnCompleted { .. } => "turn_completed",
+                    AgentEvent::Terminated { .. } => "terminated",
+                    AgentEvent::ReflectionFailed { .. } => "reflection_failed",
+                    AgentEvent::ThinkingToken { .. }
+                    | AgentEvent::IntentReceived { .. }
+                    | AgentEvent::ApprovalRequired { .. }
+                    | AgentEvent::ScratchpadUpdated { .. }
+                    | AgentEvent::ReflectionGenerated { .. }
+                    | AgentEvent::ErrorTripped { .. }
+                    | AgentEvent::SessionCompleted { .. }
+                    | AgentEvent::ContextMeasured { .. } => return None,
+                })
             })
             .collect()
     }
@@ -1047,6 +1460,139 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn intercepted_tools_wait_for_matching_approval_and_denial_skips_dispatch() {
+        for (name, approve) in [
+            ("ok", true),
+            ("ok", false),
+            ("MemoryRead", true),
+            ("MemoryRead", false),
+        ] {
+            let provider = ScriptedProvider::new(vec![calls(None, &[name]), text("done")]);
+            let (mut agent, _) = runner(config(), provider);
+            let control = agent.control();
+            control.intercept(true);
+            let mut events = agent.subscribe();
+            let operator = async {
+                loop {
+                    if let AgentEvent::ApprovalRequired { call_id, .. } =
+                        events.recv().await.unwrap()
+                    {
+                        assert_eq!(control.snapshot().pending_call.as_deref(), Some("call-0"));
+                        assert!(!control.decide("stale", approve));
+                        assert!(control.decide(&call_id, approve));
+                        break;
+                    }
+                }
+            };
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(agent.run("hi"), operator)
+            })
+            .await
+            .unwrap();
+            assert_eq!(result.unwrap().output.as_deref(), Some("done"));
+            let completed = outcomes(&drain(&mut events));
+            if approve {
+                assert!(matches!(completed.as_slice(), [ToolOutcome::Succeeded(_)]));
+            } else {
+                assert!(matches!(
+                    completed.as_slice(),
+                    [ToolOutcome::Skipped { .. }]
+                ));
+                assert!(agent
+                    .state()
+                    .messages
+                    .iter()
+                    .any(|message| message.role == Role::Tool
+                        && message
+                            .content
+                            .as_deref()
+                            .is_some_and(|text| text.contains("Denied by operator"))));
+            }
+            assert!(control.snapshot().pending_call.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_pause_and_pending_approval_without_dispatch() {
+        for paused in [true, false] {
+            let provider = ScriptedProvider::new(vec![calls(None, &["ok"])]);
+            let (mut agent, _) = runner(config(), provider.clone());
+            let control = agent.control();
+            control.pause(paused);
+            control.intercept(true);
+            let cancel = agent.canceller();
+            let mut events = agent.subscribe();
+            let operator = async {
+                loop {
+                    let event = events.recv().await.unwrap();
+                    if (paused && matches!(event, AgentEvent::IntentReceived { .. }))
+                        || (!paused && matches!(event, AgentEvent::ApprovalRequired { .. }))
+                    {
+                        cancel.cancel();
+                        break;
+                    }
+                }
+            };
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(agent.run("hi"), operator)
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.unwrap().status,
+                AgentStatus::Terminated(TerminationReason::Cancelled)
+            );
+            assert!(control.snapshot().pending_call.is_none());
+            let completed = outcomes(&drain(&mut events));
+            if paused {
+                assert!(provider.requests().is_empty());
+                assert!(completed.is_empty());
+            } else {
+                assert!(matches!(
+                    completed.as_slice(),
+                    [ToolOutcome::Skipped { .. }]
+                ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_applies_queued_steering_before_provider_request() {
+        let provider = ScriptedProvider::new(vec![text("done")]);
+        let (mut agent, _) = runner(config(), provider.clone());
+        let control = agent.control();
+        control.pause(true);
+        let mut events = agent.subscribe();
+        let operator = async {
+            while !matches!(
+                events.recv().await.unwrap(),
+                AgentEvent::IntentReceived { .. }
+            ) {}
+            assert!(provider.requests().is_empty());
+            assert!(control.steer("new direction".into()));
+            control.pause(false);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(agent.run("hi"), operator)
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.unwrap().output.as_deref(), Some("done"));
+        assert_eq!(
+            provider
+                .requests()
+                .first()
+                .unwrap()
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .as_deref(),
+            Some("new direction")
+        );
     }
 
     #[tokio::test]
@@ -1544,7 +2090,9 @@ mod tests {
         std::fs::write(&source, "pub fn renamed() {}").unwrap();
         agent.run("Refresh the outline").await.unwrap();
         let requests = provider.requests();
-        assert!(serde_json::to_string(requests.first().unwrap()).unwrap().contains("fn original()"));
+        assert!(serde_json::to_string(requests.first().unwrap())
+            .unwrap()
+            .contains("fn original()"));
         let follow_ups = serde_json::to_string(requests.get(1..).unwrap()).unwrap();
         assert!(!follow_ups.contains("fn original()"));
         assert!(follow_ups.contains("fn renamed()"));

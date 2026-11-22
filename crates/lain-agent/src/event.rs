@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::state::TerminationReason;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, ts_rs::TS)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum ToolOutcome {
     Succeeded(ToolOutput),
@@ -32,10 +32,43 @@ impl ToolOutcome {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, ts_rs::TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AgentEvent {
+    ThinkingToken {
+        turn: u32,
+        text: String,
+    },
+    IntentReceived {
+        text: String,
+    },
+    ApprovalRequired {
+        turn: u32,
+        call_id: String,
+        name: String,
+        arguments: Value,
+    },
+    ScratchpadUpdated {
+        plan: String,
+    },
+    ReflectionGenerated {
+        summary: String,
+        rules: Vec<String>,
+    },
+    ErrorTripped {
+        code: String,
+        message: String,
+    },
+    SessionCompleted {
+        reason: String,
+    },
+    ContextMeasured {
+        prompt_tokens: usize,
+        memory_tokens: usize,
+        repo_map_tokens: usize,
+        tool_tokens: usize,
+    },
     TurnStarted {
         session_id: String,
         turn: u32,
@@ -64,6 +97,7 @@ pub enum AgentEvent {
     TurnCompleted {
         turn: u32,
         tool_calls: usize,
+        #[ts(type = "number")]
         tokens_used: u64,
     },
     Terminated {
