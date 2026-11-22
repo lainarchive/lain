@@ -130,7 +130,22 @@ struct Session {
     tools: Arc<ToolRegistry>,
     runner: AsyncMutex<AgentRunner>,
     canceller: Canceller,
+    cancellation: Mutex<()>,
     created: u64,
+}
+
+impl Session {
+    fn cancel_busy(&self) -> bool {
+        let _guard = self
+            .cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let busy = self.runner.try_lock().is_err();
+        if busy {
+            self.canceller.cancel();
+        }
+        busy
+    }
 }
 
 pub struct DaemonHandler {
@@ -245,6 +260,7 @@ impl DaemonHandler {
                         tools,
                         runner: AsyncMutex::new(runner),
                         canceller,
+                        cancellation: Mutex::new(()),
                         created: self.next_session.fetch_add(1, Ordering::Relaxed),
                     }),
                 );
@@ -280,12 +296,10 @@ impl DaemonHandler {
             }
             Command::CancelTurn { session_id } => {
                 let session = self.session(&session_id).await?;
-                let status = match session.runner.try_lock() {
-                    Ok(_) => "idle: nothing to cancel",
-                    Err(_) => {
-                        session.canceller.cancel();
-                        "cancelling"
-                    }
+                let status = if session.cancel_busy() {
+                    "cancelling"
+                } else {
+                    "idle: nothing to cancel"
                 };
                 events
                     .send(Event::Status {
@@ -554,9 +568,7 @@ impl DaemonHandler {
                 true
             }
             Intervention::Cancel { .. } => {
-                if session.runner.try_lock().is_err() {
-                    session.canceller.cancel();
-                }
+                session.cancel_busy();
                 true
             }
             Intervention::Intercept { enabled, .. } => {

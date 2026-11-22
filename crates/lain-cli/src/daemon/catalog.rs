@@ -16,11 +16,20 @@ use lain_ipc::{
 
 use super::{DaemonHandler, Error};
 
-struct ProposalCancellation(lain_agent::runner::Canceller);
+struct ProposalCancellation<'a> {
+    session: &'a super::Session,
+    runner: Option<tokio::sync::MutexGuard<'a, lain_agent::AgentRunner>>,
+}
 
-impl Drop for ProposalCancellation {
+impl Drop for ProposalCancellation<'_> {
     fn drop(&mut self) {
-        self.0.reset();
+        let _guard = self
+            .session
+            .cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.session.canceller.reset();
+        drop(self.runner.take());
     }
 }
 
@@ -148,12 +157,15 @@ impl DaemonHandler {
             .get(&session_id)
             .cloned()
             .ok_or_else(|| Error::failure("SESSION_NOT_FOUND", &session_id))?;
-        let _runner = session
+        let runner = session
             .runner
             .try_lock()
             .map_err(|_| Error::failure("SESSION_BUSY", &session_id))?;
         drop(sessions);
-        let cancellation = ProposalCancellation(session.canceller.clone());
+        let _cancellation = ProposalCancellation {
+            session: &session,
+            runner: Some(runner),
+        };
         if !session.config.allow_creator_mode {
             return Err(ToolError::Unknown(
                 if publish_mode.is_some() {
@@ -175,10 +187,14 @@ impl DaemonHandler {
         let operation = async {
             if publish_mode.is_some() {
                 publish_tool_proposal_checked(&manager, &session.tools, proposal, || {
-                    if cancellation.0.is_cancelled() {
+                    let guard = session
+                        .cancellation
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if session.canceller.is_cancelled() {
                         Err(cancelled())
                     } else {
-                        Ok(())
+                        Ok(guard)
                     }
                 })
                 .await
@@ -188,7 +204,7 @@ impl DaemonHandler {
         };
         let report = tokio::select! {
             biased;
-            ()=cancellation.0.cancelled()=>return Err(cancelled().into()),
+            ()=session.canceller.cancelled()=>return Err(cancelled().into()),
             ()=events.closed()=>return Err(cancelled().into()),
             result=operation=>result?,
         };
