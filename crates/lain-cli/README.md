@@ -38,7 +38,8 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
 The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
-An expanded tool opens its full output in the right drawer; PgUp/PgDn scroll that output. The lane preview
+PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
+An expanded selected tool opens its full output in the right drawer; PgUp/PgDn then scroll that output. The lane preview
 always shows at most ten lines. The scratchpad and procedural rules remain visible above full output.
 
 Tab cycles **Architect → Code → Ask** while idle. Architect and Ask both allow only the registry's
