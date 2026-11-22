@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+#[cfg(test)]
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use lain_core::plugin::manifest::Capability;
 use lain_harness::advisor::{AdvisorKind, AdvisorNote};
