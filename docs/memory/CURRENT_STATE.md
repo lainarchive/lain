@@ -1,5 +1,18 @@
 # Current Project State
 
+## PR 15 review follow-up
+
+- Confirmed the reviewed head was `a2c425e`. Creator Test/Publish now observe cancellation and disconnects, kill the
+  script future, refuse publication after cancellation, and reset cancellation before releasing the runner. Publication
+  and cancellation finalization share a lock; script side effects already performed are not rolled back.
+- New-session startup is request-correlated and commits the replacement view only after success. Failures preserve the
+  prior conversation and show a toast. Multiline drafts grow to six visible rows and use ↑/↓ to inspect overflow.
+- Mode changes recompute stale Creator publish refusals without hiding execution failures. Demo Plugins shows denied
+  network permission on `demo_echo`; the CLI starts at launch and seeds a labelled canned turn after the first submit.
+- Linux verification: 240 workspace tests, Clippy with warnings denied and Rust formatting passed. Regression tests cover
+  cancellation/refusal/cleanup, deferred session replacement, multiline submission, mode changes and demo behavior.
+  These UI changes are visually unverified; native Windows and live-provider interaction remain untested. PR CI is next.
+
 ## TUI shell review
 
 - Reviewed `f9016ff..HEAD` on `feat/tui-shell`. Primary `SESSION_BUSY` refusals now stop the working state without
