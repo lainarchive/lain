@@ -189,6 +189,41 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn paging_up_moves_immediately_after_the_lanes_reach_bottom(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new(
+        "test".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    state.composer = "long answer".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.tasks.values_mut().next().ok_or("missing turn")?.text = (0..100)
+        .map(|i| format!("answer {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    for _ in 0..40 {
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
+    }
+    assert!(contents(&terminal).contains("answer 99"));
+    state.key(key(KeyCode::PageUp), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(!contents(&terminal).contains("answer 99"));
+    state
+        .tasks
+        .values_mut()
+        .next()
+        .ok_or("missing turn")?
+        .text
+        .clear();
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert_eq!(state.scroll.lane, 0);
+    assert!(contents(&terminal).contains("long answer"));
+    Ok(())
+}
+
+#[test]
 fn sticky_panels_scroll_independently_and_do_not_overshoot(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
