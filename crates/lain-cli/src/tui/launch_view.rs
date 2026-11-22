@@ -296,7 +296,7 @@ fn grid(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(
         Paragraph::new(lines).block(
             card(&format!(" active tools · {} ", state.plugins.tools.len()))
-                .title(Line::from(" type / to find one ").alignment(Alignment::Right)),
+                .title(Line::from(" /plugins to find tools ").alignment(Alignment::Right)),
         ),
         area,
     );
