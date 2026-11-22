@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model invoke <task.json> <provider>` — stub routing (M-7 scaffold) and --live transport under the external gate (M-7 proper)
- * @requires Chief-of-St
- */
+// `lain model invoke`: stub routing and gated live transport.
 import { existsSync, readFileSync } from 'node:fs';
 import { StoreError } from '../../core/errors.mjs';
 import { ModelPolicyError } from '../../model/integration.mjs';

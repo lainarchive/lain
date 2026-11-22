@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-6 tests: the persistent ledger is gated, shape-checked, never rewrites history, and survives reopen
- * @requires Chief-of-Staff
- */
+// The persistent ledger is gated, shape-checked, never rewrites history, and survives reopen
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

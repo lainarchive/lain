@@ -1,7 +1,5 @@
 /**
- * @generated
- * @purpose  The live task dashboard: pure event state, a deterministic string renderer, and the OpenTUI view (M-9)
- * @requires Chief-of-Staff
+ * Live task dashboard: state, string renderer and OpenTUI view.
  *
  * One module holds all three layers on purpose: the state layer is the
  * contract the tests exercise without a terminal, the string renderer is the

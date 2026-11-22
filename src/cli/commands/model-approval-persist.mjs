@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model approval-persist` — write the in-memory ledger to SQLite, or dump it back (M-6)
- * @requires Chief-of-Staff
- */
+// `lain model approval-persist` — write the in-memory ledger to SQLite, or dump it back
 import { existsSync } from 'node:fs';
 import { StoreError } from '../../core/errors.mjs';
 import { ModelPolicyError } from '../../model/integration.mjs';

@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-7 tests: the invoke command routes to stubs, keeps the live transports behind the funding gate, and gates through the engine
- * @requires Chief-of-Staff
- */
+// The invoke command routes to stubs, keeps the live transports behind the funding gate, and gates through the engine
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

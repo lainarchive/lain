@@ -1,11 +1,6 @@
-/**
- * @generated
- * @purpose  M-4 provider loader: resolve a registered model to its invocation function
- * @requires Chief-of-Staff
- */
+// Provider loader: resolve a registered model to its invocation function
 import { getModel } from './registry.mjs';
 
-/** Thrown when a model's provider cannot be resolved — unknown id or unknown kind. */
 export class ProviderNotFound extends Error {
   /**
    * @param {string} message
@@ -18,12 +13,6 @@ export class ProviderNotFound extends Error {
 }
 
 /**
- * One loader per provider kind. `local` is a static specifier today; a future
- * remote kind adds its own loader here and stays behind the same seam — the
- * caller never learns how the module arrived, only that it exports an invoke
- * function. Loading is lazy: nothing is imported until a model is actually
- * resolved, so a registry entry costs nothing until it is used.
- *
  * @type {Record<string, () => Promise<{ localModel: (prompt: string) => { answer: string, echo: string } }>>}
  */
 const PROVIDER_LOADERS = {

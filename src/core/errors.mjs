@@ -8,9 +8,6 @@
  */
 
 /**
- * The minimum shape every Lain error exposes. Declared as a JSDoc typedef so
- * `tsc --checkJs` can verify call sites without the project shipping any .d.ts.
- *
  * @typedef {object} LainErrorShape
  * @property {string} code      stable machine-readable identifier, `SCREAMING_SNAKE`
  * @property {string} message   human-readable, no secrets
@@ -43,7 +40,6 @@ export class LainError extends Error {
   }
 }
 
-/** Configuration is absent, malformed, or contradicts itself. */
 export class ConfigError extends LainError {}
 
 /** A measurement required for a decision is missing or unusable. */
@@ -73,7 +69,6 @@ export class AdmissionError extends LainError {
 /** The event store refused an operation; the store state is unchanged. */
 export class StoreError extends LainError {}
 
-/** Another process holds the store's writer role. */
 export class StoreLockedError extends StoreError {}
 
 /** A stored byte sequence does not match its recorded integrity value. */

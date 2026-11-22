@@ -1,5 +1,8 @@
 # 02 — M-1 Backup Restore Verification
 
+Historical backup inventory. Agent instructions, session memory and the transcript
+cited below are no longer distributed with the repository.
+
 **Status:** **Restore-verified.** All required checks passed.
 **Date:** 2026-11-08
 **Scope:** prove the M-1 backup can be restored and that the restored bytes match the recorded manifest. Restoration and integrity only — nothing from the restored copy was executed.

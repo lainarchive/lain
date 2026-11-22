@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model reclassify <model-id> <new-effect>` — authorized effect-class override (M-4)
- * @requires Chief-of-Staff
- */
+// `lain model reclassify <model-id> <new-effect>` — authorized effect-class override
 import { ReclassificationError, reclassifyModel } from '../../model/reclassify.mjs';
 import { ModelPolicyError } from '../../model/integration.mjs';
 

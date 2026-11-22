@@ -1,6 +1,4 @@
-/**
- * @purpose  `lain ext <validate|inspect|register|approve|activate|revoke|list>` — Phase 6 Extension CLI
- */
+// `lain ext <validate|inspect|register|approve|activate|revoke|list>` — Phase 6 Extension CLI
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

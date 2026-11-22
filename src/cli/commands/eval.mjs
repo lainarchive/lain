@@ -1,6 +1,4 @@
-/**
- * @purpose  `lain eval <register|run|compare|rollback|list>` — Phase 7 evaluation harness CLI
- */
+// `lain eval <register|run|compare|rollback|list>` — Phase 7 evaluation harness CLI
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

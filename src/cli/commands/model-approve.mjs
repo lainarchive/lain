@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model approve <task.json> <model-id>` — probe the human-approval gate
- * @requires Chief-of-Staff
- */
+// `lain model approve <task.json> <model-id>` — probe the human-approval gate
 import { readFileSync } from 'node:fs';
 import { HumanApprovalNeeded, requireHumanApproval } from '../../model/approval.mjs';
 import { ModelPolicyError } from '../../model/integration.mjs';

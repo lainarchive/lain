@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-7 tests: the invoke --live approval loop — engine gate, ledger lookup, credential, and the transport behind an injected fetch
- * @requires Chief-of-Staff
- */
+// The invoke --live approval loop — engine gate, ledger lookup, credential, and the transport behind an injected fetch
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

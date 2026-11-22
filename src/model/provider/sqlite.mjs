@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-6 DB-backed provider loader: resolve a model binding from a SQLite providers.db
- * @requires Chief-of-Staff
- */
+// DB-backed provider loader: resolve a model binding from a SQLite providers.db
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { ProviderNotFound } from '../provider.mjs';

@@ -1,7 +1,0 @@
-{
-  "id": "M7-001",
-  "title": "Live provider transports with the approval gate",
-  "owner": "Jaden",
-  "status": "pending",
-  "dependencies": ["M6-001"]
-}

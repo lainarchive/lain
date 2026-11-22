@@ -1,5 +1,8 @@
 # 04 — Build and Verification System
 
+Historical proposal. Agent instructions cited below are no longer distributed.
+Current checks are documented in `docs/implementation/build-and-verification.md`.
+
 **Status:** Proposal. **No dependency was installed, no build was run, and no command in this document has been executed** (the repository has no package manifest, no source tree, and no build command — Phase 4 G-2). Everything labelled **UNVERIFIED** below is a proposal whose execution is part of step 1 of the implementation sequence.
 **Base revision:** `36a3e18003ad41171be96d28cfbbda5b5304441c`
 **Labels:** EUR · EAD · ESR · UAP · OQ · SESS (measured this session) · UNVERIFIED (not executed).

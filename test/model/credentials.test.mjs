@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-7 tests: the credential loader reads, masks, and never writes
- * @requires Chief-of-Staff
- */
+// The credential loader reads, masks, and never writes
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

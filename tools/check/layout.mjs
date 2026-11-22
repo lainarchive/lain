@@ -21,7 +21,8 @@ const REQUIRED_DIRS = ['src', 'src/core', 'test', 'tools', 'tools/check', 'docs/
 /** Top-level entries that are expected. Anything else is reported, not failed. */
 const KNOWN_TOP_LEVEL = new Set([
   '.git', '.gitattributes', '.gitignore', '.gitleaksignore', '.lain-audit', '.node-version',
-  'ACCEPTANCE_TESTS.md', 'AGENTS.md', 'ARCHITECTURE.md', 'DECISIONS.md',
+  '.devin', '.agents', 'AGENTS.md',
+  'ACCEPTANCE_TESTS.md', 'ARCHITECTURE.md', 'DECISIONS.md',
   'IMPLEMENTATION_ROADMAP.md', 'INITIAL_BACKLOG.md', 'README.md',
   'SECURITY_MODEL.md', 'SYSTEM_BOUNDARIES.md', 'docs', 'examples', 'node_modules',
   'package-lock.json', 'package.json', 'src', 'test', 'tools', 'tsconfig.json',
@@ -131,7 +132,7 @@ if (isEntryPoint(import.meta.url)) await main('layout', async ({ result, selfTes
   // Forbidden artifacts anywhere outside ignored trees.
   /** @type {string[]} */
   const files = [];
-  await walk(root, root, files, new Set(['.gitignore']));
+  await walk(root, root, files, new Set(['.gitignore', '.devin', '.agents', 'AGENTS.md']));
   result.record('files_scanned', files.length);
 
   const violations = [];

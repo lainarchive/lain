@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-6 persistent approval ledger: the in-memory record, written through to SQLite
- * @requires Chief-of-Staff
- */
+// Persistent approval ledger: the in-memory record, written through to SQLite
 import { DatabaseSync } from 'node:sqlite';
 import { StoreError } from '../core/errors.mjs';
 import { decide, permitsExecution } from '../policy/decide.mjs';

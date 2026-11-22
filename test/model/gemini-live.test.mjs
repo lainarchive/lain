@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-7 tests: the Gemini live transport's request shape and response mapping, pinned against an injected fetch — no network
- * @requires Chief-of-Staff
- */
+// The Gemini live transport's request shape and response mapping, pinned against an injected fetch — no network
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GEMINI_MODEL, queryLive } from '../../src/model/provider/gemini.mjs';

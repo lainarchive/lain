@@ -1,8 +1,0 @@
-{
-  "id": "M6-001",
-  "title": "Scaffold persistent approval ledger & DB-backed provider loading",
-  "owner": "Gemini",
-  "status": "pending",
-  "dependencies": ["M5-001"],
-  "notes": "SQLite via node:sqlite (the built-in the store already uses); ledger writes gated under model.approval.persist (model.admin); provider bindings only — no API keys in the database."
-}

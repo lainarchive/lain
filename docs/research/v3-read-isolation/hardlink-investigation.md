@@ -1,5 +1,8 @@
 # V-3.1 hard-link investigation
 
+Historical snapshot. The session-memory files cited here and in `hardlink-remediation.diff`
+are no longer distributed. See current implementation docs and `DECISIONS.md` for guidance.
+
 Date: 2026-11-14 · Repo: lain @ 257532d · Author: security-verification pass (V-3.1)
 
 ## Question

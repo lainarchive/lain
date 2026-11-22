@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-8: ledger-backed approval feeds the model gate — resolution, augmentation, binding
- * @requires Chief-of-Staff
- */
+// Ledger-backed approval feeds the model gate — resolution, augmentation, binding
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
