@@ -4,7 +4,7 @@ use lain_harness::{advisor::AdvisorKind, evidence::Status};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -12,7 +12,7 @@ use ratatui::{
 use super::{
     app::Screen,
     plugins, shell_view,
-    state::{Mode, Phase, Scroll, Selection, State},
+    state::{Phase, Scroll, Selection, State},
     theme::*,
 };
 
@@ -33,50 +33,25 @@ fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
         .style(Style::default().bg(PANEL).fg(TEXT))
 }
 
-fn count(n: usize) -> String {
-    if n >= 1000 {
-        format!("{}k", n / 1000)
-    } else {
-        n.to_string()
-    }
-}
-
 fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     let cost = state
         .cost
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
         .map_or_else(|| "cost unknown".into(), |cost| format!("cost ${cost:.4}"));
-    let context = if state.context_window == 0 || state.context == 0 {
-        "ctx unknown".into()
-    } else {
-        let percent = (state.context as f64 / state.context_window as f64 * 100.0).round() as usize;
-        let filled = (percent.min(100) / 10).min(10);
-        format!(
-            "ctx [{}{}] {percent}% {}/{}",
-            "━".repeat(filled),
-            "─".repeat(10 - filled),
-            count(state.context),
-            count(state.context_window)
-        )
-    };
-    let text = vec![
-        Line::from(vec![
+    let telemetry = format!("{:.1} tok/s · {cost}", state.velocity(now));
+    let notice_width = usize::from(area.width).saturating_sub(telemetry.len() + 3);
+    let notice =
+        super::launch_view::fit(state.toast_text(now).unwrap_or(&state.notice), notice_width);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled(
-                format!(" {}", state.model_chain),
-                Style::default().fg(VIOLET).add_modifier(Modifier::BOLD),
+                format!("{notice:<notice_width$}   "),
+                Style::default().fg(MUTED),
             ),
-            Span::styled(format!("  ·  {}", state.branch), Style::default().fg(MUTED)),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!(" {:.1} tok/s / 5s", state.velocity(now)),
-                Style::default().fg(BLUE),
-            ),
-            Span::raw(format!("  ·  {cost}  ·  ")),
-            Span::styled(context, Style::default().fg(CYAN)),
-        ]),
-    ];
-    frame.render_widget(Paragraph::new(text).block(panel(" Lain · frontier ")), area);
+            Span::styled(telemetry, Style::default().fg(MUTED)),
+        ])),
+        area,
+    );
 }
 
 fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>, Line<'static>)> {
@@ -384,8 +359,9 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
     scroll
 }
 
-pub fn has_room(area: Rect) -> bool {
-    area.width >= 120 && area.height >= 30
+pub fn has_room(area: Rect, state: &State) -> bool {
+    let (width, height) = if state.launch() { (80, 24) } else { (120, 30) };
+    area.width >= width && area.height >= height
 }
 
 pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
@@ -393,33 +369,37 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
         frame.area(),
     );
-    if !has_room(frame.area()) {
+    if !has_room(frame.area(), state) {
+        let size = if state.launch() { "80x24" } else { "120x30" };
         frame.render_widget(
-            Paragraph::new("terminal too small (need 120x30)\nResize to continue · Ctrl-C quits")
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(format!(
+                "terminal too small (need {size})\nResize to continue · Ctrl-C quits"
+            ))
+            .wrap(Wrap { trim: false }),
             frame.area(),
         );
+        state.theme.apply(frame.buffer_mut());
         return Scroll::default();
     }
     let vertical = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(3),
         Constraint::Length(if state.screen == Screen::Session {
             3
         } else {
-            0
+            1
         }),
-        Constraint::Length(3),
+        Constraint::Length(1),
     ])
     .split(frame.area());
     let Some(banner_area) = vertical.first() else {
         return Scroll::default();
     };
     let mut scroll = state.scroll;
-    banner(frame, *banner_area, state, now);
+    shell_view::tabs(frame, *banner_area, state);
     if let Some(area) = vertical.get(1) {
-        shell_view::tabs(frame, *area, state);
+        banner(frame, *area, state, now);
     }
     if let Some(area) = vertical.get(2) {
         if state.screen == Screen::Session {
@@ -436,13 +416,18 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                     shell_view::completion(frame, *completion, state);
                 }
             }
-            let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
-                .split(*area);
-            if let Some(area) = main.get(1) {
-                scroll = drawer(frame, *area, state);
-            }
-            if let Some(area) = main.first() {
-                (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+            if state.launch() {
+                super::launch_view::draw(frame, *area, state);
+            } else {
+                let main =
+                    Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
+                        .split(*area);
+                if let Some(area) = main.get(1) {
+                    scroll = drawer(frame, *area, state);
+                }
+                if let Some(area) = main.first() {
+                    (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+                }
             }
         } else if state.screen == Screen::Plugins {
             plugins::draw(frame, *area, &state.plugins, &mut scroll);
@@ -461,66 +446,51 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         frame.render_widget(
             Paragraph::new(input)
                 .scroll((0, scroll))
-                .block(panel(if state.running {
-                    " Steer (daemon may reject busy) "
+                .style(Style::default().fg(if state.composer.is_empty() {
+                    MUTED
                 } else {
-                    " Compose "
-                })),
+                    TEXT
+                }))
+                .block(
+                    Block::default()
+                        .borders(Borders::TOP | Borders::BOTTOM)
+                        .border_style(Style::default().fg(MUTED))
+                        .title_bottom(
+                            Line::from(if state.launch() {" Tab mode · Ctrl+K commands · F1 help "} else {
+                                " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Tab mode · Ctrl+K commands · F1 help "
+                            })
+                                .alignment(ratatui::layout::Alignment::Right),
+                        ),
+                ),
             *area,
         );
+        if state.composer.is_empty() {
+            frame.render_widget(
+                Paragraph::new("› Ask Lain anything").style(Style::default().fg(MUTED)),
+                Rect::new(area.x, area.y + 1, area.width, 1),
+            );
+        }
+        super::launch_view::rule(frame, Rect::new(area.x, area.y, area.width, 1), state.theme);
         if area.width > 3 && area.height > 2 && state.overlay.is_none() {
             frame.set_cursor_position((
-                area.x + 1 + (width.saturating_sub(usize::from(scroll)) as u16).min(area.width - 3),
+                area.x + (width.saturating_sub(usize::from(scroll)) as u16).min(area.width - 3),
                 area.y + 1,
             ));
         }
     }
     if let Some(area) = vertical.get(4) {
-        let mut modes = vec![];
-        for (i, mode) in [Mode::Architect, Mode::Code, Mode::Ask].iter().enumerate() {
-            if i > 0 {
-                modes.push(Span::styled(" | ", Style::default().fg(MUTED)));
-            }
-            modes.push(Span::styled(
-                mode.name(),
-                if *mode == state.mode {
-                    Style::default()
-                        .fg(BACKGROUND)
-                        .bg(CYAN)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(MUTED)
-                },
-            ));
+        super::launch_view::footer(frame, *area, state);
+    }
+    if state.screen != Screen::Session {
+        if let Some(area) = vertical.get(3) {
+            frame.render_widget(
+                Paragraph::new("Ctrl+K commands · F1 help · Alt+←/→ screens")
+                    .style(Style::default().fg(MUTED)),
+                *area,
+            );
         }
-        modes.push(Span::styled(
-            if state.screen == Screen::Session {
-                " · Tab mode · Enter send · ↑↓ select · Space fold · Ctrl+K commands · ? help"
-            } else if state.screen == Screen::Creator {
-                " · Tab/Shift+Tab steps · Ctrl+←/→ steps · Alt+←/→ screens · Ctrl+K commands · F1 help"
-            } else if state.screen == Screen::Plugins {
-                " · ↑↓ select · r refresh · / filter · Enter template · Ctrl+K commands · ? help"
-            } else {
-                " · 1–6 screens · Alt+←/→ tabs · Ctrl+K commands · ? help"
-            },
-            Style::default().fg(MUTED),
-        ));
-        frame.render_widget(
-            Paragraph::new(Text::from(vec![
-                Line::from(modes),
-                Line::styled(
-                    if state.screen == Screen::Session {
-                        "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules · Esc Esc rewind · q/Ctrl-C quit"
-                    } else if state.screen == Screen::Creator { "Enter: name field / test / review publish · Shift+Enter: sample newline · PgUp/PgDn report · Ctrl-C quit" }
-                    else if state.screen == Screen::Plugins { "PgUp/PgDn details · Enter applies filter · Esc clears filter · Alt+←/→ tabs" }
-                    else { "Placeholder · F1 help · q/Ctrl-C quit" },
-                    Style::default().fg(MUTED),
-                ),
-                Line::styled(state.toast_text(now).unwrap_or(&state.notice), Style::default().fg(AMBER)),
-            ])),
-            *area,
-        );
     }
     shell_view::overlay(frame, state);
+    state.theme.apply(frame.buffer_mut());
     scroll
 }

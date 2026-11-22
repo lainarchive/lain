@@ -80,7 +80,12 @@ The footer shows contextual keys and `Ctrl+K commands · ? help`; transient toas
 
 The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
-The minimum terminal size is 120 columns by 30 rows; smaller windows show a resize message instead of clipped panels.
+The empty-session launch view supports 80×24; its tools grid drops below 120 columns, then its session/action cards below 96 columns.
+Transcript and editor screens retain the 120×30 minimum. Smaller windows show a resize message and block hidden input.
+`/theme` or **Ctrl+K → Cycle theme** switches between **wired** (ink, ice blue, violet, coral) and **mono** (basic grayscale colours).
+The launch tools grid uses the daemon's active-tool catalog, grouped by builtin category then plugin; `/plugins` opens the complete inventory.
+The footer shows the mode, branch and available model/context telemetry. Unknown telemetry is omitted, not estimated.
+Session cards show the live session ID when available. Last-session history and `/resume` are unavailable in the current daemon API.
 PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
 Alt+PgUp/PgDn is the portable scratchpad binding, including in stock Konsole. Shift+PgUp/PgDn remains an alias,
 but Konsole captures it for scrollback. Ctrl+PgUp/PgDn scrolls procedural rules, independently of selection.

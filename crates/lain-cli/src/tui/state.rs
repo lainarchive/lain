@@ -127,6 +127,8 @@ pub struct Scroll {
 }
 
 pub struct State {
+    pub theme: super::theme::Theme,
+    pub session_id: Option<String>,
     pub creator: super::creator::Creator,
     pub plugins: super::plugins::Plugins,
     pub creator_template: Option<lain_ipc::ManifestEntry>,
@@ -167,6 +169,8 @@ pub struct State {
 impl State {
     pub fn new(branch: String, workspace: &Path) -> Result<Self, Error> {
         Ok(Self {
+            theme: super::theme::Theme::default(),
+            session_id: None,
             creator: super::creator::Creator::default(),
             plugins: super::plugins::Plugins::default(),
             creator_template: None,
@@ -297,6 +301,10 @@ impl State {
 
     fn execute(&mut self, action: Action, now: Duration, confirmed: bool) -> Effect {
         match action {
+            Action::Theme => {
+                self.theme = self.theme.next();
+                self.notify(format!("Theme: {}", self.theme.name()), now);
+            }
             Action::Go(screen) => self.navigate(screen),
             Action::Mode(mode) => {
                 if self.running {
@@ -319,6 +327,7 @@ impl State {
                     match Self::new(self.branch.clone(), self.scope.root()) {
                         Ok(mut state) => {
                             state.mode = self.mode;
+                            state.theme = self.theme;
                             *self = state;
                             self.notify("New session", now);
                             return Effect::NewSession;
@@ -346,6 +355,14 @@ impl State {
             }
         }
         Effect::None
+    }
+
+    pub fn launch(&self) -> bool {
+        self.screen == Screen::Session && self.tasks.is_empty()
+    }
+
+    pub fn workspace(&self) -> &Path {
+        self.scope.root()
     }
 
     pub fn paste(&mut self, text: &str) {
