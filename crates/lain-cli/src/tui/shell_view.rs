@@ -85,6 +85,10 @@ pub fn overlay(frame: &mut Frame, state: &State) {
     let Some(overlay) = &state.overlay else {
         return;
     };
+    if let Overlay::Publish { typed } = overlay {
+        super::creator_view::confirm(frame, state, typed);
+        return;
+    }
     let (title, lines, height) = match overlay {
         Overlay::Palette { query, selected } => {
             let commands = app::matching(query);
@@ -135,6 +139,7 @@ pub fn overlay(frame: &mut Frame, state: &State) {
             let height = lines.len() as u16 + 2;
             (" Help · Esc close ", lines, height)
         }
+        Overlay::Publish { .. } => return,
         Overlay::Confirm(_) => (
             " Confirm ",
             vec![

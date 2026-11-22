@@ -8,7 +8,10 @@ use std::{
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{Event as TerminalEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
+        KeyEvent, KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -17,7 +20,7 @@ use lain_ipc::{Command, Event, IpcClient};
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use super::{
-    plugins,
+    creator_ipc, plugins,
     state::{Effect, Phase, State},
     view,
 };
@@ -38,6 +41,7 @@ pub(super) fn handle_key(
     } else if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
         || (key.code == KeyCode::Char('q')
             && state.composer.is_empty()
+            && state.screen != super::app::Screen::Creator
             && !(state.screen == super::app::Screen::Plugins && state.plugins.filtering))
     {
         Effect::Quit
@@ -52,14 +56,24 @@ impl Screen {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let screen = Self;
-        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            Hide
+        )?;
         Ok(screen)
     }
 }
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+        let _ = execute!(
+            io::stdout(),
+            DisableBracketedPaste,
+            LeaveAlternateScreen,
+            Show
+        );
         let _ = disable_raw_mode();
     }
 }
@@ -136,11 +150,14 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut active_request = None;
     let mut ignored = BTreeSet::new();
     let mut plugin_requests = plugins::Requests::default();
+    let mut creator_requests = creator_ipc::Requests::default();
     let mut plugins_session = session.clone();
     let result = async {
         loop {
             if plugins_session != session {
                 ignored.extend(plugin_requests.clear());
+                ignored.extend(creator_requests.clear());
+                state.creator.reset_access();
                 state.plugins.refresh();
                 plugins_session = session.clone();
             }
@@ -149,17 +166,35 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     plugin_requests.refresh(client, session.as_deref(), &mut state.plugins).await?;
                 } else { state.plugins.load_demo()?; }
             }
+            if state.screen == super::app::Screen::Creator && !state.creator.access_loaded {
+                if let Some(client) = &mut client {
+                    creator_requests.access(client, session.as_deref(), &mut state.creator).await?;
+                } else {state.creator.set_access(true);}
+            }
             terminal.draw(|frame| {
                 state.scroll = view::draw(frame, &state, started.elapsed());
             })?;
             tokio::select! {
                 input = keys.next() => {
                     let Some(input) = input else { break; };
-                    let TerminalEvent::Key(key) = input? else { continue; };
+                    let input = input?;
+                    if let TerminalEvent::Paste(text) = &input {
+                        if view::has_room(terminal.get_frame().area()) {state.paste(text);}
+                        continue;
+                    }
+                    let TerminalEvent::Key(key) = input else { continue; };
                     if key.kind == KeyEventKind::Release { continue; }
                     match handle_key(&mut state, key, started.elapsed(), terminal.get_frame().area()) {
                         Effect::Quit => break,
                         Effect::None => {}
+                        Effect::Creator(operation) => {
+                            state.scroll.creator_output = 0;
+                            if let Some(client) = &mut client {
+                                creator_requests.submit(client, session.as_deref(), &mut state.creator, state.mode, operation).await?;
+                            } else if state.creator.request(state.mode, operation) != Effect::None {
+                                if let Err(error) = state.creator.simulate(operation) {state.creator.error = Some(error);}
+                            }
+                        }
                         Effect::NewSession => {
                             if let Some(request) = active_request.take() { ignored.insert(request); }
                             if let Some(request) = poll_request.take() { ignored.insert(request); }
@@ -208,7 +243,13 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                 event = next(&mut client) => {
                     let Some((request, event)) = event? else { return Err(Error::failure("TUI_DISCONNECTED", "Daemon closed the connection")); };
                     if ignored.contains(&request) { continue; }
-                    if plugin_requests.event(request, &event, &mut state.plugins) { continue; }
+                    if plugin_requests.event(request, &event, &mut state.plugins) {
+                        if let Event::Tools {session_id, allow_creator_mode, ..} = &event {
+                            if session.as_deref() == Some(session_id.as_str()) {state.creator.set_access(*allow_creator_mode);}
+                        }
+                        continue;
+                    }
+                    if creator_requests.event(request, &event, &mut state.creator) {continue;}
                     if Some(request) == poll_request { poll_request = None; }
                     if Some(request) == active_request {
                         state.event(&event, started.elapsed());

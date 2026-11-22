@@ -158,6 +158,7 @@ pub const COMMANDS: [Command; 14] = [
 
 #[derive(Debug)]
 pub enum Overlay {
+    Publish { typed: String },
     Palette { query: String, selected: usize },
     Help,
     Confirm(Action),
@@ -192,6 +193,22 @@ pub fn screen_keys(screen: Screen) -> &'static [(&'static str, &'static str)] {
                 "Esc Esc / q / Ctrl-C",
                 "Rewind / quit with empty composer / quit",
             ),
+        ]
+    } else if screen == Screen::Creator {
+        &[
+            (
+                "Tab / Shift+Tab / Ctrl+←→",
+                "Next / previous Creator step; Alt+←→ changes screen",
+            ),
+            (
+                "Enter",
+                "Switch name/description field; run test; review publish",
+            ),
+            (
+                "Shift+Enter / PgUp/PgDn",
+                "Sample JSON newline / scroll execution report",
+            ),
+            ("y then Enter / Esc", "Confirm publish / close confirmation"),
         ]
     } else if screen == Screen::Plugins {
         &[
