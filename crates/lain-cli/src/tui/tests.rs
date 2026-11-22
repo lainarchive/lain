@@ -50,6 +50,20 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn demo_new_session_metadata_uses_the_current_clock() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new("demo/workspace".into(), &std::env::current_dir()?)?;
+    let now = Duration::from_secs(100);
+    state.demo_metadata(now)?;
+    state.screen = Screen::Sessions;
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    terminal.draw(|frame| {
+        super::view::draw(frame, &state, now);
+    })?;
+    assert!(contents(&terminal).contains("read just now"));
+    Ok(())
+}
+
+#[test]
 fn help_pages_to_all_commands_at_the_supported_minimum() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
     state.key(key(KeyCode::F(1)), Duration::ZERO);

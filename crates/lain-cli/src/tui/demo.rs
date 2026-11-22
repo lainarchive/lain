@@ -13,7 +13,7 @@ pub(super) fn catalog() -> Result<super::plugins::Plugins, Error> {
 }
 
 impl State {
-    pub fn demo_metadata(&mut self) -> Result<(), Error> {
+    pub fn demo_metadata(&mut self, now: Duration) -> Result<(), Error> {
         self.demo = true;
         self.session_id = Some("demo-local-01".into());
         self.model_chain = "openai:gpt-4o".into();
@@ -29,14 +29,14 @@ impl State {
                 tokens_used: 3400,
                 scratchpad: String::new(),
             },
-            Duration::ZERO,
+            now,
         );
         for screen in [
             super::app::Screen::Sessions,
             super::app::Screen::Memory,
             super::app::Screen::Models,
         ] {
-            self.inspect.demo_refresh(screen, Duration::ZERO);
+            self.inspect.demo_refresh(screen, now);
         }
         self.notice = "OFFLINE DEMO · all activity and telemetry are synthetic · no provider or scripts called".into();
         self.creator = super::creator::Creator::sample();
@@ -83,7 +83,7 @@ impl State {
     pub fn demo_launch() -> Result<Self, Error> {
         let cwd = std::env::current_dir()?;
         let mut state = Self::new("demo/workspace".into(), &cwd)?;
-        state.demo_metadata()?;
+        state.demo_metadata(Duration::ZERO)?;
         Ok(state)
     }
 
