@@ -71,7 +71,11 @@ impl Canceller {
         self.0.flag.load(Ordering::SeqCst)
     }
 
-    async fn cancelled(&self) {
+    pub fn reset(&self) {
+        self.0.flag.store(false, Ordering::SeqCst);
+    }
+
+    pub async fn cancelled(&self) {
         let mut notified = pin!(self.0.notify.notified());
         // Registered before the flag check, so a cancel landing between the two still wakes this waiter.
         notified.as_mut().enable();
