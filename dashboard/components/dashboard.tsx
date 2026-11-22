@@ -13,6 +13,7 @@ import {
   type Node,
   type NodeChange,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import {
   ArrowDownToLine, Bot, BrainCircuit, Check, Command, Database, FileCode2,
@@ -38,7 +39,7 @@ import {
 import { refreshBridge } from "../lib/live";
 import { authorizedHeaders, dashboardToken, websocketProtocols } from "../lib/auth";
 import { applyBridgeEvent, createBridgeCache, type BridgeCache, type BridgeResources } from "../lib/cache";
-import { graphEdges, toolKind, updatePositions } from "../lib/flow";
+import { fitSearchMatches, graphEdges, toolKind, updatePositions } from "../lib/flow";
 
 const icons = {
   intent: Command,
@@ -123,6 +124,7 @@ export function Dashboard() {
   >({});
   const liveScope = useRef<AbortController | null>(null);
   const drawerTrigger = useRef<HTMLElement | null>(null);
+  const flow = useRef<ReactFlowInstance<FlowNode> | null>(null);
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     setPositions((previous) => updatePositions(previous, changes));
   }, []);
@@ -221,6 +223,13 @@ export function Dashboard() {
     [visible, selectedId, positions],
   );
   const edges = useMemo(() => graphEdges(visible), [visible]);
+  const searchIds = visible.map((node) => node.id).join("\0");
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      void fitSearchMatches(query, searchIds.split("\0").filter(Boolean), flow.current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [query, searchIds]);
   const selectedDiff =
     selected?.diff ??
     (selected?.input &&
@@ -377,6 +386,7 @@ export function Dashboard() {
           </div>
           <div className="graph-canvas">
             <ReactFlow key={`${fitKey}:${demo}:${nodes.length ? "data" : "empty"}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes}
+              onInit={(instance) => { flow.current = instance; void fitSearchMatches(query, visible.map((node) => node.id), instance); }}
               fitView fitViewOptions={fitViewOptions} onNodesChange={onNodesChange} minZoom={0.12} maxZoom={1.7}
               nodesConnectable={false} nodesDraggable onNodeClick={(event, node) => {
                 drawerTrigger.current = (event.target as HTMLElement).closest<HTMLElement>(".react-flow__node");
