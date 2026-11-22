@@ -133,7 +133,10 @@ fn help_and_overlay_escape_take_precedence_over_rewind() -> Result<(), Box<dyn s
     assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
     assert!(state.overlay.is_none());
     assert_eq!(state.tasks.len(), tasks);
-    assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
+    assert_eq!(
+        state.key(key(KeyCode::Esc), Duration::ZERO),
+        Effect::Interrupt
+    );
     assert_eq!(
         state.key(key(KeyCode::Esc), Duration::from_millis(100)),
         Effect::Rewind
@@ -548,6 +551,176 @@ fn launch_grid_overflow_and_small_screen_guards() -> Result<(), Box<dyn std::err
 }
 
 #[test]
+fn transcript_drawers_working_and_follow_contract() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.tasks.get_mut("2").ok_or("missing task")?.text =
+        "**Ready** with `repo_map`.\n- Check evidence\n```rust\nlet safe = true;\n```".into();
+    state.running = true;
+    state.active = Some("2".into());
+    let text = render(&state)?;
+    for expected in [
+        "λ lain ·",
+        "Ready",
+        "Check evidence",
+        "let safe = true;",
+        "Working…",
+        "└ Tip:",
+        "◆ advisor ·",
+        "ctrl+o expands",
+        "✱",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    assert!(!text.contains("Execution DAG"));
+    assert!(!text.contains("Scratchpad"));
+    state.key(
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    assert!(render(&state)?.contains("Execution DAG"));
+    state.key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    assert!(render(&state)?.contains("Scratchpad"));
+    state.key(
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    assert!(state.tools.last().is_some_and(|t| t.expanded));
+    state.key(
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    state.key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    state.tasks.get_mut("2").ok_or("missing task")?.text = (0..90)
+        .map(|n| format!("line {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    state.key(key(KeyCode::PageUp), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(!state.follow);
+    state.event(
+        &lain_ipc::Event::StreamToken {
+            session_id: "demo".into(),
+            text: "new tail".into(),
+        },
+        Duration::ZERO,
+    );
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(contents(&terminal).contains("↓ new output"));
+    for _ in 0..8 {
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
+    }
+    assert!(state.follow);
+    Ok(())
+}
+
+#[test]
+fn demo_launch_has_real_builtin_names_and_known_sample_telemetry(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = State::demo_launch()?;
+    let text = render(&state)?;
+    for expected in [
+        "demo-",
+        "ctx",
+        "cost $",
+        "tok/s",
+        "memory_read",
+        "repo_map",
+        "create_tool",
+        "test_tool",
+        "plugin echo",
+        "plugin notes",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    assert!(!text.contains("cost unknown"));
+    let fresh = State::new(
+        "main".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    assert!(!render(&fresh)?.contains("0.0 tok/s"));
+    assert!(!render(&fresh)?.contains("cost unknown"));
+    Ok(())
+}
+
+#[test]
+fn markdown_styles_fences_and_drawer_defaults() -> Result<(), Box<dyn std::error::Error>> {
+    let spans = super::transcript::inline("**bold** and `code` and **unfinished");
+    assert!(spans.iter().any(|span| span.content == "bold"
+        && span
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)));
+    assert!(spans
+        .iter()
+        .any(|span| span.content == "code" && span.style.fg == Some(super::theme::CYAN)));
+    assert!(spans
+        .iter()
+        .any(|span| span.content.contains("**unfinished")));
+    assert!(super::transcript::markdown("", 80).is_empty());
+    let lines = super::transcript::markdown("```rust\nlet x = 1;\n```", 80);
+    assert!(lines.iter().any(|line| line.to_string().ends_with('│')));
+    assert_ne!(
+        super::transcript::spinner(Duration::ZERO),
+        super::transcript::spinner(Duration::from_millis(100))
+    );
+    let mut state = State::demo_turn()?;
+    let mut terminal = Terminal::new(TestBackend::new(160, 45))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(state.scroll.dag_visible && state.scroll.plan_visible);
+    state.key(
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    state.key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(!state.scroll.dag_visible && !state.scroll.plan_visible);
+    let count = state.plugins.tools.len();
+    state.plugins = super::demo::catalog()?;
+    assert_eq!(state.plugins.tools.len(), count);
+    let mut state = State::demo_launch()?;
+    state.composer = "first line\nsecond line".into();
+    assert!(matches!(
+        state.key(key(KeyCode::Enter), Duration::ZERO),
+        Effect::Submit { .. }
+    ));
+    assert!(render(&state)?.contains("second line"));
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    let y = contents(&terminal)
+        .lines()
+        .position(|line| line.contains("first line"))
+        .ok_or("missing prompt")? as u16;
+    assert_eq!(
+        terminal
+            .backend()
+            .buffer()
+            .cell((139, y))
+            .ok_or("missing cell")?
+            .bg,
+        super::theme::PANEL
+    );
+    state.key(key(KeyCode::Up), Duration::ZERO);
+    state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+    assert!(render(&state)?.contains("▸ layer 1"));
+    assert!(!render(&state)?.contains("second line"));
+    state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+    assert!(render(&state)?.contains("second line"));
+    Ok(())
+}
+
+#[test]
 fn creator_steps_validate_schema_and_keep_editor_drafts() -> Result<(), Box<dyn std::error::Error>>
 {
     use super::creator::{editor, Step};
@@ -816,12 +989,13 @@ fn draw_scrolled(
 
 #[test]
 fn banner_lanes_and_sticky_plan() -> Result<(), Box<dyn std::error::Error>> {
-    let state = State::sample()?;
+    let mut state = State::sample()?;
+    state.dag_drawer = Some(true);
+    state.plan_drawer = Some(true);
     let text = render(&state)?;
     for expected in [
         "planner → coder → advisor",
         "tok/s",
-        "cost unknown",
         "ctx",
         "32%",
         "42k/128k",
@@ -849,15 +1023,16 @@ fn banner_lanes_and_sticky_plan() -> Result<(), Box<dyn std::error::Error>> {
 fn output_preview_and_full_drawer() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
     let text = render(&state)?;
-    assert!(text.contains("output 09"));
-    assert!(!text.contains("output 10"));
-    assert!(text.contains("… 2 more lines"));
+    assert!(text.contains("output 02"));
+    assert!(!text.contains("output 03"));
+    assert!(text.contains("+9 lines · ctrl+o expands"));
     state.select_tool(0);
     state.key(key(KeyCode::Char(' ')), Duration::ZERO);
     let expanded = render(&state)?;
     assert!(expanded.contains("output 11"));
-    assert!(expanded.contains("[Plan] 3/5"));
+    assert!(!expanded.contains("Scratchpad"));
     state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+    state.plan_drawer = Some(true);
     assert!(!render(&state)?.contains("output 11"));
     state.tools.first_mut().ok_or("no sample tool")?.output =
         format!("{}TAIL", "word ".repeat(600));
@@ -901,9 +1076,10 @@ fn keyboard_rewind_modes_and_mode_policy() -> Result<(), Box<dyn std::error::Err
     ));
     assert!(matches!(
         state.key(key(KeyCode::Esc), Duration::from_millis(100)),
-        Effect::None
+        Effect::Interrupt
     ));
-    assert!(state.running);
+    assert!(!state.running);
+    assert!(render(&state)?.contains("interrupted"));
     assert!(matches!(
         state.key(key(KeyCode::Esc), Duration::from_millis(601)),
         Effect::None
@@ -965,10 +1141,9 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
 ) -> Result<(), Box<dyn std::error::Error>> {
     fn visible(text: &str, kind: &str) -> BTreeSet<usize> {
-        let content = if kind == "lane" {
-            text.to_owned()
-        } else {
+        let content = {
             let title = match kind {
+                "lane" => "Execution DAG",
                 "tool" => "Full output",
                 "plan" => "Scratchpad",
                 _ => "Procedural rules",
@@ -976,7 +1151,10 @@ fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
             text.lines()
                 .skip_while(|line| !line.contains(title))
                 .skip(1)
-                .map_while(|line| line.split_once("││").map(|(_, right)| right))
+                .map_while(|line| {
+                    line.split_once('│')
+                        .and_then(|(_, right)| right.rsplit_once('│').map(|(content, _)| content))
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -1002,6 +1180,10 @@ fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
             ("lane", KeyModifiers::NONE),
         ] {
             let mut state = State::sample()?;
+            state.follow = false;
+            state.plan_drawer = Some(true);
+            state.dag_drawer = Some(kind == "lane");
+            state.dag_focus = kind == "lane";
             state.plan = (0..40)
                 .map(|i| format!("[ ] plan {i:02}"))
                 .collect::<Vec<_>>()
@@ -1087,7 +1269,7 @@ fn paging_up_moves_immediately_after_the_lanes_reach_bottom(
         .text
         .clear();
     draw_scrolled(&mut terminal, &mut state)?;
-    assert_eq!(state.scroll.lane, 0);
+    assert_eq!(state.scroll.transcript, 0);
     assert!(contents(&terminal).contains("long answer"));
     Ok(())
 }
@@ -1096,6 +1278,7 @@ fn paging_up_moves_immediately_after_the_lanes_reach_bottom(
 fn sticky_panels_scroll_independently_and_do_not_overshoot(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
+    state.plan_drawer = Some(true);
     state.plan = (0..80)
         .map(|i| format!("[ ] plan {i:02}"))
         .collect::<Vec<_>>()
@@ -1213,15 +1396,7 @@ fn small_terminals_show_a_resize_message_and_recover_at_minimum_size(
     })?;
     let text = contents(&terminal);
     assert!(!text.contains("terminal too small"));
-    for expected in [
-        "cost unknown",
-        "ctx",
-        "Execution DAG",
-        "Scratchpad",
-        "Procedural rules",
-        "Ask Lain anything",
-        "Tab mode",
-    ] {
+    for expected in ["ctx", "Verify integration", "Ask Lain anything", "Tab mode"] {
         assert!(text.contains(expected), "missing {expected}");
     }
     let mut tiny = Terminal::new(TestBackend::new(1, 1))?;
@@ -1364,6 +1539,7 @@ fn q_inserts_into_a_draft_and_only_quits_an_empty_composer(
 fn sticky_panels_mark_hidden_lines_including_wrapped_rules(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
+    state.plan_drawer = Some(true);
     assert!(!render(&state)?.contains("more below"));
     state.plan = "[ ] long plan\n".repeat(60);
     state.rules = vec!["wrapped rule ".repeat(120)];
@@ -1430,6 +1606,7 @@ fn busy_steering_retains_the_draft_without_overwriting_edits(
 fn lane_paging_reaches_long_answers_and_selection_resets_scroll(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
+    state.follow = false;
     state.tasks.get_mut("1").ok_or("no sample task")?.text = (0..100)
         .map(|i| format!("answer {i:02}"))
         .collect::<Vec<_>>()

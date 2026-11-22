@@ -36,7 +36,7 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 
 `lain tui` opens the Ratatui app shell. `lain tui demo` renders an **offline synthetic sample**
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
-The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains the existing lane view;
+The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains a borderless conversation transcript;
 Plugins browses disk manifests and active session tools. Creator edits, tests and publishes script proposals through the daemon.
 Memory, Sessions and Models remain named placeholders for later phases.
 Outside overlays, 1–6 switches screens when not editing a Creator field or Plugins filter and the Session composer is empty or unfocused.
@@ -70,15 +70,21 @@ In demo mode both operations are explicitly **SIMULATED**: no script executes an
 Ctrl+K opens a command palette. Type a fuzzy subsequence to filter, use Up/Down or Tab to select, and Enter to run.
 On Session, a leading `/` opens inline completion from the same registry: Tab/Up/Down selects and Enter runs.
 Commands are `/session`, `/plugins`, `/creator`, `/memory`, `/sessions`, `/models`, `/architect`, `/code`, `/ask`,
-`/new`, `/help`, `/quit`, `/output`, `/rewind`. Unknown commands show a five-second toast and keep the text for editing;
+`/new`, `/help`, `/quit`, `/output`, `/rewind`, `/dag`, `/plan`, `/theme`. Unknown commands show a five-second toast and keep the text for editing;
 they are never sent to the model. New session and quit palette actions confirm before discarding a draft or active turn.
 New session clears the local view, cancels any old turn, and opens a fresh daemon session (offline in demo mode).
-`/output` toggles the selected Session tool block. Mode commands cannot change an active turn's policy.
+`/output` or Ctrl+O toggles the selected Session tool block, or the last block if none is selected. Mode commands cannot change an active turn's policy.
 F1, or `?` with an empty composer, opens help generated from the registry and the current screen's key table.
-Escape closes the topmost palette/help/confirmation or slash list first; only Session without an overlay uses double Escape.
+Escape closes the topmost palette/help/confirmation or slash list first. During a turn, Escape interrupts it (sending the existing cancel request live).
+While idle, only Session without an overlay uses double Escape to rewind. Cancellation cannot undo executed tools or filesystem writes.
 The footer shows contextual keys and `Ctrl+K commands · ? help`; transient toasts expire in state, without timer threads.
 
-The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
+Session renders tinted user prompts, status-coloured timed tool calls, inline advisor notes and model-headed assistant answers.
+Tool previews show at most three lines; Ctrl+O expands them. Simple markdown supports bold, inline code, bullets and boxed fenced code.
+Turn footers show elapsed time, tool count and token usage. Prepared evidence is not labelled verified.
+During a turn, a ticking Working line and rotating command-registry tips sit above the composer.
+Ctrl+G (`/dag`) toggles the right-hand DAG drawer; Ctrl+P (`/plan`) toggles the plan/rules drawer.
+Both default open only at widths of at least 160 columns; explicit choices survive resizing.
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
 The empty-session launch view supports 80×24; its tools grid drops below 120 columns, then its session/action cards below 96 columns.
 Transcript and editor screens retain the 120×30 minimum. Smaller windows show a resize message and block hidden input.
@@ -86,13 +92,17 @@ Transcript and editor screens retain the 120×30 minimum. Smaller windows show a
 The launch tools grid uses the daemon's active-tool catalog, grouped by builtin category then plugin; `/plugins` opens the complete inventory.
 The footer shows the mode, branch and available model/context telemetry. Unknown telemetry is omitted, not estimated.
 Session cards show the live session ID when available. Last-session history and `/resume` are unavailable in the current daemon API.
-PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
+PgUp/PgDn scroll the transcript with one-line overlap. It follows new output until you scroll up;
+a **↓ new output** pill marks output arriving offscreen. Page down to the bottom to follow again.
+Changing selection returns to its transcript heading. Ctrl+G focuses DAG paging while that drawer is open; close it to page the transcript again.
 Alt+PgUp/PgDn is the portable scratchpad binding, including in stock Konsole. Shift+PgUp/PgDn remains an alias,
 but Konsole captures it for scrollback. Ctrl+PgUp/PgDn scrolls procedural rules, independently of selection.
 All drawer offsets clamp to the visible content, including after a resize or shorter content replaces it.
 Paging uses the target pane's visible height minus one line for overlap, with a minimum step of one.
-An expanded selected tool opens its full output in the right drawer; PgUp/PgDn then scroll that output. The lane preview
-always shows at most ten lines. The scratchpad and procedural rules remain visible above full output.
+With the plan/rules drawer open, an expanded selected tool also opens its full output below them; PgUp/PgDn then scroll that output.
+`lain tui demo` starts with a synthetic mid-turn transcript, tools and an answer. `/new` opens its launch screen.
+The demo catalog includes the platform shell, memory, workspace and Creator builtins plus two example plugins and a malformed manifest.
+Model, session ID, velocity, cost and context are canned and labelled synthetic; no provider or scripts execute.
 
 Tab cycles **Architect → Code → Ask** while idle. Architect and Ask both allow only the registry's
 identity-checked built-in read tools; Code retains the daemon's configured tool permissions. Enable

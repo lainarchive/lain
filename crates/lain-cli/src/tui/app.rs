@@ -53,6 +53,8 @@ impl Screen {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    Dag,
+    Plan,
     Theme,
     Go(Screen),
     Mode(Mode),
@@ -70,7 +72,19 @@ pub struct Command {
     pub action: Action,
 }
 
-pub const COMMANDS: [Command; 15] = [
+pub const COMMANDS: [Command; 17] = [
+    Command {
+        id: "dag",
+        title: "Toggle DAG drawer",
+        hint: "Ctrl+G",
+        action: Action::Dag,
+    },
+    Command {
+        id: "plan",
+        title: "Toggle plan/rules drawer",
+        hint: "Ctrl+P",
+        action: Action::Plan,
+    },
     Command {
         id: "theme",
         title: "Cycle theme",
@@ -191,14 +205,21 @@ pub fn screen_keys(screen: Screen) -> &'static [(&'static str, &'static str)] {
                 "Send or attempt steer / cycle idle mode; / starts commands",
             ),
             ("↑↓ / Space", "Select / fold or expand (empty composer)"),
-            ("PgUp/PgDn", "Lanes or selected expanded tool"),
+            (
+                "PgUp/PgDn",
+                "Transcript; expanded tool or focused DAG when drawer is open",
+            ),
+            (
+                "Ctrl+G / Ctrl+P / Ctrl+O",
+                "DAG / plan and rules / expand selected or last tool",
+            ),
             (
                 "Alt-PgUp/PgDn / Ctrl-PgUp/PgDn",
                 "Plan (Shift alias) / rules",
             ),
             (
                 "Esc Esc / q / Ctrl-C",
-                "Rewind / quit with empty composer / quit",
+                "Interrupt, then rewind / quit with empty composer / quit",
             ),
         ]
     } else if screen == Screen::Creator {

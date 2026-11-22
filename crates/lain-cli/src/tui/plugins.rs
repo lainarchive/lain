@@ -100,8 +100,8 @@ impl Plugins {
         })
     }
 
-    pub fn load_demo(&mut self) -> Result<(), serde_json::Error> {
-        let sample = Self::sample()?;
+    pub fn load_demo(&mut self) -> Result<(), Error> {
+        let sample = super::demo::catalog()?;
         self.manifests = sample.manifests;
         self.tools = sample.tools;
         self.loaded = true;
