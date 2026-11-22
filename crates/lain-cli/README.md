@@ -6,8 +6,12 @@ Build with `cargo build -p lain-cli`, then run `target/debug/lain --help`.
 lain start
 lain query "Summarize the current task"
 lain memory inspect --limit 10 --session SESSION_ID
+lain ui
 lain daemon --endpoint /path/to/lain.sock --config /path/to/lain.json
 ```
+
+`lain ui` runs the daemon with the browser dashboard enabled. Build the
+[dashboard assets](../../dashboard/README.md#run-locally) before starting it.
 
 `start`, `query`, and `memory inspect` ping the daemon and spawn the same binary's
 internal `daemon` command if needed. Startup retries for about five seconds.

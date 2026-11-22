@@ -11,15 +11,16 @@ separate from the canonical project documents at the repository root:
 | `event-store.md` | The event store as implemented: guarantees, known limitations, the enforced store/policy boundary. |
 | `host-and-budget.md` | The host probe and admission layer: what is measured, what is configured, and how a request is refused. |
 | `open-issues.md` | Known limitations, unresolved guarantees and the decisions they need. |
-| `../RESOURCE_BUDGET.md` | Measured hardware, configured limits and the admission rules that use them. |
-| `../docs/memory/CURRENT_STATE.md` | What is true about the repository right now. |
+| [`memory-rust.md`](memory-rust.md) | Rust SQLite memory store. |
+| [`../../RESOURCE_BUDGET.md`](../../RESOURCE_BUDGET.md) | Measured hardware, configured limits and the admission rules that use them. |
+| [`../memory/CURRENT_STATE.md`](../memory/CURRENT_STATE.md) | Recent implementation and historical milestone records. |
 
 The canonical documents at the repository root remain the source of truth for
 architecture and decisions. If an implementation document and a canonical
 document disagree about what exists, the implementation document is describing a
 bug in the canonical document — report it rather than quietly fixing one side.
 
-## Status at the time of writing
+## Historical snapshot: Node V-1
 
 | Area | State |
 | --- | --- |

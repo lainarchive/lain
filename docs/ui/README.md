@@ -1,4 +1,7 @@
-# The TUI dashboard (`lain tui`)
+# The Node terminal dashboard (`lain tui`)
+
+For the Rust daemon's browser UI (`lain ui`), see the
+[neural dashboard](../../dashboard/README.md).
 
 A full-screen live view of what Core is doing: one table of tasks and one
 scrolling event log, fed by the Core event bus. Milestone 9(a); renderer is
@@ -10,7 +13,7 @@ sits beside it at `~/.local/lain-node`).
 ## Run it
 
 ```
-lain tui
+node src/cli/index.mjs tui
 ```
 
 Keys: `q` or Ctrl-C quits, `r` re-renders, `↑`/`↓` scroll the log. A piped
