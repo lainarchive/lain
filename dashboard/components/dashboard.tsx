@@ -135,6 +135,7 @@ export function Dashboard() {
       setStatus(snapshot.status);
       setMemory(snapshot.memory);
       setPlugins(snapshot.plugins);
+      setConnection("connected");
     });
   }, []);
 
