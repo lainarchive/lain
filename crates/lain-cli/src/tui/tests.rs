@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use lain_ipc::Event;
 use ratatui::{backend::TestBackend, Terminal};
 
 use super::{
@@ -168,6 +169,28 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = std::env::var_os("LAIN_TUI_DUMP") {
         std::fs::write(path, format!("{text}\n"))?;
     }
+    Ok(())
+}
+
+#[test]
+fn busy_steering_retains_the_draft_without_overwriting_edits(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.running = true;
+    state.composer = "please check tests".into();
+    assert!(
+        matches!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::Steer(text) if text == "please check tests")
+    );
+    assert_eq!(state.composer, "please check tests");
+    state.composer.push_str(" first");
+    state.event(
+        &Event::Error {
+            code: "SESSION_BUSY".into(),
+            message: "Turn in progress".into(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(state.composer, "please check tests first");
     Ok(())
 }
 
