@@ -218,6 +218,6 @@ export function layoutNodes(nodes: TraceNode[]) {
     levels.set(node.id, level);
     const row = rows.get(level) ?? 0;
     rows.set(level, row + 1);
-    return { ...node, x: 80 + level * 244, y: 100 + row * 88 };
+    return { ...node, x: 80 + level * 208, y: 100 + row * 80 };
   });
 }

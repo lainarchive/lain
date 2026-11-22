@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyEvent, emptyGraph, layoutNodes } from './graph.ts';
+import { exampleRun } from './demo.ts';
 
 function run(events, session = 's', initial = emptyGraph) {
   return events.reduce((graph, event, index) => applyEvent(graph, {
@@ -90,10 +91,18 @@ test('compact layout leaves a gap around 200 by 56 nodes', () => {
     { id: 'b', parents: ['intent'] },
   ];
   const [intent, a, b] = layoutNodes(nodes);
-  assert.equal(a.x - intent.x, 244);
+  assert.equal(a.x - intent.x, 208);
   assert.equal(b.x, a.x);
-  assert.equal(b.y - a.y, 88);
+  assert.equal(b.y - a.y, 80);
   assert.deepEqual(nodes[0], { id: 'intent' });
+});
+
+test('the whole example fits the 1440px console graph at readable zoom', () => {
+  const nodes = layoutNodes(exampleRun().nodes);
+  const width = Math.max(...nodes.map(node => node.x + 200)) - Math.min(...nodes.map(node => node.x));
+  const height = Math.max(...nodes.map(node => node.y + 56)) - Math.min(...nodes.map(node => node.y));
+  assert.ok(width * 0.6 * 1.16 <= 880, `trace width ${width}`);
+  assert.ok(height * 0.6 * 1.16 <= 700, `trace height ${height}`);
 });
 
 test('reflection retains its summary and rules and sessions remain isolated', () => {
