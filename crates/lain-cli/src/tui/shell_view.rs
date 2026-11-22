@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -35,14 +35,6 @@ pub fn tabs(frame: &mut Frame, area: Rect, state: &State) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(Line::from(labels)), area);
-}
-
-pub fn placeholder(frame: &mut Frame, area: Rect, screen: Screen) {
-    frame.render_widget(Paragraph::new(format!(
-        "{}\n\nScreen actions arrive in a later phase.\nCtrl+K → Go to {}\nSession slash command: /{}",
-        screen.name(), screen.name(), screen.id()
-    )).alignment(Alignment::Center).block(Block::default().borders(Borders::ALL)
-        .title(Span::styled(format!(" {} ", screen.name()), Style::default().fg(CYAN)))), area);
 }
 
 fn command_line(command: &app::Command, active: bool) -> Line<'static> {

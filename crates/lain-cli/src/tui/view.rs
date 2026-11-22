@@ -46,8 +46,8 @@ fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
         .map(|cost| format!("cost ${cost:.4}"));
     let mut telemetry = vec![];
-    if state.velocity(now) > 0.0 {
-        telemetry.push(format!("{:.1} tok/s", state.velocity(now)));
+    if let Some(rate) = state.token_rate(now).filter(|rate| *rate > 0.0) {
+        telemetry.push(format!("{rate:.1} tok/s"));
     }
     if let Some(cost) = cost {
         telemetry.push(cost);
@@ -488,7 +488,14 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         } else if state.screen == Screen::Creator {
             super::creator_view::draw(frame, *area, state, &mut scroll);
         } else {
-            shell_view::placeholder(frame, *area, state.screen);
+            match state.screen {
+                Screen::Sessions => super::inspect::sessions(frame, *area, &state.inspect, now),
+                Screen::Memory => {
+                    super::inspect::memory(frame, *area, &state.inspect, now, &mut scroll)
+                }
+                Screen::Models => super::inspect::models(frame, *area, state, now),
+                _ => {}
+            }
         }
     }
     if let Some(area) = vertical.get(3).filter(|_| state.screen == Screen::Session) {
@@ -539,7 +546,12 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     if state.screen != Screen::Session {
         if let Some(area) = vertical.get(3) {
             frame.render_widget(
-                Paragraph::new("Ctrl+K commands · F1 help · Alt+←/→ screens")
+                Paragraph::new(match state.screen {
+                    Screen::Sessions => "↑↓ select · Enter attach status · r refresh · Ctrl+K commands · F1 help",
+                    Screen::Memory => "↑↓ select · / filter · PgUp/PgDn detail · r refresh · Ctrl+K commands · F1 help",
+                    Screen::Models => "r reload local config · Ctrl+K commands · F1 help · Alt+←/→ screens",
+                    _=>"Ctrl+K commands · F1 help · Alt+←/→ screens",
+                })
                     .style(Style::default().fg(MUTED)),
                 *area,
             );
