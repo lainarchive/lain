@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use lain_core::tools::{ToolError, ToolRegistry, publish_tool_proposal, test_tool_proposal};
+use lain_core::tools::{
+    ToolError, ToolRegistry, publish_tool_proposal, publish_tool_proposal_checked,
+    test_tool_proposal,
+};
 use lain_plugin::{
     PluginManager,
     manifest::{HOST_PROCESS_PERMISSIONS, ScriptProposal},
@@ -102,6 +105,41 @@ async fn shared_creator_paths_match_agent_tools() -> Result<(), Box<dyn std::err
         registry.dispatch("create_tool", args).await,
         Err(ToolError::Duplicate(_))
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn publication_guard_can_refuse_and_is_held_until_files_exist()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let manager = PluginManager::new(
+        directory.path(),
+        HOST_PROCESS_PERMISSIONS.into_iter().collect(),
+    );
+    let registry = ToolRegistry::new();
+    assert!(matches!(
+        publish_tool_proposal_checked(&manager, &registry, proposal()?, || Err::<(), _>(
+            ToolError::Execution("cancelled".into())
+        ))
+        .await,
+        Err(ToolError::Execution(_))
+    ));
+    assert!(!directory.path().join(".lain").exists());
+    assert!(!registry.contains("echo_proposal"));
+    struct Guard(std::path::PathBuf);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            assert!(self.0.exists());
+        }
+    }
+    let path = directory.path().join(".lain/tools/tool-echo_proposal.json");
+    let report = publish_tool_proposal_checked(&manager, &registry, proposal()?, || {
+        assert!(!path.exists());
+        Ok(Guard(path.clone()))
+    })
+    .await?;
+    assert_eq!(report.written_paths.len(), 2);
+    assert!(registry.contains("echo_proposal"));
     Ok(())
 }
 
