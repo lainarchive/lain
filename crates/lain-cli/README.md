@@ -26,6 +26,16 @@ An already-running daemon retains its original working directory and config path
 client-side `--config` only applies when spawning a daemon. Run `daemon` in the
 foreground to see startup errors. Ctrl-C stops a foreground daemon gracefully.
 
+The TUI stays open when IPC disconnects, keeps the current draft, and marks active
+work interrupted. A persistent reconnect indicator and toast accompany retries
+(250 ms doubling to a 5 s maximum; each connection attempt has a 6 s deadline).
+It uses the same daemon autospawner, pings and opens a fresh session, then refreshes
+rules, telemetry and visible catalogs. The previous session is not resumed, even
+if the daemon survived. Enter keeps the draft while offline; Ctrl-C or `q` quits.
+Dropped in-flight turns are cooperatively cancelled; their terminated sessions
+are removed rather than reused with an incomplete tool transcript. Uncooperative
+socket handlers have a two-second disconnect cleanup deadline.
+
 Global options are `--endpoint`, `--config`, `--plain`, and `--help`.
 Endpoint/config defaults come from `LAIN_IPC_ENDPOINT` / `LAIN_CONFIG`, otherwise
 the IPC platform default / `lain.json` in the daemon's working directory.

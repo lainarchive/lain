@@ -445,15 +445,18 @@ impl DaemonHandler {
             loop {
                 tokio::select! {
                     biased;
+                    _ = events.closed() => { session.canceller.cancel(); break run.await; }
                     event = source.recv() => {
                         if let Ok(event) = &event {
                             if let AgentEvent::TurnStarted { turn, .. } = event { session.turn_count.store(*turn, Ordering::Relaxed); }
                             self.dashboard.publish(&id, event.clone());
                         }
-                        forward_agent_event(&id, event, events,stream_deltas).await?;
+                        if let Err(error)=forward_agent_event(&id, event, events,stream_deltas).await {
+                            if matches!(error,Error::Ipc(lain_ipc::Error::Closed)) {session.canceller.cancel();break run.await;}
+                            return Err(error);
+                        }
                     }
                     result = &mut run => break result,
-                    _ = events.closed() => { session.canceller.cancel(); break run.await; }
                 }
             }
         };
