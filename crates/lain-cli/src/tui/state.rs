@@ -695,7 +695,7 @@ impl State {
         }
         if (self.composer.is_empty() || self.screen != Screen::Session) && key.modifiers.is_empty()
         {
-            if let KeyCode::Char(c @ '1'..='6') = key.code {
+            if let KeyCode::Char(c @ '1'..='7') = key.code {
                 if let Some(screen) = Screen::ALL.get(c as usize - '1' as usize) {
                     self.navigate(*screen);
                 }
@@ -706,6 +706,10 @@ impl State {
             return self.plugin_key(key, now);
         }
         if self.screen != Screen::Session {
+            if self.screen == Screen::Bots && key.code == KeyCode::Esc {
+                self.navigate(Screen::Session);
+                return Effect::None;
+            }
             if let Some(message) = self.inspect.key(self.screen, key, &mut self.scroll) {
                 self.notify(message, now);
             }

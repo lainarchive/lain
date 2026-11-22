@@ -44,6 +44,11 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
         KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
         Duration::ZERO,
     );
+    assert_eq!(state.screen, Screen::Bots);
+    state.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
     assert_eq!(state.screen, Screen::Session);
     assert_eq!(state.composer, "draft3");
     Ok(())
@@ -805,6 +810,7 @@ fn live_sessions_omit_unknown_columns_and_page_rows() -> Result<(), Box<dyn std:
                     model: Some("known-model".into()),
                     mode: None,
                     turn_count: i,
+                    status: None,
                 })
             })
             .collect(),
@@ -830,6 +836,151 @@ fn live_sessions_omit_unknown_columns_and_page_rows() -> Result<(), Box<dyn std:
         state.inspect.sessions.state,
         super::inspect::ReadState::Idle
     ));
+    Ok(())
+}
+
+#[test]
+fn bots_render_navigation_and_unavailable_state() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.key(key(KeyCode::Char('7')), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Bots);
+    state.inspect.demo_refresh(Screen::Bots, Duration::ZERO);
+    let text = render(&state)?;
+    for expected in [
+        "Bots",
+        "OFFLINE DEMO",
+        "running",
+        "idle",
+        "busy",
+        "episodic",
+        "procedural",
+        "412.3k",
+        "~$0.41",
+        "38m ago",
+        "rows 1-8/8",
+        "every 5s",
+        "read-only",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(render(&state)?.contains("Attaching is not available"));
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Session);
+    state.composer = "/bots".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Bots);
+    assert!(state.composer.is_empty());
+    state.screen = Screen::Bots;
+    state.toast = None;
+    state.inspect.sessions.unavailable("old daemon");
+    state.inspect.memory.unavailable("unsupported");
+    let text = render(&state)?;
+    assert!(text.contains("old daemon"));
+    assert!(text.contains("unsupported"));
+    state.inspect.sessions.accept(vec![], Duration::ZERO);
+    assert!(render(&state)?.contains("No live agents"));
+    assert_eq!(
+        super::app::matching("bots").first().map(|c| c.action),
+        Some(super::app::Action::Go(Screen::Bots))
+    );
+    Ok(())
+}
+
+#[test]
+fn bots_refresh_only_while_visible_and_preserves_inflight_reads() {
+    use super::inspect::{Inspect, ReadState};
+    let mut view = Inspect::default();
+    view.tick(Screen::Bots, Duration::ZERO);
+    view.sessions.accept(vec![], Duration::ZERO);
+    view.tick(Screen::Bots, Duration::from_secs(4));
+    assert!(matches!(view.sessions.state, ReadState::Ready(_)));
+    view.tick(Screen::Bots, Duration::from_secs(5));
+    assert!(matches!(view.sessions.state, ReadState::Idle));
+    view.sessions.state = ReadState::Loading;
+    view.tick(Screen::Bots, Duration::from_secs(10));
+    assert!(matches!(view.sessions.state, ReadState::Loading));
+    view.sessions.accept(vec![], Duration::from_secs(11));
+    view.tick(Screen::Memory, Duration::from_secs(20));
+    assert!(matches!(view.sessions.state, ReadState::Ready(_)));
+    view.tick(Screen::Bots, Duration::from_secs(21));
+    assert!(matches!(view.sessions.state, ReadState::Idle));
+}
+
+#[test]
+fn compact_table_numbers_handle_empty_and_invalid_values() {
+    use super::formatting::{age, money, number};
+    assert_eq!(number(0), "0");
+    assert_eq!(number(999), "999");
+    assert_eq!(number(412300), "412.3k");
+    assert_eq!(number(999999), "1.0M");
+    assert_eq!(number(2500000000), "2.5G");
+    assert_eq!(money(Some(0.4123)), "~$0.41");
+    assert_eq!(money(Some(0.0)), "~$0.00");
+    for value in [None, Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {
+        assert_eq!(money(value), "—");
+    }
+    assert_eq!(age(0), "just now");
+    assert_eq!(age(2280), "38m ago");
+}
+
+#[test]
+fn bots_live_unknowns_and_numeric_column_alignment() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new(
+        "main".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    state.screen = Screen::Bots;
+    state.inspect.sessions.accept(
+        vec![super::inspect::SessionRow::from(lain_ipc::SessionInfo {
+            id: "legacy".into(),
+            model: None,
+            mode: None,
+            turn_count: 0,
+            status: None,
+        })],
+        Duration::ZERO,
+    );
+    state.inspect.memory.accept(vec![], Duration::ZERO);
+    state
+        .inspect
+        .daemon
+        .accept("running".into(), Duration::ZERO);
+    let text = render(&state)?;
+    assert!(text.contains("1 unknown"));
+    for omitted in ["pid ", "up ", "Cost", " Age ", "▰", "▱"] {
+        assert!(!text.contains(omitted), "invented {omitted}");
+    }
+    fn end_column(line: &str, needle: &str) -> Result<usize, Box<dyn std::error::Error>> {
+        let index = line.find(needle).ok_or("missing cell")?;
+        Ok(line.get(..index).ok_or("invalid prefix")?.chars().count() + needle.chars().count())
+    }
+    for screen in [Screen::Sessions, Screen::Bots] {
+        let mut state = State::demo_launch()?;
+        state.screen = screen;
+        state.inspect.demo_refresh(screen, Duration::ZERO);
+        let text = render(&state)?;
+        let header = text
+            .lines()
+            .find(|line| line.contains("Cost"))
+            .ok_or("missing header")?;
+        let row = text
+            .lines()
+            .find(|line| line.contains("demo-local-01"))
+            .ok_or("missing row")?;
+        assert_eq!(end_column(header, "Cost")?, end_column(row, "~$0.41")?);
+        assert_eq!(
+            end_column(
+                header,
+                if screen == Screen::Sessions {
+                    "In tokens"
+                } else {
+                    "In"
+                }
+            )?,
+            end_column(row, "412.3k")?
+        );
+    }
     Ok(())
 }
 

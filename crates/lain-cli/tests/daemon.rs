@@ -70,7 +70,7 @@ async fn ping_status_memory_and_missing_config() -> TestResult {
         let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
         let mut client = IpcClient::connect(&endpoint).await?;
         assert!(matches!(client.request(Command::Ping).await?.as_slice(), [Event::Pong { server_version: 1 }]));
-        assert!(matches!(client.request(Command::GetStatus { session_id: None }).await?.as_slice(), [Event::Status { status, scratchpad: None, .. }] if status.starts_with("ready")));
+        assert!(matches!(client.request(Command::GetStatus { session_id: None }).await?.as_slice(), [Event::Status { status, scratchpad: None, daemon:Some(info),.. }] if status.starts_with("ready") && info.pid==std::process::id() && info.name=="lain" && info.uptime_seconds<10));
         let records = client.request(Command::InspectMemory { session_id: None, limit: Some(5) }).await?;
         assert!(matches!(records.as_slice(), [Event::Memory { episodic, procedural }] if episodic.iter().any(|s| s.contains("apple")) && procedural.len() == 1));
         assert!(matches!(client.request(Command::InspectMemory { session_id: Some("missing".into()), limit: None }).await?.as_slice(),
@@ -383,7 +383,7 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
         }).collect();
         assert_eq!(labels, ["text", "tool_start", "tool_end", "text", "reflection", "completed"]);
         assert!(matches!(client.request(Command::ListSessions).await?.as_slice(), [Event::Sessions {sessions}]
-            if sessions.iter().any(|s| s.id == "s" && s.turn_count == 2 && s.model.as_deref() == Some("scripted") && s.mode.is_none())));
+            if sessions.iter().any(|s| s.id == "s" && s.turn_count == 2 && s.model.as_deref() == Some("scripted") && s.mode.is_none() && s.status==Some(lain_ipc::SessionStatus::Idle))));
         assert!(matches!(client.request(Command::GetStatus { session_id: Some("s".into()) }).await?.as_slice(), [Event::Status { scratchpad: Some(_), .. }]));
         assert!(matches!(client.request(Command::StartSession { session_id: Some("s".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_EXISTS"));
         client.request(Command::StartSession { session_id: Some("pending".into()) }).await?;
@@ -393,7 +393,7 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
         assert!(matches!(client.request(Command::GetStatus { session_id: Some("pending".into()) }).await?.as_slice(), [Event::Status { status, .. }] if status == "running"));
         assert!(matches!(client.request(Command::SendMessage { session_id: "pending".into(), text: "again".into() }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_BUSY"));
         assert!(matches!(client.request(Command::ListSessions).await?.as_slice(), [Event::Sessions {sessions}]
-            if sessions.iter().any(|s| s.id == "pending" && s.turn_count == 1)));
+            if sessions.iter().any(|s| s.id == "pending" && s.turn_count == 1 && s.status==Some(lain_ipc::SessionStatus::Running))));
         assert!(matches!(client.request(Command::ListTools {session_id:"pending".into()}).await?.as_slice(), [Event::Tools {..}]));
         let proposal = serde_json::from_value(serde_json::json!({"name":"blocked", "description":"Busy", "parameters":{"type":"object"},
             "interpreter":"python", "source":"pass", "test_args":{}}))?;
