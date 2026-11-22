@@ -124,6 +124,29 @@ impl ModelProvider for ScriptedProvider {
 struct ScriptedFactory(Arc<Notify>);
 
 #[tokio::test]
+async fn read_only_ipc_and_telemetry() -> TestResult {
+    timeout(Duration::from_secs(10), async {
+        let directory = tempfile::tempdir()?;
+        let endpoint = endpoint(&directory);
+        let handler = Arc::new(DaemonHandler::new(memory(&directory)?, Arc::new(ScriptedFactory(Arc::new(Notify::new())))));
+        let (stop, receiver) = watch::channel(false);
+        let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
+        let mut client = IpcClient::connect(&endpoint).await?;
+        client.request(Command::StartSession { session_id: Some("readonly".into()) }).await?;
+        assert!(matches!(client.request(Command::GetTelemetry { session_id: "readonly".into() }).await?.as_slice(),
+            [Event::Telemetry { model, tokens_used: 0, .. }] if model == "scripted"));
+        let events = client.request(Command::SendReadOnlyMessage { session_id: "readonly".into(), text: "Plan using memory".into() }).await?;
+        assert!(events.iter().any(|event| matches!(event, Event::ToolFinished { name, ok: true, .. } if name == "memory_read")));
+        assert!(events.iter().any(|event| matches!(event, Event::SessionCompleted { reason, .. } if reason == "completed")));
+        assert!(matches!(client.request(Command::GetTelemetry { session_id: "missing".into() }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_NOT_FOUND"));
+        client.close().await?;
+        stop.send(true)?;
+        server.await??;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }).await?
+}
+
+#[tokio::test]
 async fn dashboard_interventions_validate_steering_and_idle_cancel_preserves_session() -> TestResult
 {
     timeout(Duration::from_secs(10), async {

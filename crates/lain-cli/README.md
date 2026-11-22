@@ -7,13 +7,15 @@ lain start
 lain query "Summarize the current task"
 lain memory inspect --limit 10 --session SESSION_ID
 lain ui
+lain tui
+lain tui demo
 lain daemon --endpoint /path/to/lain.sock --config /path/to/lain.json
 ```
 
 `lain ui` runs the daemon with the browser dashboard enabled. Build the
 [dashboard assets](../../dashboard/README.md#run-locally) before starting it.
 
-`start`, `query`, and `memory inspect` ping the daemon and spawn the same binary's
+`start`, `query`, `tui`, and `memory inspect` ping the daemon and spawn the same binary's
 internal `daemon` command if needed. Startup retries for about five seconds.
 An already-running daemon retains its original working directory and config path;
 client-side `--config` only applies when spawning a daemon. Run `daemon` in the
@@ -29,6 +31,52 @@ then `UID` or `USER`; without any identity information, a process-scoped fallbac
 requires an explicit shared `--endpoint` to connect separate processes).
 Do not expose the endpoint to untrusted local users: connected clients can ask
 the configured agent to execute host-permission tools. Lain is not a sandbox.
+
+## Terminal frontier
+
+`lain tui` opens the Ratatui lane view. `lain tui demo` renders an **offline synthetic sample**
+without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
+The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
+Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
+An expanded tool opens its full output in the right drawer; PgUp/PgDn scroll that output. The lane preview
+always shows at most ten lines. The scratchpad and procedural rules remain visible above full output.
+
+Tab cycles **Architect → Code → Ask** while idle. Architect and Ask both allow only the registry's
+identity-checked built-in read tools; Code retains the daemon's configured tool permissions. Enable
+`coding_session` in the daemon config for AST planning with `repo_map`. The in-memory scratchpad tool
+is still allowed in read-only modes; normal transcript/reflection storage is unchanged. Plugins,
+creator tools and shell calls are denied before dispatch, even if the model invents an unadvertised call.
+This is enforced by the daemon's runner, not by racing cancellation against tool execution. It is not
+an OS sandbox or a restriction on other clients' Code requests. A mode change cannot weaken an active turn.
+
+Enter submits a prompt. While running, Enter sends the text using the existing message command
+(the read-only variant in Architect/Ask). The daemon currently rejects a mid-turn message with
+`SESSION_BUSY`; it neither queues nor applies it as steering. The rejection is displayed without
+cancelling the active turn. The dashboard's separate steering API is not used by this IPC client.
+Two Escape presses within 500ms send `CancelTurn`, remove the last turn's displayed blocks and restore
+its submitted prompt. A lone Escape does not rewind. Late replies from that turn are ignored and the
+next submission starts a fresh session. Rewind **does not undo tool side effects or persisted memory**.
+`q` or Ctrl-C quits and cancels a running turn; the terminal guard restores raw mode, cursor and screen
+on normal and error exits. `q` is reserved, not a composer character.
+
+Live IPC currently describes serial agent turns, not a parallel harness DAG. Each submitted turn becomes
+a dependent node rendered through `Dag::layers()`; the demo exercises parallel lanes, repair nodes and
+advisor-note colors. No advisor is started and no verification evidence is fabricated: ordinary daemon
+completion is `◇ prepared`, not `✓ verified`. Advisor notes can be rendered by the pure model, but the
+daemon has no advisor-note event yet.
+
+Telemetry is polled from the daemon's actual session snapshot: configured model, last measured request
+context and cumulative provider-reported usage. Velocity is the token-usage delta in a trailing five-second
+window, updated at model-step boundaries, not a count of text chunks. Cost stays **unknown** because the
+daemon has no configured pricing source; unknown usage/pricing is never displayed as free. Before a
+context measurement, the banner reports unknown. The branch comes from Git in the client's cwd; detached
+worktrees show `detached@<short-sha>`. An existing daemon may still use another cwd/config as described above.
+
+The additive `send_read_only_message` and `get_telemetry` IPC commands require this daemon version;
+an older daemon rejects them rather than silently falling back to unrestricted execution.
+
+To save a 140×45 TestBackend text rendering:
+`LAIN_TUI_DUMP=/absolute/path/tui-sample.txt cargo test -p lain-cli tui::tests::sample_dump`.
 
 ## Configuration
 
