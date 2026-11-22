@@ -132,11 +132,11 @@ pub async fn publish_tool_proposal(
     publish_tool_proposal_checked(manager, registry, proposal, || Ok(())).await
 }
 
-pub async fn publish_tool_proposal_checked(
+pub async fn publish_tool_proposal_checked<G>(
     manager: &PluginManager,
     registry: &ToolRegistry,
     proposal: ScriptProposal,
-    before_publish: impl FnOnce() -> Result<(), ToolError>,
+    before_publish: impl FnOnce() -> Result<G, ToolError>,
 ) -> Result<CreatorReport, ToolError> {
     if proposal.name == UPDATE_SCRATCHPAD_TOOL_NAME || registry.contains(&proposal.name) {
         return Err(ToolError::Duplicate(proposal.name));
@@ -150,7 +150,7 @@ pub async fn publish_tool_proposal_checked(
     }
     let name = entry.definition.name.clone();
     let path = registry.register_batch(vec![entry], || {
-        before_publish()?;
+        let _publication = before_publish()?;
         Ok(manager.persist_script(&plugin)?)
     })?;
     Ok(CreatorReport {
