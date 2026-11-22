@@ -126,6 +126,7 @@ async fn registry_validates_before_dispatch() {
     assert!(registry.tool_messages(&empty).await.is_empty());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_output_limits_exit_environment_and_timeout() {
     let directory = tempfile::tempdir().unwrap();
@@ -149,10 +150,9 @@ async fn bash_output_limits_exit_environment_and_timeout() {
     );
     tool.output_byte_cap = 2048;
     let output = tool
-        .execute(json!({"command":"printf '%s' \"${HOME-unset}\"; pwd; read ignored || true"}))
+        .execute(json!({"command":"pwd; read ignored || true"}))
         .await
         .unwrap();
-    assert!(output.content.contains("unset"));
     assert!(output.content.contains(directory.path().to_str().unwrap()));
     assert!(matches!(
         tool.execute(json!({})).await,
@@ -175,6 +175,7 @@ async fn bash_output_limits_exit_environment_and_timeout() {
     ));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_marks_truncation_after_lossy_utf8_expansion() {
     let directory = tempfile::tempdir().unwrap();
@@ -191,6 +192,50 @@ async fn bash_marks_truncation_after_lossy_utf8_expansion() {
     let content: Value = serde_json::from_str(&output.content).unwrap();
     assert_eq!(content.get("stdout").unwrap(), "�\n[truncated]");
     assert_eq!(content.get("stderr").unwrap(), "");
+}
+
+#[test]
+fn shell_environment_retains_path_without_provider_credentials() {
+    const MARKER: &str = "LAIN_SHELL_ENV_TEST";
+    if std::env::var_os(MARKER).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "shell_environment_retains_path_without_provider_credentials",
+                "--nocapture",
+            ])
+            .env(MARKER, "1")
+            .env("OPENROUTER_API_KEY", "synthetic-test-value")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    #[cfg(windows)]
+    let (tool, command): (Box<dyn Tool>, &str) = (
+        Box::new(PowerShellTool::new(directory.path())),
+        "if ($env:OPENROUTER_API_KEY) { throw 'credential leaked' }; cargo --version",
+    );
+    #[cfg(unix)]
+    let (tool, command): (Box<dyn Tool>, &str) = (
+        Box::new(BashTool {
+            working_directory: directory.path().into(),
+            timeout: Duration::from_secs(5),
+            output_byte_cap: 4096,
+        }),
+        "test -z \"${OPENROUTER_API_KEY-}\" && cargo --version",
+    );
+    let output = runtime
+        .block_on(tool.execute(json!({"command": command})))
+        .unwrap();
+    assert_eq!(output.exit_code, Some(0), "{}", output.content);
+    assert!(output.content.contains("cargo "), "{}", output.content);
 }
 
 #[tokio::test]

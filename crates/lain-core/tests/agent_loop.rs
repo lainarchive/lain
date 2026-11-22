@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    #[cfg(unix)]
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -23,7 +24,7 @@ mod tests {
                 message.content = None;
                 message.tool_calls = vec![ToolCall {
                     id: "call-1".into(),
-                    name: "bash".into(),
+                    name: if cfg!(windows) { "powershell" } else { "bash" }.into(),
                     arguments: json!({"command":"echo hello"}),
                 }];
             } else {
@@ -50,12 +51,17 @@ mod tests {
     async fn agent_loop_preserves_tool_history() {
         let directory = tempfile::tempdir().unwrap();
         let mut registry = ToolRegistry::new();
+        #[cfg(unix)]
         registry
             .register(Arc::new(BashTool {
                 working_directory: directory.path().into(),
                 timeout: Duration::from_secs(2),
                 output_byte_cap: 1024,
             }))
+            .unwrap();
+        #[cfg(windows)]
+        registry
+            .register(Arc::new(PowerShellTool::new(directory.path())))
             .unwrap();
         let provider = Arc::new(MockProvider::default());
         let model: Arc<dyn ModelProvider> = provider.clone();
