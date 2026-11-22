@@ -11,7 +11,7 @@ use ratatui::{
 
 use super::{
     app::Screen,
-    shell_view,
+    plugins, shell_view,
     state::{Mode, Phase, Scroll, Selection, State},
     theme::*,
 };
@@ -405,7 +405,11 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         Constraint::Length(4),
         Constraint::Length(1),
         Constraint::Min(3),
-        Constraint::Length(3),
+        Constraint::Length(if state.screen == Screen::Session {
+            3
+        } else {
+            0
+        }),
         Constraint::Length(3),
     ])
     .split(frame.area());
@@ -439,6 +443,18 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             }
             if let Some(area) = main.first() {
                 (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+            }
+        } else if state.screen == Screen::Plugins {
+            plugins::draw(frame, *area, &state.plugins, &mut scroll);
+        } else if state.screen == Screen::Creator && state.creator_template.is_some() {
+            if let Some(template) = &state.creator_template {
+                if let Ok(manifest) = &template.manifest {
+                    frame.render_widget(Paragraph::new(format!(
+                        "Template: {}\nPath: {}\nVersion: {} · Author: {}\nExports: {}\n\nManifest metadata received. Source has not been fetched.\nCreator editing arrives next.\n/creator",
+                        crate::render::clean(&manifest.name), crate::render::clean(&template.path.display().to_string()), crate::render::clean(&manifest.version),
+                        crate::render::clean(&manifest.author), manifest.tools.iter().map(|tool| crate::render::clean(&tool.name)).collect::<Vec<_>>().join(", ")
+                    )).wrap(Wrap {trim:false}).block(panel(" Creator · manifest template ")), *area);
+                }
             }
         } else {
             shell_view::placeholder(frame, *area, state.screen);
@@ -488,6 +504,8 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         modes.push(Span::styled(
             if state.screen == Screen::Session {
                 " · Tab mode · Enter send · ↑↓ select · Space fold · Ctrl+K commands · ? help"
+            } else if state.screen == Screen::Plugins {
+                " · ↑↓ select · r refresh · / filter · Enter template · Ctrl+K commands · ? help"
             } else {
                 " · 1–6 screens · Alt+←/→ tabs · Ctrl+K commands · ? help"
             },
@@ -499,7 +517,8 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                 Line::styled(
                     if state.screen == Screen::Session {
                         "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules · Esc Esc rewind · q/Ctrl-C quit"
-                    } else { "Placeholder · F1 help · q/Ctrl-C quit" },
+                    } else if state.screen == Screen::Plugins { "PgUp/PgDn details · Enter applies filter · Esc clears filter · Alt+←/→ tabs" }
+                    else { "Placeholder · F1 help · q/Ctrl-C quit" },
                     Style::default().fg(MUTED),
                 ),
                 Line::styled(state.toast_text(now).unwrap_or(&state.notice), Style::default().fg(AMBER)),

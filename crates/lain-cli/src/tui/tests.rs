@@ -304,8 +304,150 @@ fn contents(terminal: &Terminal<TestBackend>) -> String {
         .join("\n")
 }
 
+#[test]
+fn plugins_permission_colors_and_detail_paging() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.screen = Screen::Plugins;
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .any(|cell| cell.symbol() == "✓" && cell.fg == super::theme::GREEN));
+    state.key(key(KeyCode::Char('/')), Duration::ZERO);
+    for c in "create_tool".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .any(|cell| cell.symbol() == "✗" && cell.fg == super::theme::RED));
+    if let Some(tool) = state
+        .plugins
+        .tools
+        .iter_mut()
+        .find(|tool| tool.name == "create_tool")
+    {
+        tool.description = (0..70)
+            .map(|n| format!("description-line-{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    draw_scrolled(&mut terminal, &mut state)?;
+    for _ in 0..20 {
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
+    }
+    assert_eq!(state.scroll.plugin_detail, state.scroll.plugin_max);
+    assert!(contents(&terminal).contains("description-line-69"));
+    let bottom = state.scroll.plugin_detail;
+    state.key(key(KeyCode::PageUp), Duration::ZERO);
+    assert!(state.scroll.plugin_detail < bottom);
+    state.plugins.tools.clear();
+    state.plugins.filter.clear();
+    state.plugins.filtering = false;
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert!(render(&state)?.contains("? network"));
+    Ok(())
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+#[test]
+fn plugins_browse_filter_and_pass_creator_template() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.key(key(KeyCode::Char('2')), Duration::ZERO);
+    let text = render(&state)?;
+    for expected in [
+        "Manifests",
+        "Active tools",
+        "demo_echo",
+        "broken.json",
+        "webhook",
+        "properties",
+        "✓ network",
+        "/plugins",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    state.composer = "keep session draft".into();
+    state.key(key(KeyCode::Char('/')), Duration::ZERO);
+    for c in "demo_echo".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(render(&state)?.contains("Backend: webhook (from disk inventory)"));
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    state.key(key(KeyCode::Char('/')), Duration::ZERO);
+    for c in "create_tool".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    let text = render(&state)?;
+    assert!(text.contains("create_tool"));
+    assert!(!text.contains("broken.json"));
+    assert!(text.contains("✗ subprocess"));
+    assert_eq!(state.composer, "keep session draft");
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert!(state.plugins.filter.is_empty());
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Creator);
+    let template = state.creator_template.as_ref().ok_or("missing template")?;
+    assert_eq!(
+        template.path,
+        std::path::PathBuf::from(".lain/plugins/echo.json")
+    );
+    assert!(template.manifest.as_ref().is_ok_and(|m| m.name == "echo"));
+    assert!(render(&state)?.contains("Template: echo"));
+    Ok(())
+}
+
+#[test]
+fn plugins_show_errors_and_keep_filter_input_out_of_global_shortcuts(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.screen = Screen::Plugins;
+    state.key(key(KeyCode::Char('/')), Duration::ZERO);
+    for c in "zz12?q".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    assert_eq!(state.screen, Screen::Plugins);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.plugins.filter, "zz12?q");
+    assert_eq!(
+        super::input::handle_key(
+            &mut state,
+            key(KeyCode::Char('q')),
+            Duration::ZERO,
+            ratatui::layout::Rect::new(0, 0, 80, 10)
+        ),
+        Effect::None
+    );
+    assert_eq!(state.plugins.filter, "zz12?q");
+    assert!(render(&state)?.contains("No matching entries"));
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    state.key(key(KeyCode::Down), Duration::ZERO);
+    assert!(render(&state)?.contains("Load error"));
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Plugins);
+    assert!(state.creator_template.is_none());
+    state.plugins.inventory_error =
+        Some("Daemon does not support ListPlugins: IPC_INVALID_FRAME".into());
+    state.plugins.tools_error = Some("ListTools failed: SESSION_NOT_FOUND".into());
+    let text = render(&state)?;
+    assert!(text.contains("does not support ListPlugins"));
+    assert!(text.contains("SESSION_NOT_FOUND"));
+    state.key(key(KeyCode::Char('r')), Duration::ZERO);
+    assert!(!state.plugins.loaded);
+    assert!(state.plugins.inventory_error.is_none());
+    Ok(())
 }
 
 fn draw_scrolled(

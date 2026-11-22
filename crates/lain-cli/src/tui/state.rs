@@ -109,6 +109,9 @@ pub enum Selection {
 
 #[derive(Clone, Copy, Default)]
 pub struct Scroll {
+    pub plugin_detail: u16,
+    pub plugin_page: u16,
+    pub plugin_max: u16,
     pub lane: usize,
     pub drawer: u16,
     pub plan: u16,
@@ -120,6 +123,8 @@ pub struct Scroll {
 }
 
 pub struct State {
+    pub plugins: super::plugins::Plugins,
+    pub creator_template: Option<lain_ipc::ManifestEntry>,
     pub screen: Screen,
     pub overlay: Option<Overlay>,
     pub toast: Option<(String, Duration)>,
@@ -157,6 +162,8 @@ pub struct State {
 impl State {
     pub fn new(branch: String, workspace: &Path) -> Result<Self, Error> {
         Ok(Self {
+            plugins: super::plugins::Plugins::default(),
+            creator_template: None,
             screen: Screen::Session,
             overlay: None,
             toast: None,
@@ -363,6 +370,7 @@ impl State {
         if key.code == KeyCode::F(1)
             || (key.code == KeyCode::Char('?')
                 && self.composer.is_empty()
+                && !(self.screen == Screen::Plugins && self.plugins.filtering)
                 && self.overlay.is_none())
         {
             if !matches!(self.overlay, Some(Overlay::Help)) {
@@ -417,6 +425,9 @@ impl State {
             self.overlay = Some(overlay);
             return Effect::None;
         }
+        if self.screen == Screen::Plugins && self.plugins.filtering {
+            return self.plugin_key(key, now);
+        }
         if let Some((commands, selected)) = self.slash() {
             match key.code {
                 KeyCode::Esc => {
@@ -466,6 +477,9 @@ impl State {
                 return Effect::None;
             }
         }
+        if self.screen == Screen::Plugins && key.code != KeyCode::Char('q') {
+            return self.plugin_key(key, now);
+        }
         if self.screen != Screen::Session {
             return if key.code == KeyCode::Char('q') && self.composer.is_empty() {
                 Effect::Quit
@@ -478,6 +492,18 @@ impl State {
             self.slash_selected = 0;
         }
         self.session_key(key, now)
+    }
+
+    fn plugin_key(&mut self, key: KeyEvent, now: Duration) -> Effect {
+        match self.plugins.key(key, &mut self.scroll) {
+            Ok(Some(template)) => {
+                self.creator_template = Some(template);
+                self.navigate(Screen::Creator);
+            }
+            Err(error) => self.notify(error, now),
+            _ => {}
+        }
+        Effect::None
     }
 
     fn session_key(&mut self, key: KeyEvent, now: Duration) -> Effect {
@@ -780,6 +806,7 @@ impl State {
             "feat/frontier".into(),
             Path::new(env!("CARGO_MANIFEST_DIR")),
         )?;
+        state.plugins = super::plugins::Plugins::sample()?;
         state.model_chain = "planner → coder → advisor".into();
         state.context = 42_000;
         state.context_window = 128_000;

@@ -17,6 +17,7 @@ use lain_ipc::{Command, Event, IpcClient};
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use super::{
+    plugins,
     state::{Effect, Phase, State},
     view,
 };
@@ -35,7 +36,9 @@ pub(super) fn handle_key(
     if view::has_room(area) {
         state.key(key, now)
     } else if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-        || (key.code == KeyCode::Char('q') && state.composer.is_empty())
+        || (key.code == KeyCode::Char('q')
+            && state.composer.is_empty()
+            && !(state.screen == super::app::Screen::Plugins && state.plugins.filtering))
     {
         Effect::Quit
     } else {
@@ -132,8 +135,20 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut poll_request = None;
     let mut active_request = None;
     let mut ignored = BTreeSet::new();
+    let mut plugin_requests = plugins::Requests::default();
+    let mut plugins_session = session.clone();
     let result = async {
         loop {
+            if plugins_session != session {
+                ignored.extend(plugin_requests.clear());
+                state.plugins.refresh();
+                plugins_session = session.clone();
+            }
+            if state.screen == super::app::Screen::Plugins && !state.plugins.loaded {
+                if let Some(client) = &mut client {
+                    plugin_requests.refresh(client, session.as_deref(), &mut state.plugins).await?;
+                } else { state.plugins.load_demo()?; }
+            }
             terminal.draw(|frame| {
                 state.scroll = view::draw(frame, &state, started.elapsed());
             })?;
@@ -193,6 +208,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                 event = next(&mut client) => {
                     let Some((request, event)) = event? else { return Err(Error::failure("TUI_DISCONNECTED", "Daemon closed the connection")); };
                     if ignored.contains(&request) { continue; }
+                    if plugin_requests.event(request, &event, &mut state.plugins) { continue; }
                     if Some(request) == poll_request { poll_request = None; }
                     if Some(request) == active_request {
                         state.event(&event, started.elapsed());
