@@ -295,6 +295,22 @@ impl DaemonHandler {
                     })
                     .await?;
             }
+            Command::InspectRules { session_id, limit } => {
+                let procedural = self
+                    .memory
+                    .lock()
+                    .map_err(|_| Error::failure("MEMORY_LOCK", "Memory lock poisoned"))?
+                    .recent_procedural_rules(
+                        session_id.as_deref(),
+                        limit.unwrap_or(20).min(100) as usize,
+                    )?;
+                events
+                    .send(Event::Memory {
+                        episodic: Vec::new(),
+                        procedural,
+                    })
+                    .await?;
+            }
             Command::InspectMemory { session_id, limit } => {
                 let limit = limit.unwrap_or(20).min(100) as usize;
                 let (episodic, procedural) = {

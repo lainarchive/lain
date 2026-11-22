@@ -49,6 +49,10 @@ pub enum Command {
         session_id: Option<String>,
         limit: Option<u32>,
     },
+    InspectRules {
+        session_id: Option<String>,
+        limit: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
