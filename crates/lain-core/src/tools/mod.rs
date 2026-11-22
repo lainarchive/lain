@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex, PoisonError, RwLock},
@@ -10,6 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use lain_memory::{MemoryStore, SearchOptions};
+use lain_plugin::manifest::Capability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -20,7 +21,10 @@ mod creator;
 mod plugins;
 mod repo_map;
 
-pub use creator::{CreateToolTool, TestToolTool};
+pub use creator::{
+    CreateToolTool, CreatorReport, TestToolTool, publish_tool_proposal,
+    publish_tool_proposal_checked, test_tool_proposal,
+};
 pub use repo_map::{REPO_MAP_TOOL_NAME, RepoMapTool};
 
 pub const UPDATE_SCRATCHPAD_TOOL_NAME: &str = "UpdateScratchpad";
@@ -64,11 +68,28 @@ pub struct ToolOutput {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolSource {
+    Builtin,
+    Plugin {
+        manifest_name: String,
+        manifest_path: Option<PathBuf>,
+    },
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync + std::any::Any {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
+    /// Display metadata only; read-only authorization still uses concrete tool identity.
+    fn source(&self) -> ToolSource {
+        ToolSource::Builtin
+    }
+    fn manifest_permissions(&self) -> Option<BTreeSet<Capability>> {
+        None
+    }
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError>;
 }
 
@@ -181,6 +202,22 @@ impl ToolRegistry {
             .values()
             .map(|entry| entry.definition.clone())
             .collect()
+    }
+
+    pub fn source(&self, name: &str) -> Option<ToolSource> {
+        self.tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .map(|entry| entry.tool.source())
+    }
+
+    pub fn manifest_permissions(&self, name: &str) -> Option<BTreeSet<Capability>> {
+        self.tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .and_then(|entry| entry.tool.manifest_permissions())
     }
 
     pub async fn dispatch(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {

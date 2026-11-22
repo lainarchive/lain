@@ -19,7 +19,7 @@ pub const HOST_PROCESS_PERMISSIONS: [Capability; 4] = [
     Capability::Subprocess,
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginManifest {
     pub name: String,
@@ -29,7 +29,7 @@ pub struct PluginManifest {
     pub author: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolExport {
     pub name: String,
@@ -38,7 +38,7 @@ pub struct ToolExport {
     pub backend: Backend,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Backend {
     Script {
@@ -65,12 +65,23 @@ impl Backend {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptInterpreter {
     Python,
     Powershell,
     Node,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptProposal {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+    pub interpreter: ScriptInterpreter,
+    pub source: String,
+    pub test_args: Value,
 }
 
 impl ScriptInterpreter {

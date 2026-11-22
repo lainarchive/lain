@@ -1,5 +1,72 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+pub use lain_plugin::{
+    manifest::{Capability, ScriptProposal},
+    ManifestEntry, ScriptExecution,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMode {
+    Architect,
+    Code,
+    Ask,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolSource {
+    Builtin,
+    Plugin {
+        manifest_name: String,
+        manifest_path: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PermissionGrant {
+    pub capability: Capability,
+    pub granted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveTool {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+    pub source: ToolSource,
+    pub permissions: Vec<PermissionGrant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionStatus {
+    Running,
+    Idle,
+    Busy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DaemonInfo {
+    pub name: String,
+    pub pid: u32,
+    pub uptime_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SessionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub turn_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<SessionStatus>,
+}
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
@@ -24,6 +91,20 @@ pub struct ServerFrame {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Command {
+    ListTools {
+        session_id: String,
+    },
+    ListPlugins,
+    TestToolProposal {
+        session_id: String,
+        proposal: ScriptProposal,
+    },
+    PublishToolProposal {
+        session_id: String,
+        proposal: ScriptProposal,
+        mode: SessionMode,
+    },
+    ListSessions,
     Ping,
     StartSession {
         session_id: Option<String>,
@@ -59,6 +140,22 @@ pub enum Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Event {
+    Tools {
+        session_id: String,
+        allow_creator_mode: bool,
+        tools: Vec<ActiveTool>,
+    },
+    Plugins {
+        plugins: Vec<ManifestEntry>,
+    },
+    ToolProposalResult {
+        session_id: String,
+        execution: ScriptExecution,
+        written_paths: Vec<PathBuf>,
+    },
+    Sessions {
+        sessions: Vec<SessionInfo>,
+    },
     Telemetry {
         session_id: String,
         model: String,
@@ -104,6 +201,8 @@ pub enum Event {
         session_id: Option<String>,
         status: String,
         scratchpad: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        daemon: Option<DaemonInfo>,
     },
     Memory {
         episodic: Vec<String>,
@@ -119,7 +218,11 @@ impl Event {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Pong { .. }
+            Self::Tools { .. }
+                | Self::Plugins { .. }
+                | Self::ToolProposalResult { .. }
+                | Self::Sessions { .. }
+                | Self::Pong { .. }
                 | Self::Telemetry { .. }
                 | Self::SessionStarted { .. }
                 | Self::SessionCompleted { .. }
@@ -262,11 +365,17 @@ mod tests {
                 session_id: Some("s".into()),
                 status: "idle".into(),
                 scratchpad: Some("notes".into()),
+                daemon: None,
             },
             Event::Status {
                 session_id: None,
                 status: "idle".into(),
                 scratchpad: None,
+                daemon: Some(DaemonInfo {
+                    name: "lain".into(),
+                    pid: 42,
+                    uptime_seconds: 60,
+                }),
             },
             Event::Memory {
                 episodic: vec!["episode".into()],
@@ -291,6 +400,41 @@ mod tests {
             assert_eq!(
                 serde_json::from_slice::<ServerFrame>(&serde_json::to_vec(&frame)?)?,
                 frame
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn session_status_is_additive_and_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
+        let mut old_status = serde_json::to_value(Event::Status {
+            session_id: None,
+            status: "ready".into(),
+            scratchpad: None,
+            daemon: None,
+        })?;
+        old_status
+            .as_object_mut()
+            .ok_or("missing status object")?
+            .remove("daemon");
+        assert!(matches!(
+            serde_json::from_value::<Event>(old_status)?,
+            Event::Status { daemon: None, .. }
+        ));
+        let old: SessionInfo = serde_json::from_str(r#"{"id":"s","turn_count":0}"#)?;
+        assert_eq!(old.status, None);
+        for status in [
+            SessionStatus::Running,
+            SessionStatus::Idle,
+            SessionStatus::Busy,
+        ] {
+            let current = SessionInfo {
+                status: Some(status),
+                ..old.clone()
+            };
+            assert_eq!(
+                serde_json::from_slice::<SessionInfo>(&serde_json::to_vec(&current)?)?,
+                current
             );
         }
         Ok(())

@@ -1143,16 +1143,19 @@ dependencies = [
  "futures",
  "futures-util",
  "getrandom 0.3.4",
+ "jsonschema",
  "lain-agent",
  "lain-core",
  "lain-harness",
  "lain-ipc",
  "lain-memory",
  "ratatui",
+ "ratatui-textarea",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "throbber-widgets-tui",
  "tokio",
  "tower-http",
  "ts-rs",
@@ -1211,6 +1214,7 @@ dependencies = [
 name = "lain-ipc"
 version = "0.1.0"
 dependencies = [
+ "lain-plugin",
  "serde",
  "serde_json",
  "tempfile",
@@ -1768,6 +1772,19 @@ dependencies = [
  "crossterm",
  "instability",
  "ratatui-core",
+]
+
+[[package]]
+name = "ratatui-textarea"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cf7263fbb7f37caa4bcfd00fc604ff1409f70456a833fbdff99282e88fdfe92"
+dependencies = [
+ "ratatui-core",
+ "ratatui-crossterm",
+ "ratatui-widgets",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
@@ -2343,6 +2360,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "throbber-widgets-tui"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b0452e418faaa263a742d94e5c2f9f50c777a0ae5b3ec53ce754d917d568e36"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]

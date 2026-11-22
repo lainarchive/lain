@@ -34,18 +34,97 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 
 ## Terminal frontier
 
-`lain tui` opens the Ratatui lane view. `lain tui demo` renders an **offline synthetic sample**
+`lain tui` opens the Ratatui app shell. `lain tui demo` renders an **offline synthetic sample**
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
-The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
+The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models, Bots**. Session contains a borderless conversation transcript;
+Plugins browses disk manifests and active session tools. Creator edits, tests and publishes script proposals through the daemon.
+Memory, Sessions and Models are read-only inspection screens; unavailable socket capabilities are labelled rather than simulated in live mode.
+
+- **4 Memory:** recent workspace-wide episodic memory and procedural rules via `InspectMemory` (50 of each),
+  with ↑↓ selection, `/` local filtering, PgUp/PgDn detail scrolling and `r` refresh.
+  Editing, deletion and semantic search are not available over the socket yet; use `lain ui`.
+- **5 Sessions:** `ListSessions` plus daemon `GetStatus`, ↑↓ selection and `r` refresh.
+  The list is live daemon memory, not saved history. Enter explains that attaching is not available over the socket yet:
+  `StartSession` creates a new session and refuses existing ids. Unknown pid, uptime, age, token direction and cost are omitted.
+- **6 Models:** current model, context usage and total tokens from telemetry, plus a local observed token rate only after two timed samples.
+  Cost is omitted without known pricing. The local `--config` / `LAIN_CONFIG` / `lain.json` metadata is read without building a provider
+  or resolving credential environment variables. Rust config currently has one provider/model pair; it may differ from the daemon's config.
+  `r` reloads that metadata. Edit `model` / `provider` in that file, then start a new session; selection is not supported over the socket.
+
+The offline demo fills all three screens with labelled synthetic data, including optional Sessions columns that live IPC does not provide.
+Tool headers compact actual JSON arguments; empty objects show `tool()`. `repo_map` really takes no arguments, while demo `memory_read`
+uses a real query. Preview continuation lines keep their indentation without repeating `└`. The working line rotates eight practical tips.
+Outside overlays, 1–7 switches screens when not editing a Creator field or a Plugins/Memory filter and the Session composer is empty or unfocused.
+
+**7 Bots** (`/bots`, or Ctrl+K → Bots) shows daemon state, session activity and retrieved memory counts.
+It refreshes every five seconds while visible. ↑↓ selects, Enter explains attachment availability, `r` refreshes and Esc returns to Session.
+Running means an active provider turn; busy means a Creator operation. Old daemons without activity metadata show unknown.
+Daemon pid and uptime are read from additive `GetStatus` metadata; older daemons omit them. Directional tokens, pricing and timestamps remain omitted when unavailable.
+Memory counts are entries read, not total capacity;
+the socket exposes no storage limit, so no capacity bars are shown. Sessions and Bots share compact, right-aligned numbers.
+Alt+Left/Right always switches screens, closing overlays while preserving the Session draft and active turn.
+
+On **Plugins (2)**, Up/Down selects manifests or active tools; PgUp/PgDn scrolls the detail pane.
+`r` refreshes both inventories. `/` focuses a case-insensitive filter; Enter applies it and Esc clears it.
+While filtering, digits, `q` and `?` are text, not global shortcuts; F1 and Ctrl+K still work.
+Enter on a valid manifest opens Creator with its metadata in state; it does not read source files or execute anything.
+Malformed manifests remain visible with their paths and errors. Tool details show provenance, schema, backend and capability grants:
+green ✓ granted, red ✗ missing. A manifest without matching active tools has unknown grants, not assumed missing grants.
+For active plugin tools, backend labels come from disk inventory, which can differ from the already-loaded runtime after a disk edit.
+Live mode fetches on first entry and refresh, with explicit unsupported/error messages for older daemons.
+Demo mode uses canned inventory including one malformed manifest. Plugin refresh errors do not terminate an active chat turn.
+
+On **Creator (3)**, the breadcrumb steps are Name/description → Input schema → Interpreter → Source → Test → Publish.
+Tab/Shift+Tab or Ctrl+Left/Right changes steps. Alt+Left/Right changes screens without discarding the draft.
+Enter switches between name and description. Schema JSON is checked live against JSON Schema; sample input is validated before requests.
+Up/Down chooses Python, PowerShell or Node, the interpreters supported by `ScriptProposal` (installation is checked by execution, not the picker).
+The multi-line editor supports arrows, Home/End, editing, undo and bracketed paste. Tab is reserved for steps; use spaces to indent.
+On Test, Enter runs `TestToolProposal`; Shift+Enter inserts a newline in the sample input. PgUp/PgDn scrolls execution reports without overshooting.
+Reports show exit status, stdout, stderr, decoded result, duration and daemon-reported written paths. Errors stay on Creator, not the active chat turn.
+Publish requires Code mode and confirmed daemon creator-mode access. Enter opens a dialog naming the exact two workspace-relative files and all four permissions.
+Type lowercase `y`, then Enter, to submit; Enter alone or pasting `y` cannot confirm. Esc cancels, and permission/mode checks run again on confirmation.
+**Test and Publish both execute unsandboxed as the host user.** Publish tests again before writing; rewinding cannot undo these writes.
+While a request runs the draft is locked, but other screens remain usable. Creator capability checks fail closed on unsupported/older daemons.
+Selecting a Plugins template replaces the draft using the first export's name, description, schema and script interpreter if present.
+Source is never read from disk by the TUI or supplied by inventory: template source starts empty. Choose a unique name and supply new source before testing.
+In demo mode both operations are explicitly **SIMULATED**: no script executes and no file is written. Simulated publication does not mark edits as saved.
+
+Ctrl+K opens a command palette. Type a fuzzy subsequence to filter, use Up/Down or Tab to select, and Enter to run.
+On Session, a leading `/` opens inline completion from the same registry: Tab/Up/Down selects and Enter runs.
+Commands are `/session`, `/plugins`, `/creator`, `/memory`, `/sessions`, `/models`, `/architect`, `/code`, `/ask`,
+`/new`, `/help`, `/quit`, `/output`, `/rewind`, `/dag`, `/plan`, `/theme`. Unknown commands show a five-second toast and keep the text for editing;
+they are never sent to the model. New session and quit palette actions confirm before discarding a draft or active turn.
+New session clears the local view, cancels any old turn, and opens a fresh daemon session (offline in demo mode).
+`/output` or Ctrl+O toggles the selected Session tool block, or the last block if none is selected. Mode commands cannot change an active turn's policy.
+F1, or `?` with an empty composer, opens help generated from the registry and the current screen's key table.
+Escape closes the topmost palette/help/confirmation or slash list first. During a turn, Escape interrupts it (sending the existing cancel request live).
+While idle, only Session without an overlay uses double Escape to rewind. Cancellation cannot undo executed tools or filesystem writes.
+The footer shows contextual keys and `Ctrl+K commands · ? help`; transient toasts expire in state, without timer threads.
+
+Session renders tinted user prompts, status-coloured timed tool calls, inline advisor notes and model-headed assistant answers.
+Tool previews show at most three lines; Ctrl+O expands them. Simple markdown supports bold, inline code, bullets and boxed fenced code.
+Turn footers show elapsed time, tool count and token usage. Prepared evidence is not labelled verified.
+During a turn, a ticking Working line and rotating command-registry tips sit above the composer.
+Ctrl+G (`/dag`) toggles the right-hand DAG drawer; Ctrl+P (`/plan`) toggles the plan/rules drawer.
+Both default open only at widths of at least 160 columns; explicit choices survive resizing.
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
-The minimum terminal size is 120 columns by 30 rows; smaller windows show a resize message instead of clipped panels.
-PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
+The empty-session launch view supports 80×24; its tools grid drops below 120 columns, then its session/action cards below 96 columns.
+Transcript and editor screens retain the 120×30 minimum. Smaller windows show a resize message and block hidden input.
+`/theme` or **Ctrl+K → Cycle theme** switches between **wired** (ink, ice blue, violet, coral) and **mono** (basic grayscale colours).
+The launch tools grid uses the daemon's active-tool catalog, grouped by builtin category then plugin; `/plugins` opens the complete inventory.
+The footer shows the mode, branch and available model/context telemetry. Unknown telemetry is omitted, not estimated.
+Session cards show the live session ID when available. Last-session history and `/resume` are unavailable in the current daemon API.
+PgUp/PgDn scroll the transcript with one-line overlap. It follows new output until you scroll up;
+a **↓ new output** pill marks output arriving offscreen. Page down to the bottom to follow again.
+Changing selection returns to its transcript heading. Ctrl+G focuses DAG paging while that drawer is open; close it to page the transcript again.
 Alt+PgUp/PgDn is the portable scratchpad binding, including in stock Konsole. Shift+PgUp/PgDn remains an alias,
 but Konsole captures it for scrollback. Ctrl+PgUp/PgDn scrolls procedural rules, independently of selection.
 All drawer offsets clamp to the visible content, including after a resize or shorter content replaces it.
 Paging uses the target pane's visible height minus one line for overlap, with a minimum step of one.
-An expanded selected tool opens its full output in the right drawer; PgUp/PgDn then scroll that output. The lane preview
-always shows at most ten lines. The scratchpad and procedural rules remain visible above full output.
+With the plan/rules drawer open, an expanded selected tool also opens its full output below them; PgUp/PgDn then scroll that output.
+`lain tui demo` starts with a synthetic mid-turn transcript, tools and an answer. `/new` opens its launch screen.
+The demo catalog includes the platform shell, memory, workspace and Creator builtins plus two example plugins and a malformed manifest.
+Model, session ID, velocity, cost and context are canned and labelled synthetic; no provider or scripts execute.
 
 Tab cycles **Architect → Code → Ask** while idle. Architect and Ask both allow only the registry's
 identity-checked built-in read tools; Code retains the daemon's configured tool permissions. Enable

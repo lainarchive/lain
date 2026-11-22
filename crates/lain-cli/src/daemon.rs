@@ -3,10 +3,10 @@ use std::time::Duration;
 use std::{
     collections::HashMap,
     future::Future,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -34,8 +34,13 @@ use crate::Error;
 pub type SharedMemory = Arc<Mutex<MemoryStore>>;
 pub const MAX_SESSIONS: usize = 32;
 
+mod catalog;
+
 pub trait RunnerFactory: Send + Sync + 'static {
     fn create(&self, id: &str, memory: SharedMemory) -> Result<AgentRunner, Error>;
+    fn workspace(&self) -> Option<&Path> {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -93,6 +98,10 @@ impl ConfigFactory {
 }
 
 impl RunnerFactory for ConfigFactory {
+    fn workspace(&self) -> Option<&Path> {
+        Some(&self.working_directory)
+    }
+
     fn create(&self, id: &str, memory: SharedMemory) -> Result<AgentRunner, Error> {
         let bytes = std::fs::read(&self.config_path).map_err(|error| {
             Error::failure(
@@ -115,11 +124,37 @@ impl RunnerFactory for ConfigFactory {
 }
 
 struct Session {
+    config: AgentConfig,
+    turn_count: AtomicU32,
+    turn_active: AtomicBool,
+    proposal_active: AtomicBool,
     control: lain_agent::control::AgentControl,
     tools: Arc<ToolRegistry>,
     runner: AsyncMutex<AgentRunner>,
     canceller: Canceller,
+    cancellation: Mutex<()>,
     created: u64,
+}
+
+impl Session {
+    fn cancel_busy(&self) -> bool {
+        let _guard = self
+            .cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let busy = self.runner.try_lock().is_err();
+        if busy {
+            self.canceller.cancel();
+        }
+        busy
+    }
+}
+
+struct ActiveTurn<'a>(&'a AtomicBool);
+impl Drop for ActiveTurn<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 pub struct DaemonHandler {
@@ -128,6 +163,7 @@ pub struct DaemonHandler {
     factory: Arc<dyn RunnerFactory>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
     next_session: AtomicU64,
+    started: std::time::Instant,
 }
 
 impl std::fmt::Debug for DaemonHandler {
@@ -144,6 +180,7 @@ impl DaemonHandler {
             factory,
             sessions: RwLock::new(HashMap::new()),
             next_session: AtomicU64::new(0),
+            started: std::time::Instant::now(),
         }
     }
 
@@ -164,6 +201,24 @@ impl DaemonHandler {
 
     async fn dispatch(&self, command: Command, events: &EventSink) -> Result<(), Error> {
         match command {
+            Command::ListTools { session_id } => self.list_tools(session_id, events).await?,
+            Command::ListPlugins => self.list_plugins(events).await?,
+            Command::ListSessions => self.list_sessions(events).await?,
+            Command::TestToolProposal {
+                session_id,
+                proposal,
+            } => {
+                self.tool_proposal(session_id, proposal, None, events)
+                    .await?
+            }
+            Command::PublishToolProposal {
+                session_id,
+                proposal,
+                mode,
+            } => {
+                self.tool_proposal(session_id, proposal, Some(mode), events)
+                    .await?
+            }
             Command::Ping => {
                 events
                     .send(Event::Pong {
@@ -210,10 +265,15 @@ impl DaemonHandler {
                 sessions.insert(
                     id.clone(),
                     Arc::new(Session {
+                        config: runner.config().clone(),
+                        turn_count: AtomicU32::new(runner.state().turn_count),
+                        turn_active: AtomicBool::new(false),
+                        proposal_active: AtomicBool::new(false),
                         control,
                         tools,
                         runner: AsyncMutex::new(runner),
                         canceller,
+                        cancellation: Mutex::new(()),
                         created: self.next_session.fetch_add(1, Ordering::Relaxed),
                     }),
                 );
@@ -249,18 +309,17 @@ impl DaemonHandler {
             }
             Command::CancelTurn { session_id } => {
                 let session = self.session(&session_id).await?;
-                let status = match session.runner.try_lock() {
-                    Ok(_) => "idle: nothing to cancel",
-                    Err(_) => {
-                        session.canceller.cancel();
-                        "cancelling"
-                    }
+                let status = if session.cancel_busy() {
+                    "cancelling"
+                } else {
+                    "idle: nothing to cancel"
                 };
                 events
                     .send(Event::Status {
                         session_id: Some(session_id),
                         status: status.into(),
                         scratchpad: None,
+                        daemon: None,
                     })
                     .await?;
             }
@@ -287,11 +346,17 @@ impl DaemonHandler {
                         None,
                     )
                 };
+                let daemon = session_id.is_none().then(|| lain_ipc::DaemonInfo {
+                    name: "lain".into(),
+                    pid: std::process::id(),
+                    uptime_seconds: self.started.elapsed().as_secs(),
+                });
                 events
                     .send(Event::Status {
                         session_id,
                         status,
                         scratchpad,
+                        daemon,
                     })
                     .await?;
             }
@@ -362,6 +427,8 @@ impl DaemonHandler {
             .map_err(|_| Error::failure("SESSION_BUSY", &id))?;
         drop(sessions);
         runner.set_read_only(read_only);
+        session.turn_active.store(true, Ordering::Relaxed);
+        let active = ActiveTurn(&session.turn_active);
         let mut source = runner.subscribe();
         let result = {
             let run = runner.run(text);
@@ -370,7 +437,10 @@ impl DaemonHandler {
                 tokio::select! {
                     biased;
                     event = source.recv() => {
-                        if let Ok(event) = &event { self.dashboard.publish(&id, event.clone()); }
+                        if let Ok(event) = &event {
+                            if let AgentEvent::TurnStarted { turn, .. } = event { session.turn_count.store(*turn, Ordering::Relaxed); }
+                            self.dashboard.publish(&id, event.clone());
+                        }
                         forward_agent_event(&id, event, events).await?;
                     }
                     result = &mut run => break result,
@@ -378,6 +448,10 @@ impl DaemonHandler {
                 }
             }
         };
+        drop(active);
+        session
+            .turn_count
+            .store(runner.state().turn_count, Ordering::Relaxed);
         if matches!(runner.state().status, AgentStatus::Terminated(_)) {
             self.sessions.write().await.remove(&id);
         }
@@ -517,9 +591,7 @@ impl DaemonHandler {
                 true
             }
             Intervention::Cancel { .. } => {
-                if session.runner.try_lock().is_err() {
-                    session.canceller.cancel();
-                }
+                session.cancel_busy();
                 true
             }
             Intervention::Intercept { enabled, .. } => {

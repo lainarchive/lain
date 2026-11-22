@@ -1,5 +1,59 @@
 # Current Project State
 
+## Bots inspection screen
+
+- Added screen 7 (`/bots`, palette, help) with a wired daemon status card, memory entries read and a paged agent table.
+  It polls every five seconds only while visible, retains selection by session id and avoids duplicate in-flight reads.
+- Additive IPC exposes real daemon name/pid/monotonic uptime in global `GetStatus` and activity in `ListSessions`.
+  Running means an active provider turn; busy means Creator Test/Publish. Missing legacy status displays unknown.
+  No last-active timestamp is tracked. Directional tokens, cost and age stay demo-only; no storage capacity is exposed,
+  so memory shows retrieved counts without invented capacity bars. Attachment remains unavailable and says so on Enter.
+- Bots and Sessions share compact numeric/currency/age formatting and right-aligned numeric columns. Demo has eight
+  agents with mixed states. Tests cover old protocol defaults, real handler status transitions, renders, empty/error
+  states, alignment, formatting and the refresh clock. No dependencies were added.
+- Linux gates: 245 workspace tests, Clippy with warnings denied and Rust formatting passed. Konsole Bots visual evidence:
+  `/home/ubuntu/screenshots/ss_817fdcd6.png`. Native Windows and live-provider desktop interaction remain untested.
+  Next action: review the pushed Bots change; handle any separately reported review findings.
+
+## PR 15 review follow-up
+
+- Confirmed the reviewed head was `a2c425e`. Creator Test/Publish now observe cancellation and disconnects, kill the
+  script future, refuse publication after cancellation, and reset cancellation before releasing the runner. Publication
+  and cancellation finalization share a lock; script side effects already performed are not rolled back.
+- New-session startup is request-correlated and commits the replacement view only after success. Failures preserve the
+  prior conversation and show a toast. Multiline drafts grow to six visible rows and use ↑/↓ to inspect overflow.
+- Mode changes recompute stale Creator publish refusals without hiding execution failures. Demo Plugins shows denied
+  network permission on `demo_echo`; the CLI starts at launch and seeds a labelled canned turn after the first submit.
+- Linux verification: 240 workspace tests, Clippy with warnings denied and Rust formatting passed. Regression tests cover
+  cancellation/refusal/cleanup, deferred session replacement, multiline submission, mode changes and demo behavior.
+  These UI changes are visually unverified; native Windows and live-provider interaction remain untested.
+  PR CI at `dc6d50a`: six checks passed, none failed or pending.
+
+## TUI shell review
+
+- Reviewed `f9016ff..HEAD` on `feat/tui-shell`. Primary `SESSION_BUSY` refusals now stop the working state without
+  interrupting a real turn when a steering request is refused. Interrupt/rewind retire the session and quarantine late replies.
+- Help now pages through overflow at supported sizes. Removed obsolete Creator placeholder state, directed tool discovery
+  to `/plugins`, and timestamped fresh demo metadata with the current clock instead of process start.
+- Creator flag/mode gates, concrete-identity read-only authorization, bounded reports and failed-trial publication refusal
+  remain unchanged. Publish mode is still client-supplied, as approved; it is not authoritative daemon session state.
+- Linux verification: 233 workspace tests, Clippy with warnings denied and Rust formatting passed. New regressions cover
+  rejected turns, cancellation bookkeeping, help paging and fresh demo timestamps. Review changes are visually unverified;
+  live-provider cancellation and native Windows remain untested.
+
+## Terminal inspection screens
+
+- The six-screen shell now includes read-only Memory (`InspectMemory`), Sessions (`ListSessions` + `GetStatus`),
+  and Models (telemetry plus bounded local Rust config metadata). No provider is constructed to inspect config.
+- Session attachment, model selection and memory editing are not exposed by IPC; the TUI labels those limitations.
+  Sessions omits unsupported timestamps, pid/uptime, directional tokens and cost. Offline fixtures are labelled synthetic.
+- Transcript headers compact actual arguments, previews use one branch glyph, and the working line rotates eight practical tips.
+  Model rates need two timed samples and exclude the initial lifetime token count; unknown live pricing stays hidden.
+- Linux checks passed 229 workspace tests, Clippy with warnings denied, Rust formatting and repository hygiene.
+  Fresh Konsole evidence: `/home/ubuntu/screenshots/ss_7dce20ed.png` (Sessions) and
+  `/home/ubuntu/screenshots/ss_23ec78da.png` (mid-turn). Memory/Models renders and unavailable states use TestBackend.
+  Live-provider UI interaction and native Windows remain unverified. Next: review the completed screens before adding capabilities.
+
 ## Rust frontier harness / TUI increment
 
 - `lain-harness` adds evidence-gated reports, immutable scopes and DAG validation, bounded repair,
