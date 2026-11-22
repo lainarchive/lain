@@ -36,7 +36,7 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 
 `lain tui` opens the Ratatui app shell. `lain tui demo` renders an **offline synthetic sample**
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
-The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains a borderless conversation transcript;
+The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models, Bots**. Session contains a borderless conversation transcript;
 Plugins browses disk manifests and active session tools. Creator edits, tests and publishes script proposals through the daemon.
 Memory, Sessions and Models are read-only inspection screens; unavailable socket capabilities are labelled rather than simulated in live mode.
 
@@ -54,7 +54,14 @@ Memory, Sessions and Models are read-only inspection screens; unavailable socket
 The offline demo fills all three screens with labelled synthetic data, including optional Sessions columns that live IPC does not provide.
 Tool headers compact actual JSON arguments; empty objects show `tool()`. `repo_map` really takes no arguments, while demo `memory_read`
 uses a real query. Preview continuation lines keep their indentation without repeating `└`. The working line rotates eight practical tips.
-Outside overlays, 1–6 switches screens when not editing a Creator field or a Plugins/Memory filter and the Session composer is empty or unfocused.
+Outside overlays, 1–7 switches screens when not editing a Creator field or a Plugins/Memory filter and the Session composer is empty or unfocused.
+
+**7 Bots** (`/bots`, or Ctrl+K → Bots) shows daemon state, session activity and retrieved memory counts.
+It refreshes every five seconds while visible. ↑↓ selects, Enter explains attachment availability, `r` refreshes and Esc returns to Session.
+Running means an active provider turn; busy means a Creator operation. Old daemons without activity metadata show unknown.
+Daemon pid and uptime are read from additive `GetStatus` metadata; older daemons omit them. Directional tokens, pricing and timestamps remain omitted when unavailable.
+Memory counts are entries read, not total capacity;
+the socket exposes no storage limit, so no capacity bars are shown. Sessions and Bots share compact, right-aligned numbers.
 Alt+Left/Right always switches screens, closing overlays while preserving the Session draft and active turn.
 
 On **Plugins (2)**, Up/Down selects manifests or active tools; PgUp/PgDn scrolls the detail pane.

@@ -208,6 +208,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     creator_requests.access(client, session.as_deref(), &mut state.creator).await?;
                 } else {state.creator.set_access(true);}
             }
+            state.inspect.tick(state.screen,started.elapsed());
             if let Some(client)=&mut client {
                 inspect_requests.ensure(client,&mut state.inspect,state.screen,started.elapsed()).await?;
             } else {state.inspect.demo_refresh(state.screen,started.elapsed());}

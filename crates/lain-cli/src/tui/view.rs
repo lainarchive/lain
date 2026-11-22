@@ -510,6 +510,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             super::creator_view::draw(frame, *area, state, &mut scroll);
         } else {
             match state.screen {
+                Screen::Bots => super::bots::draw(frame, *area, &state.inspect, now),
                 Screen::Sessions => super::inspect::sessions(frame, *area, &state.inspect, now),
                 Screen::Memory => {
                     super::inspect::memory(frame, *area, &state.inspect, now, &mut scroll)
@@ -579,7 +580,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     if let Some(area) = vertical.get(4) {
         super::launch_view::footer(frame, *area, state);
     }
-    if state.screen != Screen::Session {
+    if !matches!(state.screen, Screen::Session | Screen::Bots) {
         if let Some(area) = vertical.get(3) {
             frame.render_widget(
                 Paragraph::new(match state.screen {

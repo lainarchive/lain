@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -126,6 +126,8 @@ impl RunnerFactory for ConfigFactory {
 struct Session {
     config: AgentConfig,
     turn_count: AtomicU32,
+    turn_active: AtomicBool,
+    proposal_active: AtomicBool,
     control: lain_agent::control::AgentControl,
     tools: Arc<ToolRegistry>,
     runner: AsyncMutex<AgentRunner>,
@@ -148,12 +150,20 @@ impl Session {
     }
 }
 
+struct ActiveTurn<'a>(&'a AtomicBool);
+impl Drop for ActiveTurn<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 pub struct DaemonHandler {
     pub dashboard: DashboardHub,
     memory: SharedMemory,
     factory: Arc<dyn RunnerFactory>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
     next_session: AtomicU64,
+    started: std::time::Instant,
 }
 
 impl std::fmt::Debug for DaemonHandler {
@@ -170,6 +180,7 @@ impl DaemonHandler {
             factory,
             sessions: RwLock::new(HashMap::new()),
             next_session: AtomicU64::new(0),
+            started: std::time::Instant::now(),
         }
     }
 
@@ -256,6 +267,8 @@ impl DaemonHandler {
                     Arc::new(Session {
                         config: runner.config().clone(),
                         turn_count: AtomicU32::new(runner.state().turn_count),
+                        turn_active: AtomicBool::new(false),
+                        proposal_active: AtomicBool::new(false),
                         control,
                         tools,
                         runner: AsyncMutex::new(runner),
@@ -306,6 +319,7 @@ impl DaemonHandler {
                         session_id: Some(session_id),
                         status: status.into(),
                         scratchpad: None,
+                        daemon: None,
                     })
                     .await?;
             }
@@ -332,11 +346,17 @@ impl DaemonHandler {
                         None,
                     )
                 };
+                let daemon = session_id.is_none().then(|| lain_ipc::DaemonInfo {
+                    name: "lain".into(),
+                    pid: std::process::id(),
+                    uptime_seconds: self.started.elapsed().as_secs(),
+                });
                 events
                     .send(Event::Status {
                         session_id,
                         status,
                         scratchpad,
+                        daemon,
                     })
                     .await?;
             }
@@ -407,6 +427,8 @@ impl DaemonHandler {
             .map_err(|_| Error::failure("SESSION_BUSY", &id))?;
         drop(sessions);
         runner.set_read_only(read_only);
+        session.turn_active.store(true, Ordering::Relaxed);
+        let active = ActiveTurn(&session.turn_active);
         let mut source = runner.subscribe();
         let result = {
             let run = runner.run(text);
@@ -426,6 +448,7 @@ impl DaemonHandler {
                 }
             }
         };
+        drop(active);
         session
             .turn_count
             .store(runner.state().turn_count, Ordering::Relaxed);
