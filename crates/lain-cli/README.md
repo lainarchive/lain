@@ -38,6 +38,7 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
 The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
+The minimum terminal size is 120 columns by 30 rows; smaller windows show a resize message instead of clipped panels.
 PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
 An expanded selected tool opens its full output in the right drawer; PgUp/PgDn then scroll that output. The lane preview
 always shows at most ten lines. The scratchpad and procedural rules remain visible above full output.
