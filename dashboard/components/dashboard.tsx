@@ -124,7 +124,7 @@ export function Dashboard() {
   >({});
   const liveScope = useRef<AbortController | null>(null);
   const drawerTrigger = useRef<HTMLElement | null>(null);
-  const flow = useRef<ReactFlowInstance<FlowNode> | null>(null);
+  const flow = useRef<Pick<ReactFlowInstance<FlowNode>, "fitView"> | null>(null);
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     setPositions((previous) => updatePositions(previous, changes));
   }, []);

@@ -1,9 +1,9 @@
-import type { NodeChange, ReactFlowInstance } from "@xyflow/react";
+import type { Node, NodeChange, ReactFlowInstance } from "@xyflow/react";
 import type { TraceNode } from "./graph.ts";
 
 type Positions = Record<string, { x: number; y: number }>;
 
-export function fitSearchMatches(query: string, ids: string[], view: Pick<ReactFlowInstance, "fitView"> | null) {
+export function fitSearchMatches<NodeType extends Node>(query: string, ids: string[], view: Pick<ReactFlowInstance<NodeType>, "fitView"> | null) {
   if (!query.trim() || !ids.length || !view) return;
   return view.fitView({ nodes: ids.map((id) => ({ id })), padding: 0.2, minZoom: 0.6, maxZoom: 1 });
 }
