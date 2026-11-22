@@ -164,11 +164,6 @@ impl Default for DashboardHub {
 impl DashboardHub {
     pub fn insert(&self, snapshot: SessionSnapshot) {
         let mut journal = self.journal.lock().unwrap_or_else(PoisonError::into_inner);
-        if journal.sessions.len() >= crate::daemon::MAX_SESSIONS {
-            if let Some(oldest) = journal.sessions.keys().next().cloned() {
-                journal.sessions.remove(&oldest);
-            }
-        }
         journal
             .sessions
             .insert(snapshot.session_id.clone(), snapshot);
@@ -184,6 +179,9 @@ impl DashboardHub {
 
     pub fn publish(&self, id: &str, event: AgentEvent) {
         let mut journal = self.journal.lock().unwrap_or_else(PoisonError::into_inner);
+        if matches!(event, AgentEvent::Terminated { .. }) {
+            journal.sessions.remove(id);
+        }
         if let Some(session) = journal.sessions.get_mut(id) {
             match &event {
                 AgentEvent::IntentReceived { .. } => session.status = "running".into(),
@@ -573,6 +571,44 @@ mod tests {
             typescript_contracts(),
             include_str!("../../../dashboard/lib/generated.ts")
         );
+    }
+
+    #[test]
+    fn active_snapshots_survive_capacity_and_terminated_snapshots_are_removed() {
+        let hub = DashboardHub::default();
+        for index in 0..=crate::daemon::MAX_SESSIONS {
+            hub.insert(SessionSnapshot {
+                session_id: format!("s-{index:02}"),
+                status: "running".into(),
+                ..Default::default()
+            });
+        }
+        assert_eq!(hub.status().sessions.len(), crate::daemon::MAX_SESSIONS + 1);
+        hub.publish(
+            "s-00",
+            AgentEvent::Terminated {
+                turn: 1,
+                reason: lain_agent::TerminationReason::Cancelled,
+            },
+        );
+        assert_eq!(hub.status().sessions.len(), crate::daemon::MAX_SESSIONS);
+        assert!(hub
+            .status()
+            .sessions
+            .iter()
+            .all(|session| session.session_id != "s-00"));
+        hub.publish(
+            "s-00",
+            AgentEvent::SessionCompleted {
+                reason: "cancelled".into(),
+            },
+        );
+        assert_eq!(hub.status().sessions.len(), crate::daemon::MAX_SESSIONS);
+        hub.insert(SessionSnapshot {
+            session_id: "s-01".into(),
+            ..Default::default()
+        });
+        assert_eq!(hub.status().sessions.len(), crate::daemon::MAX_SESSIONS);
     }
 
     #[test]
