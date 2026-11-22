@@ -8,7 +8,7 @@
   --text: #fafafa;
   --muted: #a1a1aa;
   --subtle: #71717a;
-  --accent: #22d3ee;
+  --accent: var(--running);
   --pending: #f59e0b99;
   --running: #22d3ee;
   --success: #34d399;
@@ -121,7 +121,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .react-flow__edge.success .react-flow__edge-path { stroke: var(--success); }
 .react-flow__edge.failed .react-flow__edge-path { stroke: var(--failed); }
 .react-flow__edge.pending .react-flow__edge-path { stroke: var(--pending); filter: none; }
-.react-flow__edge.running .react-flow__edge-path { stroke: var(--running); filter: drop-shadow(0 0 3px #22d3ee80); }
+.react-flow__edge.running .react-flow__edge-path { stroke: var(--running); filter: drop-shadow(0 0 3px color-mix(in srgb, var(--running) 50%, transparent)); }
 .react-flow__edge.pending.animated path { animation: none; }
 .react-flow__controls { box-shadow: none; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .react-flow__controls button { background: var(--raised); color: var(--muted); border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
@@ -211,7 +211,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .drawer-ids { margin-top: 24px; font-size: 12px; }
 .drawer-ids dt { color: var(--muted); margin-top: 16px; margin-bottom: 4px; }
 .drawer-ids dd { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
-@keyframes node-pulse { 0%, 100% { box-shadow: 0 0 4px #22d3ee18; } 50% { box-shadow: 0 0 12px #22d3ee44; } }
+@keyframes node-pulse { 0%, 100% { box-shadow: 0 0 4px color-mix(in srgb, var(--running) 10%, transparent); } 50% { box-shadow: 0 0 12px color-mix(in srgb, var(--running) 27%, transparent); } }
 @keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

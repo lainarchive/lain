@@ -26,9 +26,7 @@ export function graphEdges(nodes: TraceNode[]) {
       animated: node.status === "running" || node.status === "pending",
       className: node.status,
       style: {
-        stroke: node.status === "failed" ? "#e11d48"
-          : node.status === "running" ? "#22d3ee"
-          : node.status === "pending" ? "#a88a48" : "#10b981",
+        stroke: `var(--${node.status})`,
         strokeWidth: 1.5,
       },
     })));
