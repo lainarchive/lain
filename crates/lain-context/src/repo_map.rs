@@ -14,8 +14,10 @@ use crate::{
 };
 
 #[cfg(test)]
-use crate::workspace::{read_bytes as read_source, MAX_SOURCE_BYTES, MAX_TOTAL_BYTES};
-#[cfg(test)]
+use crate::workspace::MAX_SOURCE_BYTES;
+#[cfg(all(test, unix))]
+use crate::workspace::{read_bytes as read_source, MAX_TOTAL_BYTES};
+#[cfg(all(test, unix))]
 use cap_std::{ambient_authority, fs::Dir};
 
 const MAX_MAP_BYTES: usize = 16 * 1024;
