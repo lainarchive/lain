@@ -135,7 +135,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let result = async {
         loop {
             terminal.draw(|frame| {
-                state.drawer_scroll = view::draw(frame, &state, started.elapsed());
+                state.scroll = view::draw(frame, &state, started.elapsed());
             })?;
             tokio::select! {
                 input = keys.next() => {

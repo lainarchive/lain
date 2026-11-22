@@ -33,6 +33,16 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn draw_scrolled(
+    terminal: &mut Terminal<TestBackend>,
+    state: &mut State,
+) -> Result<(), Box<dyn std::error::Error>> {
+    terminal.draw(|frame| {
+        state.scroll = view::draw(frame, state, Duration::ZERO);
+    })?;
+    Ok(())
+}
+
 #[test]
 fn banner_lanes_and_sticky_plan() -> Result<(), Box<dyn std::error::Error>> {
     let state = State::sample()?;
@@ -179,6 +189,55 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn sticky_panels_scroll_independently_and_do_not_overshoot(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.plan = (0..80)
+        .map(|i| format!("[ ] plan {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.rules = (0..80).map(|i| format!("rule {i:02}")).collect();
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    for _ in 0..40 {
+        state.key(
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT),
+            Duration::ZERO,
+        );
+        draw_scrolled(&mut terminal, &mut state)?;
+    }
+    assert!(contents(&terminal).contains("[ ] plan 79"));
+    state.key(
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::SHIFT),
+        Duration::ZERO,
+    );
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(!contents(&terminal).contains("[ ] plan 79"));
+    for _ in 0..40 {
+        state.key(
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL),
+            Duration::ZERO,
+        );
+        draw_scrolled(&mut terminal, &mut state)?;
+    }
+    assert!(contents(&terminal).contains("rule 79"));
+    assert!(contents(&terminal).contains("[ ] plan 74"));
+    state.key(
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(!contents(&terminal).contains("rule 79"));
+    state.plan.clear();
+    state.rules.clear();
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(contents(&terminal).contains("No scratchpad yet"));
+    assert!(contents(&terminal).contains("No procedural rules recalled"));
+    assert!(contents(&terminal).contains("Shift-PgUp/PgDn plan"));
+    assert!(contents(&terminal).contains("Ctrl-PgUp/PgDn rules"));
+    Ok(())
+}
+
+#[test]
 fn hidden_composer_ignores_keys_until_a_visible_frame_is_drawn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
@@ -310,13 +369,13 @@ fn paging_up_moves_immediately_after_the_drawer_reaches_bottom(
     for _ in 0..20 {
         state.key(key(KeyCode::PageDown), Duration::ZERO);
         terminal.draw(|frame| {
-            state.drawer_scroll = view::draw(frame, &state, Duration::ZERO);
+            state.scroll = view::draw(frame, &state, Duration::ZERO);
         })?;
     }
     assert!(contents(&terminal).contains("line 99"));
     state.key(key(KeyCode::PageUp), Duration::ZERO);
     terminal.draw(|frame| {
-        state.drawer_scroll = view::draw(frame, &state, Duration::ZERO);
+        state.scroll = view::draw(frame, &state, Duration::ZERO);
     })?;
     assert!(!contents(&terminal).contains("line 99"));
     state
@@ -326,9 +385,9 @@ fn paging_up_moves_immediately_after_the_drawer_reaches_bottom(
         .output
         .clear();
     terminal.draw(|frame| {
-        state.drawer_scroll = view::draw(frame, &state, Duration::ZERO);
+        state.scroll = view::draw(frame, &state, Duration::ZERO);
     })?;
-    assert_eq!(state.drawer_scroll, 0);
+    assert_eq!(state.scroll.drawer, 0);
     Ok(())
 }
 

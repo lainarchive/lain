@@ -40,6 +40,8 @@ The status banner and right-hand scratchpad/rules drawer stay fixed while select
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
 The minimum terminal size is 120 columns by 30 rows; smaller windows show a resize message instead of clipped panels.
 PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
+Shift+PgUp/PgDn scrolls the scratchpad; Ctrl+PgUp/PgDn scrolls procedural rules, independently of selection.
+All drawer offsets clamp to the visible content, including after a resize or shorter content replaces it.
 An expanded selected tool opens its full output in the right drawer; PgUp/PgDn then scroll that output. The lane preview
 always shows at most ten lines. The scratchpad and procedural rules remain visible above full output.
 
