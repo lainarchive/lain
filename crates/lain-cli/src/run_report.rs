@@ -64,6 +64,7 @@ impl RunReport {
                 call_id,
                 ok,
                 exit_code,
+                summary,
                 ..
             } => {
                 if let Some((index, command)) = self.calls.remove(call_id) {
@@ -73,7 +74,7 @@ impl RunReport {
                             let _ = step.verify(vec![Evidence::TestRun {
                                 command,
                                 exit_code,
-                                output_tail: None,
+                                output_tail: Some(summary.clone()),
                             }]);
                         }
                     }
@@ -210,7 +211,7 @@ mod tests {
                 session_id: "s".into(),
                 call_id: "c".into(),
                 name: "bash".into(),
-                summary: String::new(),
+                summary: "cargo 1.100.0\n".into(),
                 ok,
                 exit_code: exit,
             });
@@ -220,6 +221,10 @@ mod tests {
                 scratchpad: None,
             });
             assert_eq!(report.exit_code(), expected);
+            if exit.is_some() {
+                let evidence = serde_json::to_value(report.steps[0].evidence()).unwrap();
+                assert_eq!(evidence[0]["output_tail"], "cargo 1.100.0\n");
+            }
         }
     }
 

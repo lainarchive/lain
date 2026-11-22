@@ -75,7 +75,7 @@ async fn shared_creator_paths_match_agent_tools() -> Result<(), Box<dyn std::err
     assert_eq!(agent_publish.exit_code, Some(0));
     assert_eq!(
         agent_publish.content,
-        json!({"name":"agent_echo", "path":".lain/tools/tool-agent_echo.py",
+        json!({"name":"agent_echo", "path":std::path::Path::new(".lain/tools").join("tool-agent_echo.py"),
         "test_result":json!({"value":"hello"}).to_string()})
         .to_string()
     );
@@ -226,7 +226,10 @@ async fn execution_reports_retain_decoded_results_and_diagnostics()
         let report = test_tool_proposal(&manager, request.clone()).await?;
         assert_eq!(report.execution.exit_code, Some(code));
         assert_eq!(report.execution.result, Some(json!({"value":"hello"})));
-        assert_eq!(report.execution.stderr, "trace\n");
+        assert_eq!(
+            report.execution.stderr.lines().collect::<Vec<_>>(),
+            ["trace"]
+        );
         assert!(u128::from(report.execution.duration_ms) <= started.elapsed().as_millis());
         let decoded: lain_core::tools::CreatorReport =
             serde_json::from_str(&serde_json::to_string(&report)?)?;
