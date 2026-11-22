@@ -6,8 +6,9 @@ mod transport;
 
 pub use client::IpcClient;
 pub use protocol::{
-    ClientFrame, Command, Event, RequestId, ServerFrame, EVENT_CAPACITY, MAX_FRAME_SIZE,
-    PROTOCOL_VERSION,
+    ActiveTool, Capability, ClientFrame, Command, Event, ManifestEntry, PermissionGrant, RequestId,
+    ScriptExecution, ScriptProposal, ServerFrame, SessionInfo, SessionMode, ToolSource,
+    EVENT_CAPACITY, MAX_FRAME_SIZE, PROTOCOL_VERSION,
 };
 pub use server::{CommandHandler, EventSink, IpcServer};
 pub use transport::{Endpoint, DEFAULT_PIPE_NAME};

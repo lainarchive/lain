@@ -382,6 +382,8 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
             Event::ReflectionGenerated { .. } => "reflection", Event::SessionCompleted { reason, scratchpad: Some(_), .. } if reason == "completed" => "completed", _ => "unexpected",
         }).collect();
         assert_eq!(labels, ["text", "tool_start", "tool_end", "text", "reflection", "completed"]);
+        assert!(matches!(client.request(Command::ListSessions).await?.as_slice(), [Event::Sessions {sessions}]
+            if sessions.iter().any(|s| s.id == "s" && s.turn_count == 2 && s.model.as_deref() == Some("scripted") && s.mode.is_none())));
         assert!(matches!(client.request(Command::GetStatus { session_id: Some("s".into()) }).await?.as_slice(), [Event::Status { scratchpad: Some(_), .. }]));
         assert!(matches!(client.request(Command::StartSession { session_id: Some("s".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_EXISTS"));
         client.request(Command::StartSession { session_id: Some("pending".into()) }).await?;
@@ -390,6 +392,13 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
         started.notified().await;
         assert!(matches!(client.request(Command::GetStatus { session_id: Some("pending".into()) }).await?.as_slice(), [Event::Status { status, .. }] if status == "running"));
         assert!(matches!(client.request(Command::SendMessage { session_id: "pending".into(), text: "again".into() }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_BUSY"));
+        assert!(matches!(client.request(Command::ListSessions).await?.as_slice(), [Event::Sessions {sessions}]
+            if sessions.iter().any(|s| s.id == "pending" && s.turn_count == 1)));
+        assert!(matches!(client.request(Command::ListTools {session_id:"pending".into()}).await?.as_slice(), [Event::Tools {..}]));
+        let proposal = serde_json::from_value(serde_json::json!({"name":"blocked", "description":"Busy", "parameters":{"type":"object"},
+            "interpreter":"python", "source":"pass", "test_args":{}}))?;
+        assert!(matches!(client.request(Command::PublishToolProposal {session_id:"pending".into(), mode:lain_ipc::SessionMode::Code, proposal}).await?.as_slice(),
+            [Event::Error {code, ..}] if code == "SESSION_BUSY"));
         client.send(Command::CancelTurn { session_id: "pending".into() }).await?;
         loop {
             let (id, event) = client.recv().await?.ok_or("connection closed")?;

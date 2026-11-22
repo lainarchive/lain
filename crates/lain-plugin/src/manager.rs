@@ -25,7 +25,7 @@ use crate::{
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManifestEntry {
     pub path: PathBuf,
     pub manifest: Result<PluginManifest, String>,
