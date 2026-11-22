@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Switch from "@radix-ui/react-switch";
 import {
@@ -21,15 +21,10 @@ import {
 
 import {
   isEnvelope,
-  type EventEnvelope,
   type Intervention,
   type Json,
-  type MemoryResponse,
-  type PluginInfo,
-  type StatusResponse,
 } from "../lib/contracts";
 import {
-  applyEvent,
   emptyGraph,
   layoutNodes,
   type TraceNode,
@@ -42,6 +37,7 @@ import {
 } from "../lib/demo";
 import { refreshBridge } from "../lib/live";
 import { authorizedHeaders, dashboardToken, websocketProtocols } from "../lib/auth";
+import { applyBridgeEvent, createBridgeCache, type BridgeCache, type BridgeResources } from "../lib/cache";
 import { graphEdges, toolKind, updatePositions } from "../lib/flow";
 
 const icons = {
@@ -78,16 +74,13 @@ function TraceCard({ data, selected }: NodeProps<FlowNode>) {
 }
 const nodeTypes = { trace: TraceCard };
 const fitViewOptions = { padding: 0.12, minZoom: 0.85, maxZoom: 1 };
-const initialStatus: StatusResponse = {
-  protocol_version: 1,
-  sessions: [],
-  latest_sequence: 0,
-};
-const initialMemory: MemoryResponse = {
-  episodic: [],
-  procedural: [],
-  semantic: { backend: "sqlite_fts5", embeddings_available: false },
-};
+function useResource<K extends keyof BridgeResources>(cache: BridgeCache, key: K) {
+  return useSyncExternalStore(
+    useCallback((listener: () => void) => cache.subscribe(key, listener), [cache, key]),
+    () => cache.get(key),
+    () => cache.get(key),
+  );
+}
 const pretty = (value: Json | undefined) =>
   value === undefined
     ? "No payload recorded."
@@ -105,10 +98,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function Dashboard() {
-  const [graph, setGraph] = useState(emptyGraph);
-  const [status, setStatus] = useState(initialStatus);
-  const [memory, setMemory] = useState(initialMemory);
-  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const cache = useMemo(createBridgeCache, []);
+  const status = useResource(cache, "/api/v1/status");
+  const memory = useResource(cache, "/api/v1/memory");
+  const plugins = useResource(cache, "/api/v1/plugins");
+  const trace = useResource(cache, "/ws/events");
+  const exampleGraph = useMemo(exampleRun, []);
   const [demo, setDemo] = useState(false);
   const [connection, setConnection] = useState("connecting");
   const [sessionId, setSessionId] = useState("");
@@ -121,7 +116,8 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [fitKey, setFitKey] = useState(0);
-  const [events, setEvents] = useState<EventEnvelope[]>([]);
+  const graph = demo ? exampleGraph : trace.graph;
+  const events = demo ? [] : trace.events;
   const [positions, setPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
@@ -132,12 +128,12 @@ export function Dashboard() {
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     await refreshBridge(fetchJson, signal, (snapshot) => {
-      setStatus(snapshot.status);
-      setMemory(snapshot.memory);
-      setPlugins(snapshot.plugins);
+      cache.set("/api/v1/status", snapshot.status);
+      cache.set("/api/v1/memory", snapshot.memory);
+      cache.set("/api/v1/plugins", snapshot.plugins);
       setConnection("connected");
     });
-  }, []);
+  }, [cache]);
 
   useEffect(() => {
     if (demo) return;
@@ -160,8 +156,7 @@ export function Dashboard() {
       socket.onopen = () => {
         if (scope.signal.aborted) return;
         delay = 500;
-        setGraph(emptyGraph);
-        setEvents([]);
+        cache.set("/ws/events", { graph: emptyGraph, events: [] });
         setConnection("connected");
         poll();
       };
@@ -170,12 +165,7 @@ export function Dashboard() {
         try {
           const frame: unknown = JSON.parse(String(message.data));
           if (!isEnvelope(frame)) throw new Error("Unrecognized bridge event");
-          setGraph((previous) => applyEvent(previous, frame));
-          setEvents((previous) =>
-            previous.some((e) => e.sequence === frame.sequence)
-              ? previous
-              : [...previous, frame].slice(-60),
-          );
+          applyBridgeEvent(cache, frame);
         } catch {
           setError("An invalid bridge event was ignored.");
         }
@@ -197,7 +187,7 @@ export function Dashboard() {
       clearInterval(interval);
       socket?.close();
     };
-  }, [demo, refresh]);
+  }, [demo, refresh, cache]);
 
   const activeStatus = demo ? exampleStatus : status;
   const activeMemory = demo ? exampleMemory : memory;
@@ -273,8 +263,6 @@ export function Dashboard() {
     liveScope.current?.abort();
     setBusy(false);
     setDemo(!demo);
-    setGraph(demo ? emptyGraph : exampleRun());
-    setEvents([]);
     setSelectedId(null);
     setPositions({});
     setError(null);
