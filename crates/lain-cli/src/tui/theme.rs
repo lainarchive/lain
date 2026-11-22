@@ -1,0 +1,13 @@
+use ratatui::style::Color;
+
+pub const BACKGROUND: Color = Color::Rgb(0x10, 0x15, 0x1e);
+pub const PANEL: Color = Color::Rgb(0x22, 0x27, 0x33);
+pub const TEXT: Color = Color::Rgb(0xe6, 0xed, 0xf3);
+pub const MUTED: Color = Color::Rgb(0x91, 0x98, 0xa1);
+pub const CYAN: Color = Color::Rgb(0x67, 0xe8, 0xf9);
+pub const BLUE: Color = Color::Rgb(0x58, 0xa6, 0xff);
+pub const GREEN: Color = Color::Rgb(0x7e, 0xe7, 0x87);
+pub const RED: Color = Color::Rgb(0xff, 0x7b, 0x72);
+pub const VIOLET: Color = Color::Rgb(0x8b, 0x5c, 0xf6);
+pub const AMBER: Color = Color::Rgb(0xe3, 0xb3, 0x41);
+pub const PEACH: Color = Color::Rgb(0xf8, 0xa8, 0x7e);

@@ -222,7 +222,31 @@ impl DaemonHandler {
                     .send(Event::SessionStarted { session_id: id })
                     .await?;
             }
-            Command::SendMessage { session_id, text } => self.run(session_id, text, events).await?,
+            Command::SendMessage { session_id, text } => {
+                self.run(session_id, text, false, events).await?
+            }
+            Command::SendReadOnlyMessage { session_id, text } => {
+                self.run(session_id, text, true, events).await?
+            }
+            Command::GetTelemetry { session_id } => {
+                let session = self
+                    .dashboard
+                    .status()
+                    .sessions
+                    .into_iter()
+                    .find(|s| s.session_id == session_id)
+                    .ok_or_else(|| Error::failure("SESSION_NOT_FOUND", &session_id))?;
+                events
+                    .send(Event::Telemetry {
+                        session_id,
+                        model: session.model,
+                        context_tokens: session.prompt_tokens,
+                        context_window: session.context_window,
+                        tokens_used: session.tokens_used,
+                        scratchpad: session.scratchpad,
+                    })
+                    .await?;
+            }
             Command::CancelTurn { session_id } => {
                 let session = self.session(&session_id).await?;
                 let status = match session.runner.try_lock() {
@@ -271,6 +295,22 @@ impl DaemonHandler {
                     })
                     .await?;
             }
+            Command::InspectRules { session_id, limit } => {
+                let procedural = self
+                    .memory
+                    .lock()
+                    .map_err(|_| Error::failure("MEMORY_LOCK", "Memory lock poisoned"))?
+                    .recent_procedural_rules(
+                        session_id.as_deref(),
+                        limit.unwrap_or(20).min(100) as usize,
+                    )?;
+                events
+                    .send(Event::Memory {
+                        episodic: Vec::new(),
+                        procedural,
+                    })
+                    .await?;
+            }
             Command::InspectMemory { session_id, limit } => {
                 let limit = limit.unwrap_or(20).min(100) as usize;
                 let (episodic, procedural) = {
@@ -304,7 +344,13 @@ impl DaemonHandler {
         Ok(())
     }
 
-    async fn run(&self, id: String, text: String, events: &EventSink) -> Result<(), Error> {
+    async fn run(
+        &self,
+        id: String,
+        text: String,
+        read_only: bool,
+        events: &EventSink,
+    ) -> Result<(), Error> {
         let sessions = self.sessions.read().await;
         let session = sessions
             .get(&id)
@@ -315,6 +361,7 @@ impl DaemonHandler {
             .try_lock()
             .map_err(|_| Error::failure("SESSION_BUSY", &id))?;
         drop(sessions);
+        runner.set_read_only(read_only);
         let mut source = runner.subscribe();
         let result = {
             let run = runner.run(text);
