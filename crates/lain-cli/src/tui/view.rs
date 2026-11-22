@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 use lain_harness::{advisor::AdvisorKind, evidence::Status};
 use ratatui::{
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::{
-    state::{Mode, Phase, Selection, State},
+    state::{Mode, Phase, Scroll, Selection, State},
     theme::*,
 };
 
@@ -23,7 +23,7 @@ fn color(phase: Phase) -> Color {
     }
 }
 
-fn panel(title: &str) -> Block<'_> {
+fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
     Block::default()
         .title(Span::styled(title, Style::default().fg(CYAN)))
         .borders(Borders::ALL)
@@ -250,7 +250,7 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         .map_or(0, |i| {
             i.saturating_sub(usize::from(inner.height).saturating_sub(2))
         })
-        .saturating_add(state.lane_scroll)
+        .saturating_add(state.scroll.lane)
         .min(rows.len().saturating_sub(usize::from(inner.height)));
     let lines: Vec<Line<'_>> = rows
         .into_iter()
@@ -267,7 +267,35 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn drawer(frame: &mut Frame, area: Rect, state: &State) -> u16 {
+fn scroll_panel(
+    frame: &mut Frame,
+    area: Rect,
+    content: Paragraph<'_>,
+    title: &str,
+    requested: u16,
+) -> u16 {
+    let max = content
+        .line_count(area.width.saturating_sub(2))
+        .saturating_sub(usize::from(area.height.saturating_sub(2)));
+    let scroll = usize::from(requested).min(max).min(usize::from(u16::MAX)) as u16;
+    let title = format!(
+        " {title}{}{} ",
+        if scroll > 0 { " ↑" } else { "" },
+        if usize::from(scroll) < max {
+            " … more below"
+        } else {
+            ""
+        }
+    );
+    frame.render_widget(content.scroll((scroll, 0)).block(panel(title)), area);
+    scroll
+}
+
+fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
+    let mut scroll = Scroll {
+        drawer: 0,
+        ..state.scroll
+    };
     let tool = match state.selected {
         Some(Selection::Tool(i)) => state.tools.get(i).filter(|t| t.expanded),
         _ => None,
@@ -309,14 +337,7 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> u16 {
     }
     if let Some(rect) = sections.first() {
         let plan = Paragraph::new(plan).wrap(Wrap { trim: false });
-        let title = if plan.line_count(rect.width.saturating_sub(2))
-            > usize::from(rect.height.saturating_sub(2))
-        {
-            " Scratchpad … more below "
-        } else {
-            " Scratchpad "
-        };
-        frame.render_widget(plan.block(panel(title)), *rect);
+        scroll.plan = scroll_panel(frame, *rect, plan, "Scratchpad", state.scroll.plan);
     }
     let rules = if state.rules.is_empty() {
         "No procedural rules recalled".into()
@@ -330,39 +351,32 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> u16 {
     };
     if let Some(rect) = sections.get(1) {
         let rules = Paragraph::new(rules).wrap(Wrap { trim: false });
-        let title = if rules.line_count(rect.width.saturating_sub(2))
-            > usize::from(rect.height.saturating_sub(2))
-        {
-            " Procedural rules … more below "
-        } else {
-            " Procedural rules "
-        };
-        frame.render_widget(rules.block(panel(title)), *rect);
+        scroll.rules = scroll_panel(frame, *rect, rules, "Procedural rules", state.scroll.rules);
     }
     if let (Some(tool), Some(rect)) = (tool, sections.get(2)) {
         let output = Paragraph::new(tool.output.as_str()).wrap(Wrap { trim: false });
         let max = output
             .line_count(rect.width.saturating_sub(2))
             .saturating_sub(usize::from(rect.height.saturating_sub(2)));
-        let scroll = usize::from(state.drawer_scroll)
+        let offset = usize::from(state.scroll.drawer)
             .min(max)
             .min(usize::from(u16::MAX)) as u16;
         frame.render_widget(
             output
-                .scroll((scroll, 0))
+                .scroll((offset, 0))
                 .block(panel(" Full output · PgUp/PgDn ")),
             *rect,
         );
-        return scroll;
+        scroll.drawer = offset;
     }
-    0
+    scroll
 }
 
 pub fn has_room(area: Rect) -> bool {
     area.width >= 120 && area.height >= 30
 }
 
-pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
+pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     frame.render_widget(
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
         frame.area(),
@@ -373,19 +387,19 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
                 .wrap(Wrap { trim: false }),
             frame.area(),
         );
-        return 0;
+        return Scroll::default();
     }
     let vertical = Layout::vertical([
         Constraint::Length(4),
         Constraint::Min(3),
         Constraint::Length(3),
-        Constraint::Length(2),
+        Constraint::Length(3),
     ])
     .split(frame.area());
     let Some(banner_area) = vertical.first() else {
-        return 0;
+        return Scroll::default();
     };
-    let mut drawer_scroll = 0;
+    let mut scroll = state.scroll;
     banner(frame, *banner_area, state, now);
     if let Some(area) = vertical.get(1) {
         let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
@@ -394,7 +408,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
             lanes(frame, *area, state, now);
         }
         if let Some(area) = main.get(1) {
-            drawer_scroll = drawer(frame, *area, state);
+            scroll = drawer(frame, *area, state);
         }
     }
     if let Some(area) = vertical.get(2) {
@@ -445,10 +459,14 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
         frame.render_widget(
             Paragraph::new(Text::from(vec![
                 Line::from(modes),
+                Line::styled(
+                    "PgUp/PgDn lanes/tool · Shift-PgUp/PgDn plan · Ctrl-PgUp/PgDn rules",
+                    Style::default().fg(MUTED),
+                ),
                 Line::styled(state.notice.as_str(), Style::default().fg(AMBER)),
             ])),
             *area,
         );
     }
-    drawer_scroll
+    scroll
 }
