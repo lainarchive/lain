@@ -112,10 +112,14 @@ pub enum Command {
     SendMessage {
         session_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stream_deltas: bool,
     },
     SendReadOnlyMessage {
         session_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stream_deltas: bool,
     },
     GetTelemetry {
         session_id: String,
@@ -172,6 +176,11 @@ pub enum Event {
     },
     StreamToken {
         session_id: String,
+        text: String,
+    },
+    TokenDelta {
+        session_id: String,
+        turn: u32,
         text: String,
     },
     ToolStarted {
@@ -274,9 +283,18 @@ mod tests {
 
     #[test]
     fn commands_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        for kind in ["send_message", "send_read_only_message"] {
+            let legacy = serde_json::json!({"type":kind,"session_id":"s","text":"hello"});
+            let command: Command = serde_json::from_value(legacy.clone())?;
+            assert_eq!(serde_json::to_value(command)?, legacy);
+            let streaming = serde_json::json!({"type":kind,"session_id":"s","text":"hello","stream_deltas":true});
+            let command: Command = serde_json::from_value(streaming.clone())?;
+            assert_eq!(serde_json::to_value(command)?, streaming);
+        }
         let commands = vec![
             Command::Ping,
             Command::SendReadOnlyMessage {
+                stream_deltas: false,
                 session_id: "s".into(),
                 text: "plan".into(),
             },
@@ -288,6 +306,7 @@ mod tests {
                 session_id: Some("s".into()),
             },
             Command::SendMessage {
+                stream_deltas: false,
                 session_id: "s".into(),
                 text: "hello\nworld".into(),
             },
@@ -323,6 +342,11 @@ mod tests {
     #[test]
     fn events_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let events = vec![
+            Event::TokenDelta {
+                session_id: "s".into(),
+                turn: 1,
+                text: "part".into(),
+            },
             Event::Pong {
                 server_version: PROTOCOL_VERSION,
             },

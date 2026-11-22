@@ -12,7 +12,7 @@ Usage:
   lain memory inspect [--limit N] [--session ID]
   lain ui                             Dashboard at http://127.0.0.1:4040
   lain tui [demo]                      Terminal lane view (demo: offline sample)
-  lain daemon [--serve-ui]             (internal)
+  lain daemon [--no-ui]                IPC daemon + dashboard (default)
 
 Options (before or after the command):
   --endpoint PATH   IPC endpoint; defaults to LAIN_IPC_ENDPOINT or the OS default
@@ -24,7 +24,8 @@ The daemon opens LAIN_MEMORY_DB or ./.lain/memory.db in its working directory.
 Shell tools are disabled unless the daemon's environment has LAIN_ALLOW_SHELL=1.
 Unix default: $XDG_RUNTIME_DIR/lain-ipc.sock or a user-scoped temporary socket.
 No provider is contacted until a configured session receives a message.
-Output is whole runner messages, not provider-token streaming.
+Provider token deltas stream to the TUI; plain clients print completed messages.
+--no-ui disables the daemon dashboard. --serve-ui remains a compatibility alias.
 Interactive commands: /quit, /status, /memory, /cancel. Ctrl-C cancels a turn.
 ";
 
@@ -59,7 +60,8 @@ impl Options {
             .unwrap_or_else(|| "lain.json".into());
         let mut plain = false;
         let mut help = false;
-        let mut serve_ui = false;
+        let mut serve_ui = true;
+        let mut ui_option = false;
         let mut positional = Vec::new();
         let mut limit = None;
         let mut session = None;
@@ -67,7 +69,11 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => help = true,
                 "--plain" => plain = true,
-                "--serve-ui" => serve_ui = true,
+                "--serve-ui" => ui_option = true,
+                "--no-ui" => {
+                    serve_ui = false;
+                    ui_option = true;
+                }
                 "--endpoint" | "--config" | "--limit" | "--session" => {
                     let value = args
                         .next()
@@ -111,10 +117,7 @@ impl Options {
                 .as_slice()
             {
                 ["daemon"] => Action::Daemon,
-                ["ui"] => {
-                    serve_ui = true;
-                    Action::Daemon
-                }
+                ["ui"] => Action::Daemon,
                 ["start"] => Action::Start,
                 ["tui"] => Action::Tui { demo: false },
                 ["tui", "demo"] => Action::Tui { demo: true },
@@ -131,10 +134,10 @@ impl Options {
                 }
             }
         };
-        if serve_ui && !matches!(action, Action::Daemon | Action::Help) {
+        if ui_option && !matches!(action, Action::Daemon | Action::Help) {
             return Err(Error::failure(
                 "CLI_ARGUMENTS",
-                "--serve-ui requires daemon",
+                "--serve-ui and --no-ui require daemon or ui",
             ));
         }
         if !matches!(action, Action::Memory { .. } | Action::Help)
@@ -165,6 +168,13 @@ mod tests {
 
     #[test]
     fn commands_and_options() -> Result<(), Error> {
+        assert!(parse(&["daemon"])?.serve_ui);
+        assert!(parse(&["ui"])?.serve_ui);
+        assert!(parse(&["daemon", "--serve-ui"])?.serve_ui);
+        assert!(!parse(&["daemon", "--no-ui"])?.serve_ui);
+        assert!(!parse(&["daemon", "--no-ui", "--serve-ui"])?.serve_ui);
+        assert!(!parse(&["daemon", "--serve-ui", "--no-ui"])?.serve_ui);
+        assert!(!parse(&["ui", "--no-ui"])?.serve_ui);
         assert_eq!(parse(&[])?.action, Action::Help);
         assert_eq!(parse(&["--help"])?.action, Action::Help);
         assert_eq!(parse(&["daemon"])?.action, Action::Daemon);
@@ -202,6 +212,8 @@ mod tests {
             vec!["query", "a", "b"],
             vec!["unknown"],
             vec!["--bad"],
+            vec!["start", "--no-ui"],
+            vec!["tui", "--serve-ui"],
             vec!["start", "--endpoint"],
             vec!["start", "--config", "--plain"],
             vec!["start", "--limit", "2"],
