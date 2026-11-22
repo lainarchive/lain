@@ -179,6 +179,54 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn hidden_composer_ignores_keys_until_a_visible_frame_is_drawn(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.composer = "hidden draft".into();
+    let small = ratatui::layout::Rect::new(0, 0, 119, 45);
+    for code in [
+        KeyCode::Enter,
+        KeyCode::Tab,
+        KeyCode::Char('x'),
+        KeyCode::Char('q'),
+        KeyCode::Backspace,
+        KeyCode::Esc,
+        KeyCode::Esc,
+        KeyCode::Down,
+        KeyCode::PageDown,
+        KeyCode::Char(' '),
+    ] {
+        assert!(matches!(
+            super::input::handle_key(&mut state, key(code), Duration::ZERO, small),
+            Effect::None
+        ));
+    }
+    assert_eq!(state.composer, "hidden draft");
+    assert!(state.active.is_none());
+    assert_eq!(state.mode, Mode::Architect);
+    assert!(state.selected.is_none());
+    assert!(matches!(
+        super::input::handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Duration::ZERO,
+            small
+        ),
+        Effect::Quit
+    ));
+    let large = ratatui::layout::Rect::new(0, 0, 140, 45);
+    assert!(
+        matches!(super::input::handle_key(&mut state, key(KeyCode::Enter), Duration::ZERO, large), Effect::Submit { text, .. } if text == "hidden draft")
+    );
+    state.composer.clear();
+    assert!(matches!(
+        super::input::handle_key(&mut state, key(KeyCode::Char('q')), Duration::ZERO, small),
+        Effect::Quit
+    ));
+    Ok(())
+}
+
+#[test]
 fn small_terminals_show_a_resize_message_and_recover_at_minimum_size(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = State::sample()?;

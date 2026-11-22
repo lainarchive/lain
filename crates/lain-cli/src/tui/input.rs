@@ -8,7 +8,7 @@ use std::{
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{Event as TerminalEvent, EventStream, KeyEventKind},
+    event::{Event as TerminalEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -25,6 +25,23 @@ use crate::{
     ui::{self, Renderer},
     Error,
 };
+
+pub(super) fn handle_key(
+    state: &mut State,
+    key: KeyEvent,
+    now: Duration,
+    area: ratatui::layout::Rect,
+) -> Effect {
+    if view::has_room(area) {
+        state.key(key, now)
+    } else if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+        || (key.code == KeyCode::Char('q') && state.composer.is_empty())
+    {
+        Effect::Quit
+    } else {
+        Effect::None
+    }
+}
 
 struct Screen;
 
@@ -125,7 +142,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     let Some(input) = input else { break; };
                     let TerminalEvent::Key(key) = input? else { continue; };
                     if key.kind == KeyEventKind::Release { continue; }
-                    match state.key(key, started.elapsed()) {
+                    match handle_key(&mut state, key, started.elapsed(), terminal.get_frame().area()) {
                         Effect::Quit => break,
                         Effect::None => {}
                         Effect::Submit { text, read_only } => {

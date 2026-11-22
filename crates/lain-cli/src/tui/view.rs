@@ -358,12 +358,16 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> u16 {
     0
 }
 
+pub fn has_room(area: Rect) -> bool {
+    area.width >= 120 && area.height >= 30
+}
+
 pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
     frame.render_widget(
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
         frame.area(),
     );
-    if frame.area().width < 120 || frame.area().height < 30 {
+    if !has_room(frame.area()) {
         frame.render_widget(
             Paragraph::new("terminal too small (need 120x30)\nResize to continue · Ctrl-C quits")
                 .wrap(Wrap { trim: false }),
