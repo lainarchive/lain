@@ -112,6 +112,30 @@ fn abandon_turn(
     session.take()
 }
 
+fn finish_new_session(
+    state: &mut State,
+    mut candidate: State,
+    event: &Event,
+    now: Duration,
+) -> Option<String> {
+    match event {
+        Event::SessionStarted { session_id } => {
+            candidate.session_id = Some(session_id.clone());
+            *state = candidate;
+            state.notify("New session", now);
+            Some(session_id.clone())
+        }
+        Event::Error { code, message } => {
+            state.notify(format!("New session failed ({code}): {message}"), now);
+            None
+        }
+        _ => {
+            state.notify("New session failed: unexpected daemon response", now);
+            None
+        }
+    }
+}
+
 pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let cwd = std::env::current_dir()?;
     let mut state = if demo {
@@ -155,6 +179,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut last_poll = Duration::ZERO;
     let mut poll_request = None;
     let mut active_request = None;
+    let mut new_session: Option<(u64, State)> = None;
     let mut ignored = BTreeSet::new();
     let mut plugin_requests = plugins::Requests::default();
     let mut creator_requests = creator_ipc::Requests::default();
@@ -162,6 +187,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut plugins_session = session.clone();
     let result = async {
         loop {
+            if new_session.is_some() {state.notify("Starting a new session · Ctrl+C quits",started.elapsed());}
             if !demo {state.session_id = session.clone();state.inspect.config_path=options.config.clone();}
             if plugins_session != session {
                 ignored.extend(plugin_requests.clear());
@@ -192,6 +218,10 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                 input = keys.next() => {
                     let Some(input) = input else { break; };
                     let input = input?;
+                    if new_session.is_some() {
+                        if matches!(&input,TerminalEvent::Key(key) if key.code==KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {break;}
+                        continue;
+                    }
                     if let TerminalEvent::Paste(text) = &input {
                         if view::has_room(terminal.get_frame().area(), &state) {state.paste(text);}
                         continue;
@@ -210,20 +240,19 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                             }
                         }
                         Effect::NewSession => {
-                            if demo {state.demo_metadata(started.elapsed())?;}
-                            if let Some(request) = active_request.take() { ignored.insert(request); }
-                            if let Some(request) = poll_request.take() { ignored.insert(request); }
-                            if let Some(client) = &mut client {
-                                if let Some(id) = session.take() {
-                                    ignored.insert(client.send(Command::CancelTurn { session_id: id }).await?);
-                                }
-                                match ui::start_session(client, &mut renderer).await {
-                                    Ok(id) => {
-                                        session = Some(id);
-                                        client.send(Command::InspectRules { session_id: None, limit: Some(20) }).await?;
+                            match state.fresh_session() {
+                                Ok(mut candidate)=> {
+                                    if let Some(client)=&mut client {
+                                        match client.send(Command::StartSession {session_id:None}).await {
+                                            Ok(request)=>new_session=Some((request,candidate)),
+                                            Err(error)=>state.notify(error.to_string(),started.elapsed()),
+                                        }
+                                    } else {
+                                        candidate.demo_metadata(started.elapsed())?;
+                                        state=candidate;
                                     }
-                                    Err(error) => state.notify(error.to_string(), started.elapsed()),
                                 }
+                                Err(error)=>state.notify(error.to_string(),started.elapsed()),
                             }
                         }
                         Effect::Submit { text, read_only } => {
@@ -257,6 +286,18 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                 event = next(&mut client) => {
                     let Some((request, event)) = event? else { return Err(Error::failure("TUI_DISCONNECTED", "Daemon closed the connection")); };
                     if ignored.contains(&request) { continue; }
+                    if new_session.as_ref().is_some_and(|(id,_)|*id==request) {
+                        if let Some((_,candidate))=new_session.take() {
+                            if let Some(id)=finish_new_session(&mut state,candidate,&event,started.elapsed()) {
+                                let old=abandon_turn(&mut session,&mut active_request,&mut poll_request,&mut ignored);
+                                session=Some(id);
+                                if let (Some(client),Some(old))=(&mut client,old) {
+                                    ignored.insert(client.send(Command::CancelTurn {session_id:old}).await?);
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     if inspect_requests.event(request,&event,&mut state.inspect,started.elapsed()) {continue;}
                     if plugin_requests.event(request, &event, &mut state.plugins) {
                         if let Event::Tools {session_id, allow_creator_mode, ..} = &event {
@@ -311,6 +352,54 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_session_failure_preserves_the_old_conversation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut state = State::demo_turn()?;
+        state.composer = "keep this draft".into();
+        let count = state.tasks.len();
+        state.overlay = Some(super::super::app::Overlay::Confirm(
+            super::super::app::Action::NewSession,
+        ));
+        assert_eq!(
+            state.key(
+                crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                Duration::ZERO
+            ),
+            Effect::NewSession
+        );
+        assert_eq!(state.tasks.len(), count);
+        let candidate = state.fresh_session()?;
+        assert!(finish_new_session(
+            &mut state,
+            candidate,
+            &Event::Error {
+                code: "SESSION_LIMIT".into(),
+                message: "full".into()
+            },
+            Duration::ZERO
+        )
+        .is_none());
+        assert_eq!(state.composer, "keep this draft");
+        assert_eq!(state.tasks.len(), count);
+        assert!(state.running);
+        let candidate = state.fresh_session()?;
+        assert_eq!(
+            finish_new_session(
+                &mut state,
+                candidate,
+                &Event::SessionStarted {
+                    session_id: "new".into()
+                },
+                Duration::ZERO
+            ),
+            Some("new".into())
+        );
+        assert!(state.tasks.is_empty());
+        assert!(state.composer.is_empty());
+        assert!(!state.running);
+        Ok(())
+    }
     #[test]
     fn abandoning_a_turn_quarantines_stream_and_poll_and_retires_its_session() {
         let mut session = Some("cancelled".into());

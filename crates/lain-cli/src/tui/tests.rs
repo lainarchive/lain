@@ -310,7 +310,8 @@ fn shell_commands_and_small_screen_guards() -> Result<(), Box<dyn std::error::Er
         state.key(key(KeyCode::Enter), Duration::ZERO),
         Effect::NewSession
     );
-    assert!(!state.running);
+    assert!(state.running);
+    state = state.fresh_session()?;
     assert!(state.tasks.is_empty());
     assert!(state.composer.is_empty());
     state.composer = "draft".into();

@@ -396,16 +396,7 @@ impl State {
                 } else if action == Action::Quit {
                     return Effect::Quit;
                 } else {
-                    match Self::new(self.branch.clone(), self.scope.root()) {
-                        Ok(mut state) => {
-                            state.mode = self.mode;
-                            state.theme = self.theme;
-                            *self = state;
-                            self.notify("New session", now);
-                            return Effect::NewSession;
-                        }
-                        Err(error) => self.notify(error.to_string(), now),
-                    }
+                    return Effect::NewSession;
                 }
             }
             Action::ToggleOutput => {
@@ -438,6 +429,13 @@ impl State {
 
     pub fn launch(&self) -> bool {
         self.screen == Screen::Session && self.tasks.is_empty()
+    }
+
+    pub fn fresh_session(&self) -> Result<Self, Error> {
+        let mut state = Self::new(self.branch.clone(), self.scope.root())?;
+        state.mode = self.mode;
+        state.theme = self.theme;
+        Ok(state)
     }
 
     pub fn workspace(&self) -> &Path {
