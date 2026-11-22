@@ -369,7 +369,13 @@ impl State {
         match event {
             Event::StreamToken { text, .. } => {
                 if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
-                    task.text.push_str(&clean(text));
+                    let text = clean(text);
+                    if !text.is_empty() {
+                        if !task.text.is_empty() {
+                            task.text.push_str("\n\n");
+                        }
+                        task.text.push_str(&text);
+                    }
                 }
             }
             Event::ToolStarted {
