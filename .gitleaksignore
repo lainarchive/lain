@@ -58,3 +58,11 @@ e01dbb2e6b2faa3e8e66c9939f043940901e1231:test/store/redaction.test.mjs:jwt:70
 31f9507e23f474fb696507d1613b80ee7242c48d:test/model/openai-live.test.mjs:generic-api-key:26
 31f9507e23f474fb696507d1613b80ee7242c48d:test/model/gemini-live.test.mjs:generic-api-key:24
 2347aef202dc005928eca25d39d6af80bf2b52b0:test/model/credentials-dpapi.test.mjs:generic-api-key:97
+
+# Same synthetic fixtures after the commit-message rewrite. The old
+# fingerprints still cover the original commits on release tags and branches.
+6910b8155d4fcbf8d89ed5ffff4d3959333710ec:test/store/redaction.test.mjs:jwt-base64:70
+6910b8155d4fcbf8d89ed5ffff4d3959333710ec:test/store/redaction.test.mjs:jwt:70
+c936195ebbf1414e71e088b32eda9fbadc8320c6:test/model/openai-live.test.mjs:generic-api-key:26
+c936195ebbf1414e71e088b32eda9fbadc8320c6:test/model/gemini-live.test.mjs:generic-api-key:24
+59257212d643a51ae0c45092bfa02995105cea82:test/model/credentials-dpapi.test.mjs:generic-api-key:97
