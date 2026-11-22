@@ -1,9 +1,8 @@
 # Systems and Rust standards
 
-**Scope:** every Rust crate in this repository. The Core is Node today; Rust is the preferred Core candidate under
-ADR-011, which still requires a vertical slice. These standards bind the first Rust line written, including that slice.
-They do not themselves accept ADR-011, and the async runtime remains an open item in `DECISIONS.md` until the owner
-records it.
+**Scope:** every Rust crate under [`crates/`](../crates/). The workspace includes the CLI, daemon and agent runtime;
+the earlier Node implementation remains under `src/`. These standards do not change the status of ADR-011 or
+settle open decisions in `DECISIONS.md`.
 
 ## 1. Workspace layout
 

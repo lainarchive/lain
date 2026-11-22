@@ -1,13 +1,14 @@
 # UI/UX and frontend standards
 
-**Scope:** every Lain interface: the terminal UI now, a web or desktop UI when one is approved. Interfaces are clients
+**Scope:** every Lain interface. Interfaces are clients
 (ADR-003): they observe Core state through versioned APIs and the event bus, and they never own canonical task,
 session, policy or memory state.
 
 - **Terminal UI** is `@opentui/core` (`src/ui/`, `lain tui`). Its measured renderer facts, layout, focus and key rules live
   in `.agents/skills/lain-opentui/SKILL.md`; this file adds the shared design system and does not repeat them.
-- **Web UI** does not exist yet, and the desktop framework is open (ADR-010). The web stack below binds the first web
-  line written. Adding its packages still needs owner approval and an edit to `tools/check/repo-hygiene.mjs`.
+- **Web UI** is the [neural dashboard](../dashboard/README.md), served by the Rust CLI's Axum bridge.
+  Adding packages still needs owner approval and an edit to `tools/check/repo-hygiene.mjs`.
+  The desktop framework remains open (ADR-010).
 
 ## 1. Design system
 
