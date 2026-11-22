@@ -90,6 +90,47 @@ impl RepoMapCache {
 }
 
 impl RepoMap {
+    /// One-based declaration line from Rust syntax; comments, strings and malformed input do not match.
+    pub fn rust_function_line(source: &str, name: &str) -> Result<Option<usize>, RepoMapError> {
+        if source.len() > workspace::MAX_SOURCE_BYTES {
+            return Ok(None);
+        }
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_rust::LANGUAGE.into())?;
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let mut progress = |_: &ParseState| Instant::now() >= deadline;
+        let Some(tree) = parser.parse_with_options(
+            &mut |offset, _| source.as_bytes().get(offset..).unwrap_or_default(),
+            None,
+            Some(ParseOptions::new().progress_callback(&mut progress)),
+        ) else {
+            return Ok(None);
+        };
+        if tree.root_node().has_error() {
+            return Ok(None);
+        }
+        let mut cursor = tree.walk();
+        loop {
+            let node = cursor.node();
+            if node.kind() == "function_item"
+                && node
+                    .child_by_field_name("name")
+                    .and_then(|n| source.get(n.byte_range()))
+                    == Some(name)
+            {
+                return Ok(Some(node.start_position().row + 1));
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
     /// Scans a caller-authorized workspace; symlinks, hidden paths and common build/vendor directories are skipped.
     pub fn scan(root: impl AsRef<Path>) -> Result<Self, RepoMapError> {
         RepoMapCache::default().scan(root)
@@ -573,6 +614,22 @@ fn compact(text: &str, cap: usize) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn function_locations_ignore_decoys_and_reject_incomplete_source(
+    ) -> Result<(), super::RepoMapError> {
+        for (source, expected) in [
+            ("", None),
+            ("// fn add() {}", None),
+            ("const DECOY:&str=\"fn add() {}\";", None),
+            ("fn other() {}", None),
+            ("fn add( {", None),
+            ("// fn add() {}\n\nfn add() {}", Some(3)),
+        ] {
+            assert_eq!(super::RepoMap::rust_function_line(source, "add")?, expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn cache_reuses_leaf_hashes_and_reparses_only_modified_sources() -> Result<(), RepoMapError> {

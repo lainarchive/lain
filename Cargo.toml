@@ -8,6 +8,13 @@ publish = false
 lain-cli = { path = "crates/lain-cli" }
 
 [dev-dependencies]
+async-trait = "0.1"
+futures = "0.3"
+lain-agent = { path = "crates/lain-agent" }
+lain-context = { path = "crates/lain-context" }
+lain-core = { path = "crates/lain-core" }
+lain-harness = { path = "crates/lain-harness" }
+lain-memory = { path = "crates/lain-memory" }
 lain-ipc = { path = "crates/lain-ipc" }
 tempfile = "3"
 serde_json = "1"

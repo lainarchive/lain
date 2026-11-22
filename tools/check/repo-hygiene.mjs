@@ -34,7 +34,7 @@ export const ALLOWED_RUST_DEPENDENCIES = [
   'thiserror', 'throbber-widgets-tui', 'tiktoken-rs', 'tokio',
   'tree-sitter', 'tree-sitter-rust', 'tree-sitter-typescript',
 ];
-export const ALLOWED_RUST_DEV_DEPENDENCIES = ['async-trait', 'futures', 'lain-ipc', 'serde_json', 'tempfile', 'tokio'];
+export const ALLOWED_RUST_DEV_DEPENDENCIES = ['async-trait', 'futures', 'lain-agent', 'lain-context', 'lain-core', 'lain-harness', 'lain-ipc', 'lain-memory', 'serde_json', 'tempfile', 'tokio'];
 
 /**
  * @param {string} root
