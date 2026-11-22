@@ -534,6 +534,7 @@ impl AgentRunner {
                     bytes = bytes.saturating_add(chunk.len());
                     text.push_str(&chunk);
                     self.emit(AgentEvent::ThinkingToken { turn, text: chunk });
+                    tokio::task::yield_now().await;
                 }
                 Token::Usage(reported) => usage = Some(reported),
                 Token::Finished(reason) => finish_reason = Some(reason),
@@ -1215,6 +1216,59 @@ mod tests {
         let response = agent.complete(request, 1).await.unwrap();
         assert!(response.message.content.is_none());
         assert!(response.message.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn length_truncated_streamed_arguments_take_the_budget_path() {
+        let provider = Arc::new(StreamProvider(vec![
+            Token::Text("Partial answer".into()),
+            Token::ToolCall { index: 0, id: Some("c".into()), name: Some("ok".into()), arguments: Some("{\"n\":".into()) },
+            Token::Finished("length".into()),
+        ]));
+        let mut agent = AgentRunner::new(config(), provider, registry(), memory(), "length").unwrap();
+        agent.set_streaming(true);
+        let outcome = agent.run("hi").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Partial answer"));
+        assert_eq!(outcome.status, AgentStatus::Terminated(TerminationReason::BudgetExhausted { budget: BudgetKind::CompletionTokens }));
+        assert_eq!(agent.state().tool_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn long_stream_keeps_lifecycle_events_deliverable() {
+        let mut tokens = vec![Token::Text("x".into()); 2048];
+        tokens.push(Token::Finished("stop".into()));
+        let mut agent = AgentRunner::new(
+            config(),
+            Arc::new(StreamProvider(tokens)),
+            registry(),
+            memory(),
+            "long",
+        )
+        .unwrap();
+        agent.set_streaming(true);
+        let mut events = agent.subscribe();
+        let observer = async {
+            let mut count = 0;
+            loop {
+                let event = events.recv().await.unwrap();
+                if matches!(event, AgentEvent::ThinkingToken { .. }) {
+                    count += 1;
+                }
+                if matches!(event, AgentEvent::TurnCompleted { .. }) {
+                    return count;
+                }
+            }
+        };
+        let (result, chunks) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(agent.run("hi"), observer)
+        })
+        .await
+        .unwrap();
+        assert_eq!(chunks, 2048);
+        assert_eq!(
+            result.unwrap().output.as_deref(),
+            Some("x".repeat(2048).as_str())
+        );
     }
 
     #[tokio::test]

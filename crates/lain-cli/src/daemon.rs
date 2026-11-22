@@ -498,7 +498,11 @@ async fn forward_agent_event(
     event: Result<AgentEvent, broadcast::error::RecvError>,
     events: &EventSink,
 ) -> Result<(), Error> {
-    let event = event.map_err(|error| Error::failure("AGENT_EVENTS_LOST", error))?;
+    let event = match event {
+        Ok(event) => event,
+        Err(broadcast::error::RecvError::Lagged(_)) => return Ok(()),
+        Err(error) => return Err(Error::failure("AGENT_EVENTS_LOST", error)),
+    };
     if let Some(event) = map_agent_event(id, event) {
         events.send(event).await?;
     }
