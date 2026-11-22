@@ -122,6 +122,7 @@ pub struct State {
     pub collapsed_layers: BTreeSet<usize>,
     pub collapsed_nodes: BTreeSet<String>,
     pub drawer_scroll: u16,
+    pub lane_scroll: usize,
     pub active: Option<String>,
     scope: WriteScope,
     last_prompt: String,
@@ -155,6 +156,7 @@ impl State {
             collapsed_layers: BTreeSet::new(),
             collapsed_nodes: BTreeSet::new(),
             drawer_scroll: 0,
+            lane_scroll: 0,
             active: None,
             last_prompt: String::new(),
             escape: None,
@@ -265,14 +267,27 @@ impl State {
                 };
                 self.selected = rows.get(next).cloned();
                 self.drawer_scroll = 0;
+                self.lane_scroll = 0;
                 Effect::None
             }
-            KeyCode::PageDown => {
-                self.drawer_scroll = self.drawer_scroll.saturating_add(5);
-                Effect::None
-            }
-            KeyCode::PageUp => {
-                self.drawer_scroll = self.drawer_scroll.saturating_sub(5);
+            KeyCode::PageDown | KeyCode::PageUp => {
+                let expanded = match self.selected {
+                    Some(Selection::Tool(i)) => self.tools.get(i).is_some_and(|t| t.expanded),
+                    _ => false,
+                };
+                if !expanded {
+                    self.lane_scroll = if key.code == KeyCode::PageDown {
+                        self.lane_scroll.saturating_add(5)
+                    } else {
+                        self.lane_scroll.saturating_sub(5)
+                    };
+                    return Effect::None;
+                }
+                if key.code == KeyCode::PageDown {
+                    self.drawer_scroll = self.drawer_scroll.saturating_add(5);
+                } else {
+                    self.drawer_scroll = self.drawer_scroll.saturating_sub(5);
+                }
                 Effect::None
             }
             KeyCode::Char(' ') if self.composer.is_empty() && self.selected.is_some() => {
