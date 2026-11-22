@@ -173,6 +173,31 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn q_inserts_into_a_draft_and_only_quits_an_empty_composer(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.composer = "a ".into();
+    assert!(matches!(
+        state.key(key(KeyCode::Char('q')), Duration::ZERO),
+        Effect::None
+    ));
+    assert_eq!(state.composer, "a q");
+    assert!(matches!(
+        state.key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Duration::ZERO
+        ),
+        Effect::Quit
+    ));
+    state.composer.clear();
+    assert!(matches!(
+        state.key(key(KeyCode::Char('q')), Duration::ZERO),
+        Effect::Quit
+    ));
+    Ok(())
+}
+
+#[test]
 fn sticky_panels_mark_hidden_lines_including_wrapped_rules(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
