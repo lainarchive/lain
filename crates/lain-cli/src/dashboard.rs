@@ -279,40 +279,58 @@ async fn intervene(
 async fn websocket(State(handler): State<Arc<DaemonHandler>>, ws: WebSocketUpgrade) -> Response {
     // Subscribe under the journal lock before upgrade so no event can fall between replay and live delivery.
     let (history, mut events) = handler.dashboard.subscribe();
-    ws.on_upgrade(move |socket| async move {
-        let (mut outgoing, mut incoming) = socket.split();
-        for event in history {
-            let Ok(text) = serde_json::to_string(&event) else {
-                return;
-            };
-            if outgoing.send(Message::Text(text.into())).await.is_err() {
-                return;
-            }
-        }
-        loop {
-            tokio::select! {
-                event = events.recv() => {
-                    let Ok(event) = event else {
-                        // A slow observer reconnects and receives the bounded replay, never slowing the agent.
-                        let _ = outgoing.send(Message::Close(None)).await;
-                        return;
-                    };
-                    let Ok(text) = serde_json::to_string(&event) else { return };
-                    if outgoing.send(Message::Text(text.into())).await.is_err() { return; }
+    ws.protocols(["lain-dashboard"])
+        .on_upgrade(move |socket| async move {
+            let (mut outgoing, mut incoming) = socket.split();
+            for event in history {
+                let Ok(text) = serde_json::to_string(&event) else {
+                    return;
+                };
+                if outgoing.send(Message::Text(text.into())).await.is_err() {
+                    return;
                 }
-                message = incoming.next() => match message {
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
-                    Some(Ok(Message::Ping(bytes))) => {
-                        if outgoing.send(Message::Pong(bytes)).await.is_err() { return; }
+            }
+            loop {
+                tokio::select! {
+                    event = events.recv() => {
+                        let Ok(event) = event else {
+                            // A slow observer reconnects and receives the bounded replay, never slowing the agent.
+                            let _ = outgoing.send(Message::Close(None)).await;
+                            return;
+                        };
+                        let Ok(text) = serde_json::to_string(&event) else { return };
+                        if outgoing.send(Message::Text(text.into())).await.is_err() { return; }
                     }
-                    _ => {}
+                    message = incoming.next() => match message {
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                        Some(Ok(Message::Ping(bytes))) => {
+                            if outgoing.send(Message::Pong(bytes)).await.is_err() { return; }
+                        }
+                        _ => {}
+                    }
                 }
             }
-        }
-    })
+        })
 }
 
-async fn same_origin(State(authority): State<String>, request: Request, next: Next) -> Response {
+fn token_matches(expected: &str, supplied: &str) -> bool {
+    if expected.len() != supplied.len() {
+        return false;
+    }
+    let difference = expected
+        .bytes()
+        .zip(supplied.bytes())
+        .fold(0_u8, |difference, (a, b)| {
+            difference | std::hint::black_box(a ^ b)
+        });
+    std::hint::black_box(difference) == 0
+}
+
+async fn same_origin(
+    State((authority, token)): State<(String, String)>,
+    request: Request,
+    next: Next,
+) -> Response {
     let valid_host = request
         .headers()
         .get(header::HOST)
@@ -329,6 +347,32 @@ async fn same_origin(State(authority): State<String>, request: Request, next: Ne
         .is_some_and(|v| v == "cross-site");
     if !valid_host || !valid_origin || cross_site {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if request.uri().path().starts_with("/api/") || request.uri().path() == "/ws/events" {
+        let bearer = request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        let websocket_token = (request.uri().path() == "/ws/events")
+            .then(|| {
+                request
+                    .headers()
+                    .get(header::SEC_WEBSOCKET_PROTOCOL)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| {
+                        value
+                            .split(',')
+                            .find_map(|protocol| protocol.trim().strip_prefix("lain-token."))
+                    })
+            })
+            .flatten();
+        if !bearer
+            .or(websocket_token)
+            .is_some_and(|supplied| token_matches(&token, supplied))
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
     let mut response = next.run(request).await;
     response.headers_mut().insert(
@@ -350,6 +394,7 @@ pub fn router(
     handler: Arc<DaemonHandler>,
     authority: String,
     assets: std::path::PathBuf,
+    token: String,
 ) -> Router {
     Router::new()
         .route("/api/v1/status", get(status))
@@ -359,7 +404,10 @@ pub fn router(
         .route("/ws/events", get(websocket))
         .fallback_service(ServeDir::new(assets).append_index_html_on_directories(true))
         .layer(DefaultBodyLimit::max(16 * 1024))
-        .layer(middleware::from_fn_with_state(authority, same_origin))
+        .layer(middleware::from_fn_with_state(
+            (authority, token),
+            same_origin,
+        ))
         .with_state(handler)
 }
 
@@ -373,15 +421,25 @@ pub async fn serve(
         .unwrap_or_else(|| {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dashboard/out")
         });
-    axum::serve(listener, router(handler, "127.0.0.1:4040".into(), assets))
-        .with_graceful_shutdown(async move {
-            while !*shutdown.borrow() {
-                if shutdown.changed().await.is_err() {
-                    break;
-                }
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| Error::failure("UI_TOKEN", error))?;
+    let token = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    eprintln!("http://127.0.0.1:4040/#token={token}");
+    axum::serve(
+        listener,
+        router(handler, "127.0.0.1:4040".into(), assets, token),
+    )
+    .with_graceful_shutdown(async move {
+        while !*shutdown.borrow() {
+            if shutdown.changed().await.is_err() {
+                break;
             }
-        })
-        .await?;
+        }
+    })
+    .await?;
     Ok(())
 }
 
@@ -586,13 +644,14 @@ mod tests {
             handler.clone(),
             address.to_string(),
             std::path::PathBuf::from("missing-assets"),
+            "test-token".into(),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
             let request = format!(
                 "GET /ws/events HTTP/1.1\r\nHost: {address}\r\nOrigin: http://{address}\r\n\
-                 Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+                 Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: lain-dashboard, lain-token.test-token\r\n\
                  Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
             );
             socket.write_all(request.as_bytes()).await.unwrap();
@@ -655,6 +714,7 @@ mod tests {
             handler,
             address.to_string(),
             std::path::PathBuf::from("missing-assets"),
+            "test-token".into(),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         for (body, headers, expected) in [
@@ -684,7 +744,7 @@ mod tests {
             ("{}".to_string(), "Sec-Fetch-Site: cross-site\r\n", 403),
         ] {
             let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
-            let request = format!("POST /api/v1/intervene HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nConnection: close\r\n{headers}Content-Length: {}\r\n\r\n{body}", body.len());
+            let request = format!("POST /api/v1/intervene HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer test-token\r\nContent-Type: application/json\r\nConnection: close\r\n{headers}Content-Length: {}\r\n\r\n{body}", body.len());
             socket.write_all(request.as_bytes()).await.unwrap();
             let mut response = String::new();
             tokio::time::timeout(
@@ -699,14 +759,46 @@ mod tests {
                 "{response}"
             );
         }
-        for (path, host, expected) in [
-            ("/api/v1/status", address.to_string(), 200),
-            ("/api/v1/memory", address.to_string(), 200),
-            ("/api/v1/plugins", address.to_string(), 200),
-            ("/api/v1/status", "evil.example".into(), 403),
+        for (path, host, auth, expected) in [
+            (
+                "/api/v1/status",
+                address.to_string(),
+                "Authorization: Bearer test-token\r\n",
+                200,
+            ),
+            (
+                "/api/v1/memory",
+                address.to_string(),
+                "Authorization: Bearer test-token\r\n",
+                200,
+            ),
+            (
+                "/api/v1/plugins",
+                address.to_string(),
+                "Authorization: Bearer test-token\r\n",
+                200,
+            ),
+            ("/api/v1/status", "evil.example".into(), "", 403),
+            ("/api/v1/status", address.to_string(), "", 401),
+            ("/api/v1/memory", address.to_string(), "", 401),
+            (
+                "/api/v1/plugins",
+                address.to_string(),
+                "Authorization: Bearer bad-token\r\n",
+                401,
+            ),
+            ("/api/v1/intervene", address.to_string(), "", 401),
+            ("/ws/events", address.to_string(), "", 401),
+            (
+                "/ws/events",
+                address.to_string(),
+                "Sec-WebSocket-Protocol: lain-token.bad-token\r\n",
+                401,
+            ),
+            ("/", address.to_string(), "", 404),
         ] {
             let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
-            socket.write_all(format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{address}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            socket.write_all(format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{address}\r\n{auth}Connection: close\r\n\r\n").as_bytes()).await.unwrap();
             let mut response = String::new();
             tokio::time::timeout(
                 std::time::Duration::from_secs(5),

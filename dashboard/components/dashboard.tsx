@@ -41,6 +41,7 @@ import {
   exampleStatus,
 } from "../lib/demo";
 import { refreshBridge } from "../lib/live";
+import { authorizedHeaders, dashboardToken, websocketProtocols } from "../lib/auth";
 import { graphEdges, toolKind, updatePositions } from "../lib/flow";
 
 const icons = {
@@ -95,7 +96,7 @@ const pretty = (value: Json | undefined) =>
       : JSON.stringify(value, null, 2);
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { cache: "no-store", ...init });
+  const response = await fetch(path, { cache: "no-store", ...init, headers: authorizedHeaders(dashboardToken(), init?.headers) });
   if (!response.ok) {
     const error = await response.json().catch(() => null);
     throw new Error(error?.message ?? `Bridge returned ${response.status}`);
@@ -153,6 +154,7 @@ export function Dashboard() {
       if (scope.signal.aborted) return;
       socket = new WebSocket(
         `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/events`,
+        websocketProtocols(dashboardToken()),
       );
       socket.onopen = () => {
         if (scope.signal.aborted) return;
