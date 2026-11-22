@@ -232,7 +232,11 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
     rows
 }
 
-fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> usize {
+fn page_height(area: Rect) -> u16 {
+    area.height.saturating_sub(3).max(1)
+}
+
+fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> (usize, usize) {
     let block = panel(" Execution DAG ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -267,7 +271,7 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> usize {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
-    scroll
+    (scroll, usize::from(page_height(area)))
 }
 
 fn scroll_panel(
@@ -276,7 +280,7 @@ fn scroll_panel(
     content: Paragraph<'_>,
     title: &str,
     requested: u16,
-) -> u16 {
+) -> (u16, u16) {
     let max = content
         .line_count(area.width.saturating_sub(2))
         .saturating_sub(usize::from(area.height.saturating_sub(2)));
@@ -291,7 +295,7 @@ fn scroll_panel(
         }
     );
     frame.render_widget(content.scroll((scroll, 0)).block(panel(title)), area);
-    scroll
+    (scroll, page_height(area))
 }
 
 fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
@@ -340,7 +344,8 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
     }
     if let Some(rect) = sections.first() {
         let plan = Paragraph::new(plan).wrap(Wrap { trim: false });
-        scroll.plan = scroll_panel(frame, *rect, plan, "Scratchpad", state.scroll.plan);
+        (scroll.plan, scroll.plan_page) =
+            scroll_panel(frame, *rect, plan, "Scratchpad", state.scroll.plan);
     }
     let rules = if state.rules.is_empty() {
         "No procedural rules recalled".into()
@@ -354,7 +359,8 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
     };
     if let Some(rect) = sections.get(1) {
         let rules = Paragraph::new(rules).wrap(Wrap { trim: false });
-        scroll.rules = scroll_panel(frame, *rect, rules, "Procedural rules", state.scroll.rules);
+        (scroll.rules, scroll.rules_page) =
+            scroll_panel(frame, *rect, rules, "Procedural rules", state.scroll.rules);
     }
     if let (Some(tool), Some(rect)) = (tool, sections.get(2)) {
         let output = Paragraph::new(tool.output.as_str()).wrap(Wrap { trim: false });
@@ -371,6 +377,7 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
             *rect,
         );
         scroll.drawer = offset;
+        scroll.drawer_page = page_height(*rect);
     }
     scroll
 }
@@ -411,7 +418,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             scroll = drawer(frame, *area, state);
         }
         if let Some(area) = main.first() {
-            scroll.lane = lanes(frame, *area, state, now);
+            (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
         }
     }
     if let Some(area) = vertical.get(2) {
