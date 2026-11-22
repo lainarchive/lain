@@ -122,6 +122,7 @@ export function Dashboard() {
     Record<string, { x: number; y: number }>
   >({});
   const liveScope = useRef<AbortController | null>(null);
+  const drawerTrigger = useRef<HTMLElement | null>(null);
   const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     setPositions((previous) => updatePositions(previous, changes));
   }, []);
@@ -377,7 +378,10 @@ export function Dashboard() {
           <div className="graph-canvas">
             <ReactFlow key={`${fitKey}:${demo}:${nodes.length ? "data" : "empty"}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes}
               fitView fitViewOptions={fitViewOptions} onNodesChange={onNodesChange} minZoom={0.12} maxZoom={1.7}
-              nodesConnectable={false} nodesDraggable onNodeClick={(_, node) => { setSelectedId(node.id); setPayloadTab("output"); }}
+              nodesConnectable={false} nodesDraggable onNodeClick={(event, node) => {
+                drawerTrigger.current = (event.target as HTMLElement).closest<HTMLElement>(".react-flow__node");
+                setSelectedId(node.id); setPayloadTab("output");
+              }}
               onPaneClick={() => setSelectedId(null)} colorMode="dark" proOptions={{ hideAttribution: true }}>
               <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#27272a" />
               <Controls showInteractive={false} fitViewOptions={fitViewOptions} />
@@ -438,7 +442,8 @@ export function Dashboard() {
       </aside>
       <Dialog.Root modal={false} open={!!selected} onOpenChange={(open) => { if (!open) setSelectedId(null); }}>
         <Dialog.Portal>
-          <Dialog.Content className="node-drawer" onInteractOutside={(event) => event.preventDefault()}>
+          <Dialog.Content className="node-drawer" onInteractOutside={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => { event.preventDefault(); drawerTrigger.current?.focus({ preventScroll: true }); }}>
             <header className="drawer-heading"><SelectedIcon size={18} /><Dialog.Title>{selected?.label}</Dialog.Title>
               <Dialog.Close className="icon-button" aria-label="Close node inspector"><X size={18} /></Dialog.Close></header>
             <div className="drawer-facts"><span>{selected ? labels[selected.kind] : ""}</span>
