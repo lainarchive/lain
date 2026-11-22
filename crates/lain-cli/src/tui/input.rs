@@ -103,7 +103,7 @@ async fn next(client: &mut Option<IpcClient>) -> Result<Option<(u64, Event)>, Er
 pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let cwd = std::env::current_dir()?;
     let mut state = if demo {
-        State::sample()?
+        State::demo_turn()?
     } else {
         State::new(branch(&cwd), &cwd)?
     };
@@ -135,11 +135,6 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
             }
         }
     }
-    if demo {
-        state.notice =
-            "OFFLINE DEMO · synthetic verified evidence and advisor notes · no provider contacted"
-                .into();
-    }
     let _screen = Screen::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut keys = EventStream::new();
@@ -154,7 +149,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut plugins_session = session.clone();
     let result = async {
         loop {
-            state.session_id = session.clone();
+            if !demo {state.session_id = session.clone();}
             if plugins_session != session {
                 ignored.extend(plugin_requests.clear());
                 ignored.extend(creator_requests.clear());
@@ -197,6 +192,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                             }
                         }
                         Effect::NewSession => {
+                            if demo {state.demo_metadata()?;}
                             if let Some(request) = active_request.take() { ignored.insert(request); }
                             if let Some(request) = poll_request.take() { ignored.insert(request); }
                             if let Some(client) = &mut client {
@@ -232,6 +228,12 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                                 state.notice = "Steer sent · current daemon rejects mid-turn SendMessage as SESSION_BUSY".into();
                             }
                         }
+                        Effect::Interrupt => {
+                            if let Some(request) = active_request.take() { ignored.insert(request); }
+                            if let (Some(client), Some(id)) = (&mut client, &session) {
+                                client.send(Command::CancelTurn { session_id:id.clone() }).await?;
+                            }
+                        }
                         Effect::Rewind => {
                             if let Some(request) = active_request.take() { ignored.insert(request); }
                             if let (Some(client), Some(id)) = (&mut client, session.take()) {
@@ -256,7 +258,9 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                         state.event(&event, started.elapsed());
                         if matches!(&event, Event::Error { code, .. } if code != "SESSION_BUSY") {
                             state.running = false;
-                            if let Some(task) = state.active.as_ref().and_then(|id| state.tasks.get_mut(id)) { task.phase = Phase::Failed; }
+                            if let Some(task) = state.active.as_ref().and_then(|id| state.tasks.get_mut(id)) {
+                                task.phase = Phase::Failed; task.ended = Some(started.elapsed());
+                            }
                             ignored.insert(request);
                             active_request = None;
                             session = None;

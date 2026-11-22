@@ -135,7 +135,19 @@ pub fn overlay(frame: &mut Frame, state: &State) {
                     .map(|(key, text)| Line::from(format!("{key}  {text}"))),
             );
             lines.push(Line::styled("Commands (/id)", Style::default().fg(CYAN)));
-            lines.extend(app::COMMANDS.iter().map(|c| command_line(c, false)));
+            let width = usize::from(frame.area().width.saturating_sub(8).min(112)) / 2;
+            for pair in app::COMMANDS.chunks(2) {
+                let mut spans = vec![];
+                for command in pair {
+                    let text = super::launch_view::fit(
+                        &format!("{} /{} {}", command.title, command.id, command.hint),
+                        width.saturating_sub(1),
+                    );
+                    let padding = width.saturating_sub(Line::raw(&text).width());
+                    spans.push(Span::raw(format!("{text}{}", " ".repeat(padding))));
+                }
+                lines.push(Line::from(spans));
+            }
             let height = lines.len() as u16 + 2;
             (" Help · Esc close ", lines, height)
         }

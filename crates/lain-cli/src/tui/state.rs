@@ -5,8 +5,10 @@ use std::{
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+#[cfg(test)]
+use lain_harness::advisor::AdvisorKind;
 use lain_harness::{
-    advisor::{AdvisorKind, AdvisorNote},
+    advisor::AdvisorNote,
     dag::{Dag, Node},
     evidence::Status,
     scope::WriteScope,
@@ -44,6 +46,7 @@ pub enum Effect {
     Submit { text: String, read_only: bool },
     Steer(String),
     Rewind,
+    Interrupt,
     NewSession,
     Quit,
 }
@@ -54,6 +57,7 @@ pub enum Phase {
     Running,
     Failed,
     NotSent,
+    Interrupted,
 }
 
 impl Phase {
@@ -61,6 +65,7 @@ impl Phase {
         match self {
             Self::Running => "●",
             Self::Failed => "×",
+            Self::Interrupted => "■",
             Self::Evidence(Status::ObservedVerified) => "✓",
             Self::Evidence(Status::PreparedNotObserved) => "◇",
             Self::Evidence(Status::Planned) | Self::NotSent => "○",
@@ -70,6 +75,7 @@ impl Phase {
         match self {
             Self::Running => "running",
             Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
             Self::NotSent => "not sent",
             Self::Evidence(Status::ObservedVerified) => "verified",
             Self::Evidence(Status::PreparedNotObserved) => "prepared",
@@ -80,6 +86,7 @@ impl Phase {
 
 #[derive(Debug)]
 pub struct Task {
+    pub prompt: String,
     pub node: Node,
     pub title: String,
     pub model: String,
@@ -92,6 +99,8 @@ pub struct Task {
 
 #[derive(Debug)]
 pub struct ToolBlock {
+    pub started: Duration,
+    pub ended: Option<Duration>,
     pub node: String,
     pub call_id: String,
     pub name: String,
@@ -110,6 +119,12 @@ pub enum Selection {
 
 #[derive(Clone, Copy, Default)]
 pub struct Scroll {
+    pub transcript: usize,
+    pub transcript_max: usize,
+    pub transcript_page: usize,
+    pub selection_epoch: u64,
+    pub dag_visible: bool,
+    pub plan_visible: bool,
     pub creator_output: u16,
     pub creator_page: u16,
     pub creator_max: u16,
@@ -127,6 +142,13 @@ pub struct Scroll {
 }
 
 pub struct State {
+    pub demo: bool,
+    pub follow: bool,
+    pub unseen: bool,
+    pub dag_drawer: Option<bool>,
+    pub plan_drawer: Option<bool>,
+    pub dag_focus: bool,
+    pub selection_epoch: u64,
     pub theme: super::theme::Theme,
     pub session_id: Option<String>,
     pub creator: super::creator::Creator,
@@ -169,6 +191,13 @@ pub struct State {
 impl State {
     pub fn new(branch: String, workspace: &Path) -> Result<Self, Error> {
         Ok(Self {
+            demo: false,
+            follow: true,
+            unseen: false,
+            dag_drawer: None,
+            plan_drawer: None,
+            dag_focus: false,
+            selection_epoch: 0,
             theme: super::theme::Theme::default(),
             session_id: None,
             creator: super::creator::Creator::default(),
@@ -245,6 +274,9 @@ impl State {
     }
 
     pub fn velocity(&self, now: Duration) -> f64 {
+        if self.demo {
+            return 38.6;
+        }
         self.samples
             .iter()
             .filter(|(at, _)| now.saturating_sub(*at) <= Duration::from_secs(5))
@@ -301,6 +333,13 @@ impl State {
 
     fn execute(&mut self, action: Action, now: Duration, confirmed: bool) -> Effect {
         match action {
+            Action::Dag => {
+                self.dag_drawer = Some(!self.dag_drawer.unwrap_or(self.scroll.dag_visible));
+                self.dag_focus = self.dag_drawer == Some(true);
+            }
+            Action::Plan => {
+                self.plan_drawer = Some(!self.plan_drawer.unwrap_or(self.scroll.plan_visible));
+            }
             Action::Theme => {
                 self.theme = self.theme.next();
                 self.notify(format!("Theme: {}", self.theme.name()), now);
@@ -338,9 +377,16 @@ impl State {
             }
             Action::ToggleOutput => {
                 if self.screen == Screen::Session {
-                    if let Some(Selection::Tool(i)) = self.selected {
+                    let index = match self.selected {
+                        Some(Selection::Tool(i)) => Some(i),
+                        _ => self.tools.len().checked_sub(1),
+                    };
+                    if let Some(i) = index {
                         if let Some(tool) = self.tools.get_mut(i) {
                             tool.expanded = !tool.expanded;
+                            self.selected = Some(Selection::Tool(i));
+                            self.selection_epoch += 1;
+                            self.follow = false;
                             return Effect::None;
                         }
                     }
@@ -515,6 +561,17 @@ impl State {
             }
             return self.creator.key(key, self.mode, &mut self.scroll);
         }
+        if self.screen == Screen::Session && key.modifiers.contains(KeyModifiers::CONTROL) {
+            let action = match key.code {
+                KeyCode::Char('g') => Some(Action::Dag),
+                KeyCode::Char('p') => Some(Action::Plan),
+                KeyCode::Char('o') => Some(Action::ToggleOutput),
+                _ => None,
+            };
+            if let Some(action) = action {
+                return self.execute(action, now, false);
+            }
+        }
         if self.screen == Screen::Plugins && self.plugins.filtering {
             return self.plugin_key(key, now);
         }
@@ -609,6 +666,15 @@ impl State {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Effect::Quit,
             KeyCode::Char('q') if self.composer.is_empty() => Effect::Quit,
             KeyCode::Esc => {
+                if self.running {
+                    self.running = false;
+                    self.escape = Some(now);
+                    if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+                        task.phase = Phase::Interrupted;
+                        task.ended = Some(now);
+                    }
+                    return Effect::Interrupt;
+                }
                 if self
                     .escape
                     .take()
@@ -641,6 +707,8 @@ impl State {
                     (index + 1).min(rows.len().saturating_sub(1))
                 };
                 self.selected = rows.get(next).cloned();
+                self.selection_epoch += 1;
+                self.follow = false;
                 self.scroll.drawer = 0;
                 self.scroll.lane = 0;
                 Effect::None
@@ -665,11 +733,29 @@ impl State {
                     };
                     return Effect::None;
                 }
-                let expanded = match self.selected {
-                    Some(Selection::Tool(i)) => self.tools.get(i).is_some_and(|t| t.expanded),
-                    _ => false,
-                };
+                let expanded = self.scroll.plan_visible
+                    && match self.selected {
+                        Some(Selection::Tool(i)) => self.tools.get(i).is_some_and(|t| t.expanded),
+                        _ => false,
+                    };
                 if !expanded {
+                    if !self.dag_focus || !self.scroll.dag_visible {
+                        let page = self.scroll.transcript_page.max(1);
+                        self.scroll.transcript = if key.code == KeyCode::PageDown {
+                            self.scroll
+                                .transcript
+                                .saturating_add(page)
+                                .min(self.scroll.transcript_max)
+                        } else {
+                            self.scroll.transcript.saturating_sub(page)
+                        };
+                        self.follow = key.code == KeyCode::PageDown
+                            && self.scroll.transcript >= self.scroll.transcript_max;
+                        if self.follow {
+                            self.unseen = false;
+                        }
+                        return Effect::None;
+                    }
                     let page = self.scroll.lane_page.max(1);
                     self.scroll.lane = if key.code == KeyCode::PageDown {
                         self.scroll.lane.saturating_add(page)
@@ -719,6 +805,7 @@ impl State {
                 self.tasks.insert(
                     id.clone(),
                     Task {
+                        prompt: clean(&text),
                         node: Node {
                             id: id.clone(),
                             deps,
@@ -740,6 +827,8 @@ impl State {
                 self.active = Some(id.clone());
                 self.selected = Some(Selection::Node(id));
                 self.running = true;
+                self.follow = true;
+                self.unseen = false;
                 Effect::Submit {
                     text,
                     read_only: self.mode.read_only(),
@@ -789,6 +878,14 @@ impl State {
     }
 
     pub fn event(&mut self, event: &Event, now: Duration) {
+        if !self.follow
+            && matches!(
+                event,
+                Event::StreamToken { .. } | Event::ToolStarted { .. } | Event::ToolFinished { .. }
+            )
+        {
+            self.unseen = true;
+        }
         match event {
             Event::StreamToken { text, .. } => {
                 if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
@@ -809,6 +906,8 @@ impl State {
             } => {
                 if let Some(node) = &self.active {
                     self.tools.push(ToolBlock {
+                        started: now,
+                        ended: None,
                         node: node.clone(),
                         call_id: call_id.clone(),
                         name: clean(name),
@@ -827,6 +926,7 @@ impl State {
             } => {
                 if let Some(tool) = self.tools.iter_mut().rev().find(|t| &t.call_id == call_id) {
                     tool.ok = Some(*ok);
+                    tool.ended = Some(now);
                     tool.output = clean(summary);
                 }
             }
@@ -899,6 +999,7 @@ impl State {
         }
     }
 
+    #[cfg(test)]
     pub fn sample() -> Result<Self, Error> {
         let mut state = Self::new(
             "feat/frontier".into(),
@@ -940,6 +1041,7 @@ impl State {
             state.tasks.insert(
                 id.into(),
                 Task {
+                    prompt: title.into(),
                     node: Node {
                         id: id.into(),
                         deps: deps.into_iter().map(Into::into).collect(),
@@ -956,6 +1058,8 @@ impl State {
             );
         }
         state.tools.push(ToolBlock {
+            started: Duration::ZERO,
+            ended: Some(Duration::from_millis(400)),
             node: "2".into(),
             call_id: "sample".into(),
             name: "repo_map".into(),

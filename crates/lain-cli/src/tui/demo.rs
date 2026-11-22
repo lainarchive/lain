@@ -1,0 +1,109 @@
+use std::time::Duration;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use lain_harness::advisor::{AdvisorKind, AdvisorNote};
+use lain_ipc::{ActiveTool, ManifestEntry, ToolSource};
+use serde_json::json;
+
+use super::state::{State, ToolBlock};
+use crate::Error;
+
+pub(super) fn catalog() -> Result<super::plugins::Plugins, Error> {
+    Ok(State::demo_launch()?.plugins)
+}
+
+impl State {
+    pub fn demo_metadata(&mut self) -> Result<(), Error> {
+        self.demo = true;
+        self.session_id = Some("demo-local-01".into());
+        self.model_chain = "openai:gpt-4o".into();
+        self.cost = Some(0.0128);
+        self.context = 38_000;
+        self.context_window = 1_000_000;
+        self.notice = "OFFLINE DEMO · all activity and telemetry are synthetic · no provider or scripts called".into();
+        self.creator = super::creator::Creator::sample();
+        self.plugins = super::plugins::Plugins::sample()?;
+        for (name, description) in [
+            (
+                if cfg!(windows) { "powershell" } else { "bash" },
+                "Run a command as the host user; demo only.",
+            ),
+            ("memory_read", "Search trusted memory."),
+            ("repo_map", "Outline the workspace."),
+            ("test_tool", "Test a proposed script as the host user."),
+        ] {
+            self.plugins.tools.push(ActiveTool {
+                name: name.into(),
+                description: description.into(),
+                parameters: json!({"type":"object"}),
+                source: ToolSource::Builtin,
+                permissions: vec![],
+            });
+        }
+        let manifest = serde_json::from_value(
+            json!({"name":"notes", "version":"1.0.0", "author":"demo fixture", "permissions":["network"],
+            "tools":[{"name":"demo_notes","description":"Summarize example notes.","parameters":{"type":"object"},
+                "backend":{"kind":"webhook","url":"https://example.invalid/notes"}}]}),
+        )?;
+        self.plugins.manifests.push(ManifestEntry {
+            path: ".lain/plugins/notes.json".into(),
+            manifest: Ok(manifest),
+        });
+        self.plugins.tools.push(ActiveTool {
+            name: "demo_notes".into(),
+            description: "Summarize example notes.".into(),
+            parameters: json!({"type":"object"}),
+            source: ToolSource::Plugin {
+                manifest_name: "notes".into(),
+                manifest_path: Some(".lain/plugins/notes.json".into()),
+            },
+            permissions: vec![],
+        });
+        Ok(())
+    }
+
+    pub fn demo_launch() -> Result<Self, Error> {
+        let cwd = std::env::current_dir()?;
+        let mut state = Self::new("demo/workspace".into(), &cwd)?;
+        state.demo_metadata()?;
+        Ok(state)
+    }
+
+    pub fn demo_turn() -> Result<Self, Error> {
+        let mut state = Self::demo_launch()?;
+        state.composer = "Inspect the plugin workflow and prepare a safe Creator plan.".into();
+        state.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            Duration::ZERO,
+        );
+        if let Some(task) = state.active.as_ref().and_then(|id| state.tasks.get_mut(id)) {
+            task.model = state.model_chain.clone();
+            task.tokens = 3400;
+            task.text = concat!(
+                "**The Creator path is ready to review.**\n\n",
+                "- Browse manifests with `/plugins`.\n",
+                "- Build and test a proposal in `/creator`.\n",
+                "- Publish only in **Code** mode after reviewing permissions.\n\n",
+                "```python\ndef run(args):\n    return {\"message\": args[\"message\"]}\n```\n\n",
+                "This is a prepared plan, **not verified execution**. The final catalog check is still running."
+            ).into();
+        }
+        for (index, name, output, finished) in [
+            (0, "memory_read", "Found two trusted workspace conventions.", true),
+            (1, "repo_map", "crates/lain-cli/src/tui/\n  creator.rs\n  creator_ipc.rs\n  creator_view.rs\n  plugins.rs\n  transcript.rs\n  theme.rs", true),
+            (2, "demo_notes", "Preparing a catalog summary…", false),
+        ] {
+            state.tools.push(ToolBlock {node:"turn-1".into(),call_id:format!("demo-{index}"), name:name.into(),arguments:"{}".into(),output:output.into(),
+                ok:finished.then_some(true),expanded:false,started:Duration::ZERO, ended:finished.then_some(Duration::from_millis(400))});
+        }
+        state.notes.push(AdvisorNote {
+            turn: 1,
+            kind: AdvisorKind::Warning,
+            text: "Scripts run unsandboxed as the host user; inspect source before testing.".into(),
+        });
+        state.plan =
+            "[✓] Inspect plugin contracts\n[✓] Prepare Creator plan\n[●] Review catalog".into();
+        state.rules = vec!["Require observed evidence before claiming verification.".into()];
+        Ok(state)
+    }
+}
