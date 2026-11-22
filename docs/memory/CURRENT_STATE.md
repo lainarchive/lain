@@ -1,5 +1,21 @@
 # Current Project State
 
+## Rust frontier harness / TUI increment
+
+- `lain-harness` adds evidence-gated reports, immutable scopes and DAG validation, bounded repair,
+  detached worktrees, nonblocking advisor notes, stream abort/restart, and frozen transcript prefixes.
+- `lain-context` adds bounded SHA-256 Merkle trees with equal-subtree diff pruning and hash-keyed
+  outline caching. Repo-map tool calls retain the cache and skip unchanged AST parses.
+- `lain tui` adds the Ratatui lane view, persistent telemetry, sticky plan/rules and expandable tool output.
+  Architect and Ask enforce built-in read-only tools in the daemon; Code retains configured permissions.
+  Mid-turn Enter receives `SESSION_BUSY`, not queued steering. Cost shows unknown without configured pricing.
+- Linux verification passed 168 Cargo tests, workspace Clippy, Rust formatting and repository hygiene.
+  The format gate's sole owned-file failure, `crates/lain-cli/src/dashboard.rs:783` (236 characters),
+  also reproduces on unchanged main. The offline demo was checked in a real terminal and at 140×45 via TestBackend.
+- Native Windows and a live provider were not tested. Live IPC exposes serial turns; parallel lanes and
+  advisor notes are demonstrated by sample state. Completion is prepared, not verification evidence;
+  rewind cancels and restores the prompt but does not undo filesystem writes or persisted memory.
+
 ## After the neural dashboard merge
 
 - The Rust CLI and daemon live in [`crates/lain-cli/`](../../crates/lain-cli/README.md).
