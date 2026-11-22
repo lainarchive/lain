@@ -1,5 +1,6 @@
 pub mod args;
 pub mod daemon;
+pub mod dashboard;
 pub mod render;
 pub mod ui;
 #[cfg(any(windows, test))]

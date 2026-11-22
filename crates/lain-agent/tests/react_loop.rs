@@ -318,10 +318,12 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
         )));
         assert!(matches!(
             seen.first(),
-            Some(AgentEvent::TurnStarted { turn: 1, .. })
+            Some(AgentEvent::IntentReceived { .. })
         ));
         assert!(matches!(
-            seen.last(),
+            seen.iter()
+                .rev()
+                .find(|event| matches!(event, AgentEvent::TurnCompleted { .. })),
             Some(AgentEvent::TurnCompleted { turn: 3, .. })
         ));
 

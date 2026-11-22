@@ -20,6 +20,7 @@ async fn daemon(options: Options) -> Result<(), Error> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.join(".lain/memory.db"));
     let mut factory = ConfigFactory::new(options.config, cwd);
+    factory.stream_responses = options.serve_ui;
     factory.allow_shell = std::env::var("LAIN_ALLOW_SHELL").is_ok_and(|value| value == "1");
     let handler = Arc::new(DaemonHandler::new(
         Arc::new(Mutex::new(MemoryStore::open(memory)?)),
@@ -27,15 +28,36 @@ async fn daemon(options: Options) -> Result<(), Error> {
     ));
     let server = IpcServer::bind(&options.endpoint)?;
     let (shutdown, receiver) = watch::channel(false);
+    let http_shutdown = receiver.clone();
     let serve = server.serve(handler.clone(), receiver);
+    let http = async {
+        if options.serve_ui {
+            lain_cli::dashboard::serve(handler.clone(), http_shutdown).await
+        } else {
+            std::future::pending::<Result<(), Error>>().await
+        }
+    };
     tokio::pin!(serve);
+    tokio::pin!(http);
     tokio::select! {
-        result = &mut serve => result?,
-        signal = tokio::signal::ctrl_c() => {
-            signal?;
+        result = &mut serve => {
+            handler.cancel_all().await;
+            let _ = shutdown.send(true);
+            result?;
+            if options.serve_ui { http.await?; }
+        }
+        result = &mut http => {
             handler.cancel_all().await;
             let _ = shutdown.send(true);
             serve.await?;
+            result?;
+        }
+        signal = tokio::signal::ctrl_c() => {
+            handler.cancel_all().await;
+            let _ = shutdown.send(true);
+            serve.await?;
+            if options.serve_ui { http.await?; }
+            signal?;
         }
     }
     Ok(())
