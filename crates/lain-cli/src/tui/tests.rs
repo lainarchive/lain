@@ -55,6 +55,103 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn token_deltas_join_and_whole_messages_replace_only_the_pending_block(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 1,
+            text: "no active block".into(),
+        },
+        Duration::ZERO,
+    );
+    assert!(state.tasks.is_empty());
+    state.composer = "hello".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    for chunk in ["", "Hello", " ", "世", "界"] {
+        state.event(
+            &Event::TokenDelta {
+                session_id: "s".into(),
+                turn: 1,
+                text: chunk.into(),
+            },
+            Duration::ZERO,
+        );
+    }
+    let text = |s: &State| {
+        s.active
+            .as_ref()
+            .and_then(|id| s.tasks.get(id))
+            .map(|t| t.text.clone())
+            .ok_or("missing task")
+    };
+    assert_eq!(text(&state)?, "Hello 世界");
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: "Hello 世界!".into(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(text(&state)?, "Hello 世界!");
+    state.follow = false;
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 2,
+            text: "Next".into(),
+        },
+        Duration::ZERO,
+    );
+    assert!(state.unseen);
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: "Final".into(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(text(&state)?, "Hello 世界!\n\nFinal");
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 3,
+            text: "discard".into(),
+        },
+        Duration::ZERO,
+    );
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: String::new(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(text(&state)?, "Hello 世界!\n\nFinal");
+    state.reject_turn("PROVIDER_ERROR", Duration::from_secs(1));
+    state.composer = "another turn".into();
+    state.key(key(KeyCode::Enter), Duration::from_secs(2));
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 1,
+            text: "new".into(),
+        },
+        Duration::from_secs(2),
+    );
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: "new answer".into(),
+        },
+        Duration::from_secs(2),
+    );
+    assert_eq!(text(&state)?, "new answer");
+    Ok(())
+}
+
+#[test]
 fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_launch()?;

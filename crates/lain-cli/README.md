@@ -12,8 +12,13 @@ lain tui demo
 lain daemon --endpoint /path/to/lain.sock --config /path/to/lain.json
 ```
 
-`lain ui` runs the daemon with the browser dashboard enabled. Build the
-[dashboard assets](../../dashboard/README.md#run-locally) before starting it.
+`lain daemon` and `lain ui` start IPC and the browser dashboard on `127.0.0.1:4040`.
+`daemon --no-ui` opts out; `--serve-ui` remains an accepted no-op alias.
+If the port is occupied, the daemon warns and continues with IPC only.
+Build the [dashboard assets](../../dashboard/README.md#run-locally) before browsing.
+The provider always streams, with or without the dashboard. TUI requests opt into
+token deltas and replace them with the completed message; line clients and older
+IPC requests retain whole-message output.
 
 `start`, `query`, `tui`, and `memory inspect` ping the daemon and spawn the same binary's
 internal `daemon` command if needed. Startup retries for about five seconds.
