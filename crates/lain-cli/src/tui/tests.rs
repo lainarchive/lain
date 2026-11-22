@@ -50,6 +50,31 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    assert!(state.launch());
+    assert!(state.tools.is_empty());
+    state.composer = "my own prompt".into();
+    assert!(matches!(
+        state.key(key(KeyCode::Enter), Duration::ZERO),
+        Effect::Submit { .. }
+    ));
+    state.seed_demo_turn(Duration::from_secs(2));
+    assert!(!state.launch());
+    assert_eq!(state.tools.len(), 3);
+    let task = state
+        .active
+        .as_ref()
+        .and_then(|id| state.tasks.get(id))
+        .ok_or("missing turn")?;
+    assert_eq!(task.prompt, "my own prompt");
+    assert!(task.text.contains("Canned demo turn"));
+    assert!(state.tools.iter().all(|tool| tool.node == task.node.id));
+    Ok(())
+}
+
+#[test]
 fn actual_demo_plugins_include_an_explicit_denied_plugin_permission(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_launch()?;

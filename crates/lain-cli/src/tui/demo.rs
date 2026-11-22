@@ -98,6 +98,7 @@ impl State {
         Ok(state)
     }
 
+    #[cfg(test)]
     pub fn demo_turn() -> Result<Self, Error> {
         let mut state = Self::demo_launch()?;
         state.composer = "Inspect the plugin workflow and prepare a safe Creator plan.".into();
@@ -105,10 +106,20 @@ impl State {
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             Duration::ZERO,
         );
+        state.seed_demo_turn(Duration::ZERO);
+        Ok(state)
+    }
+
+    pub fn seed_demo_turn(&mut self, now: Duration) {
+        let Some(node) = self.active.clone() else {
+            return;
+        };
+        let state = self;
         if let Some(task) = state.active.as_ref().and_then(|id| state.tasks.get_mut(id)) {
             task.model = state.model_chain.clone();
             task.tokens = 3400;
             task.text = concat!(
+                "**Canned demo turn — not a provider response to your prompt.**\n\n",
                 "**The Creator path is ready to review.**\n\n",
                 "- Browse manifests with `/plugins`.\n",
                 "- Build and test a proposal in `/creator`.\n",
@@ -127,17 +138,16 @@ impl State {
                 "demo_notes" => json!({"topic":"Creator catalog"}).to_string(),
                 _ => "{}".into(),
             };
-            state.tools.push(ToolBlock {node:"turn-1".into(),call_id:format!("demo-{index}"), name:name.into(),arguments,output:output.into(),
-                ok:finished.then_some(true),expanded:false,started:Duration::ZERO, ended:finished.then_some(Duration::from_millis(400))});
+            state.tools.push(ToolBlock {node:node.clone(),call_id:format!("demo-{index}"), name:name.into(),arguments,output:output.into(),
+                ok:finished.then_some(true),expanded:false,started:now, ended:finished.then_some(now+Duration::from_millis(400))});
         }
         state.notes.push(AdvisorNote {
-            turn: 1,
+            turn: state.next_turn,
             kind: AdvisorKind::Warning,
             text: "Scripts run unsandboxed as the host user; inspect source before testing.".into(),
         });
         state.plan =
             "[✓] Inspect plugin contracts\n[✓] Prepare Creator plan\n[●] Review catalog".into();
         state.rules = vec!["Require observed evidence before claiming verification.".into()];
-        Ok(state)
     }
 }
