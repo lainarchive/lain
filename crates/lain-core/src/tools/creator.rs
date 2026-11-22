@@ -1,7 +1,13 @@
-use std::sync::{Arc, Weak};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Weak},
+};
 
 use async_trait::async_trait;
-use lain_plugin::{DynamicPlugin, MAX_SCRIPT_BYTES, PluginManager, manifest::ScriptProposal};
+use lain_plugin::{
+    DynamicPlugin, MAX_SCRIPT_BYTES, PluginManager, ScriptExecution, manifest::ScriptProposal,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
@@ -88,29 +94,56 @@ fn parse(args: Value) -> Result<ScriptProposal, ToolError> {
     serde_json::from_value(args).map_err(|e| ToolError::Arguments(e.to_string()))
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreatorReport {
+    pub execution: ScriptExecution,
+    pub written_paths: Vec<PathBuf>,
+}
+
+async fn trial(
+    manager: &PluginManager,
+    proposal: ScriptProposal,
+) -> Result<(Arc<DynamicPlugin>, RegisteredTool, ScriptExecution), ToolError> {
+    let (plugin, entry, args) = prepare(manager, proposal)?;
+    entry
+        .validator
+        .validate(&args)
+        .map_err(|error| ToolError::Arguments(error.to_string()))?;
+    let execution = plugin.script_report(&entry.definition.name, args).await?;
+    Ok((plugin, entry, execution))
+}
+
 pub async fn test_tool_proposal(
     manager: &PluginManager,
     proposal: ScriptProposal,
-) -> Result<ToolOutput, ToolError> {
-    let (_, entry, test_args) = prepare(manager, proposal)?;
-    entry.dispatch(test_args).await
+) -> Result<CreatorReport, ToolError> {
+    let (_, _, execution) = trial(manager, proposal).await?;
+    Ok(CreatorReport {
+        execution,
+        written_paths: vec![],
+    })
 }
 
 pub async fn publish_tool_proposal(
     manager: &PluginManager,
     registry: &ToolRegistry,
     proposal: ScriptProposal,
-) -> Result<ToolOutput, ToolError> {
+) -> Result<CreatorReport, ToolError> {
     if proposal.name == UPDATE_SCRATCHPAD_TOOL_NAME || registry.contains(&proposal.name) {
         return Err(ToolError::Duplicate(proposal.name));
     }
-    let (plugin, entry, test_args) = prepare(manager, proposal)?;
-    let test = entry.dispatch(test_args).await?;
+    let (plugin, entry, execution) = trial(manager, proposal).await?;
+    if execution.error.is_some() {
+        return Ok(CreatorReport {
+            execution,
+            written_paths: vec![],
+        });
+    }
     let name = entry.definition.name.clone();
     let path = registry.register_batch(vec![entry], || Ok(manager.persist_script(&plugin)?))?;
-    Ok(ToolOutput {
-        content: json!({"name":name,"path":path,"test_result":test.content}).to_string(),
-        exit_code: Some(0),
+    Ok(CreatorReport {
+        execution,
+        written_paths: vec![path, PathBuf::from(format!(".lain/tools/tool-{name}.json"))],
     })
 }
 
@@ -133,7 +166,18 @@ impl Tool for CreateToolTool {
             .registry
             .upgrade()
             .ok_or_else(|| ToolError::Execution("tool registry closed".into()))?;
-        publish_tool_proposal(&self.manager, &registry, parse(args)?).await
+        let proposal = parse(args)?;
+        let name = proposal.name.clone();
+        let report = publish_tool_proposal(&self.manager, &registry, proposal).await?;
+        let result = report.execution.into_result()?;
+        let path = report
+            .written_paths
+            .first()
+            .ok_or_else(|| ToolError::Execution("missing published path".into()))?;
+        Ok(ToolOutput {
+            content: json!({"name":name,"path":path,"test_result":result.to_string()}).to_string(),
+            exit_code: Some(0),
+        })
     }
 }
 
@@ -152,6 +196,10 @@ impl Tool for TestToolTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
-        test_tool_proposal(&self.manager, parse(args)?).await
+        let report = test_tool_proposal(&self.manager, parse(args)?).await?;
+        Ok(ToolOutput {
+            content: report.execution.into_result()?.to_string(),
+            exit_code: Some(0),
+        })
     }
 }

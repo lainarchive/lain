@@ -20,7 +20,9 @@ mod creator;
 mod plugins;
 mod repo_map;
 
-pub use creator::{CreateToolTool, TestToolTool, publish_tool_proposal, test_tool_proposal};
+pub use creator::{
+    CreateToolTool, CreatorReport, TestToolTool, publish_tool_proposal, test_tool_proposal,
+};
 pub use repo_map::{REPO_MAP_TOOL_NAME, RepoMapTool};
 
 pub const UPDATE_SCRATCHPAD_TOOL_NAME: &str = "UpdateScratchpad";

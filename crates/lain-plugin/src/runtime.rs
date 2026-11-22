@@ -2,11 +2,12 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
+    process::{ExitStatus, Stdio},
+    time::{Duration, Instant},
 };
 
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -17,6 +18,37 @@ use crate::{manifest::ScriptInterpreter, PluginError};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const BYTE_CAP: usize = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScriptExecution {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_result"
+    )]
+    pub result: Option<Value>,
+    pub duration_ms: u64,
+    pub error: Option<String>,
+}
+
+fn present_result<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+impl ScriptExecution {
+    pub fn into_result(self) -> Result<Value, PluginError> {
+        match (self.result, self.error) {
+            (_, Some(error)) => Err(PluginError::Execution(error)),
+            (Some(result), None) => Ok(result),
+            (None, None) => Err(PluginError::Execution("missing script result".into())),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum Runtime {
@@ -39,25 +71,10 @@ impl Runtime {
         args: Value,
     ) -> Result<Value, PluginError> {
         match self {
-            Self::Script {
-                interpreter,
-                source,
-            } => {
-                let script = tempfile::tempdir()?;
-                let path = script
-                    .path()
-                    .join(format!("main.{}", interpreter.extension()));
-                write_script(&path, *interpreter, source)?;
-                let command = interpreter_command(*interpreter, &path)?;
-                let result = process(
-                    command,
-                    workspace,
-                    json!({"jsonrpc":"2.0","id":1,"method":name,"params":args}),
-                    TIMEOUT,
-                )
-                .await?;
-                decode_rpc(&result)
-            }
+            Self::Script { .. } => self
+                .script_report(workspace, name, args)
+                .await?
+                .into_result(),
             Self::Cli {
                 program,
                 args: fixed_args,
@@ -65,10 +82,58 @@ impl Runtime {
                 let mut command = clean_command(program);
                 command.args(fixed_args);
                 let result = process(command, workspace, args, TIMEOUT).await?;
+                result.check_status()?;
                 Ok(json!({"stdout":result.stdout,"stderr":result.stderr}))
             }
             Self::Webhook(url) => webhook(url, &args).await,
         }
+    }
+
+    pub(crate) async fn script_report(
+        &self,
+        workspace: &Path,
+        name: &str,
+        args: Value,
+    ) -> Result<ScriptExecution, PluginError> {
+        let Self::Script {
+            interpreter,
+            source,
+        } = self
+        else {
+            return Err(PluginError::Invalid("expected a script runtime".into()));
+        };
+        let started = Instant::now();
+        let script = tempfile::tempdir()?;
+        let path = script
+            .path()
+            .join(format!("main.{}", interpreter.extension()));
+        write_script(&path, *interpreter, source)?;
+        let command = interpreter_command(*interpreter, &path)?;
+        let output = process(
+            command,
+            workspace,
+            json!({"jsonrpc":"2.0","id":1,"method":name,"params":args}),
+            TIMEOUT,
+        )
+        .await?;
+        let status_error = match output.check_status() {
+            Ok(()) => None,
+            Err(PluginError::Execution(message)) => Some(message),
+            Err(error) => return Err(error),
+        };
+        let (result, error) = match decode_rpc(&output) {
+            Ok(result) => (Some(result), status_error),
+            Err(PluginError::Execution(message)) => (None, status_error.or(Some(message))),
+            Err(error) => return Err(error),
+        };
+        Ok(ScriptExecution {
+            exit_code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+            result,
+            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            error,
+        })
     }
 }
 
@@ -195,9 +260,22 @@ fn interpreter_command(
 }
 
 struct ProcessOutput {
+    status: ExitStatus,
     stdout: String,
     stderr: String,
     truncated: bool,
+}
+
+impl ProcessOutput {
+    fn check_status(&self) -> Result<(), PluginError> {
+        if self.status.success() {
+            return Ok(());
+        }
+        Err(PluginError::Execution(format!(
+            "process exited with {}; stderr: {}",
+            self.status, self.stderr
+        )))
+    }
 }
 
 async fn collect(mut stream: impl AsyncRead + Unpin, bytes: &mut Vec<u8>) -> io::Result<bool> {
@@ -351,12 +429,8 @@ async fn process(
     };
     tree.active = false;
     let stderr = format_output(&diagnostics, stderr_truncated);
-    if !status.success() {
-        return Err(PluginError::Execution(format!(
-            "process exited with {status}; stderr: {stderr}"
-        )));
-    }
     Ok(ProcessOutput {
+        status,
         stdout: format_output(&output, truncated),
         stderr,
         truncated,
