@@ -3,11 +3,13 @@ pub mod manifest;
 mod manager;
 mod runtime;
 
+use std::path::Path;
+
 use async_trait::async_trait;
 use manifest::{Capability, PluginManifest};
 use serde_json::Value;
 
-pub use manager::{PluginManager, MAX_SCRIPT_BYTES};
+pub use manager::{ManifestEntry, PluginManager, MAX_SCRIPT_BYTES};
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -27,6 +29,10 @@ pub enum PluginError {
 #[async_trait]
 pub trait Plugin: Send + Sync {
     fn manifest(&self) -> &PluginManifest;
+    /// Workspace-relative path, available after loading or successful persistence.
+    fn manifest_path(&self) -> Option<&Path> {
+        None
+    }
     async fn invoke(&self, tool: &str, arguments: Value) -> Result<Value, PluginError>;
 }
 

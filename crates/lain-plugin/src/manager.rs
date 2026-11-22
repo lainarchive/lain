@@ -2,11 +2,15 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
 };
 
 use async_trait::async_trait;
 use cap_std::{ambient_authority, fs::Dir};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
@@ -20,6 +24,12 @@ use crate::{
 
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestEntry {
+    pub path: PathBuf,
+    pub manifest: Result<PluginManifest, String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct PluginManager {
@@ -39,8 +49,42 @@ impl PluginManager {
         if !self.grants.contains(&Capability::ReadFs) {
             return Ok(Vec::new());
         }
-        let root = self.workspace()?;
         let mut plugins = Vec::new();
+        self.visit_manifests(|directory, path, manifest_path| {
+            let load = || {
+                let manifest = read_manifest(directory, path)?;
+                let plugin = self.prepare(manifest, |path| {
+                    read_file(directory, path, MAX_SCRIPT_BYTES)
+                })?;
+                plugin.manifest_path.get_or_init(|| manifest_path);
+                Ok::<_, PluginError>(plugin)
+            };
+            plugins.push(
+                load().map_err(|e| PluginError::Invalid(format!("{}: {e}", path.display())))?,
+            );
+            Ok(())
+        })?;
+        Ok(plugins)
+    }
+
+    /// Reads manifest metadata without loading backends or requiring execution grants.
+    pub fn inventory(&self) -> Result<Vec<ManifestEntry>, PluginError> {
+        let mut entries = Vec::new();
+        self.visit_manifests(|directory, path, manifest_path| {
+            entries.push(ManifestEntry {
+                path: manifest_path,
+                manifest: read_manifest(directory, path).map_err(|error| error.to_string()),
+            });
+            Ok(())
+        })?;
+        Ok(entries)
+    }
+
+    fn visit_manifests(
+        &self,
+        mut visit: impl FnMut(&Dir, &Path, PathBuf) -> Result<(), PluginError>,
+    ) -> Result<(), PluginError> {
+        let root = self.workspace()?;
         for path in [".lain/plugins", ".lain/tools"] {
             let directory = match root.open_dir(path) {
                 Ok(directory) => directory,
@@ -58,25 +102,11 @@ impl PluginManager {
                 }
             }
             entries.sort_unstable();
-            for path in entries {
-                let load = || {
-                    let bytes = read_file(&directory, &path, MAX_MANIFEST_BYTES)?;
-                    let manifest = match extension(&path) {
-                        Some("json") => serde_json::from_slice(&bytes)
-                            .map_err(|e| PluginError::Invalid(e.to_string())),
-                        _ => serde_yaml_ng::from_slice(&bytes)
-                            .map_err(|e| PluginError::Invalid(e.to_string())),
-                    }?;
-                    self.prepare(manifest, |path| {
-                        read_file(&directory, path, MAX_SCRIPT_BYTES)
-                    })
-                };
-                let plugin =
-                    load().map_err(|e| PluginError::Invalid(format!("{}: {e}", path.display())))?;
-                plugins.push(plugin);
+            for file in entries {
+                visit(&directory, &file, Path::new(path).join(&file))?;
             }
         }
-        Ok(plugins)
+        Ok(())
     }
 
     pub fn prepare_script(
@@ -137,6 +167,9 @@ impl PluginManager {
             let _ = tools.remove_file(path);
             return Err(e.into());
         }
+        plugin
+            .manifest_path
+            .get_or_init(|| Path::new(".lain/tools").join(manifest_name));
         Ok(Path::new(".lain/tools").join(path))
     }
 
@@ -235,6 +268,7 @@ impl PluginManager {
             manifest,
             runtimes,
             creator_workspace: None,
+            manifest_path: OnceLock::new(),
         })
     }
 }
@@ -245,6 +279,7 @@ pub struct DynamicPlugin {
     manifest: PluginManifest,
     runtimes: BTreeMap<String, Runtime>,
     creator_workspace: Option<PathBuf>,
+    manifest_path: OnceLock<PathBuf>,
 }
 
 impl DynamicPlugin {
@@ -269,6 +304,10 @@ impl Plugin for DynamicPlugin {
         &self.manifest
     }
 
+    fn manifest_path(&self) -> Option<&Path> {
+        self.manifest_path.get().map(PathBuf::as_path)
+    }
+
     async fn invoke(&self, tool: &str, arguments: Value) -> Result<Value, PluginError> {
         let runtime = self
             .runtimes
@@ -280,6 +319,17 @@ impl Plugin for DynamicPlugin {
 
 fn extension(path: &Path) -> Option<&str> {
     path.extension().and_then(std::ffi::OsStr::to_str)
+}
+
+fn read_manifest(directory: &Dir, path: &Path) -> Result<PluginManifest, PluginError> {
+    let bytes = read_file(directory, path, MAX_MANIFEST_BYTES)?;
+    match extension(path) {
+        Some("json") => {
+            serde_json::from_slice(&bytes).map_err(|error| PluginError::Invalid(error.to_string()))
+        }
+        _ => serde_yaml_ng::from_slice(&bytes)
+            .map_err(|error| PluginError::Invalid(error.to_string())),
+    }
 }
 
 fn read_file(dir: &Dir, path: &Path, limit: usize) -> Result<Vec<u8>, PluginError> {
