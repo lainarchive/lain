@@ -470,7 +470,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             Paragraph::new(Text::from(vec![
                 Line::from(modes),
                 Line::styled(
-                    "PgUp/PgDn lanes/tool · Shift-PgUp/PgDn plan · Ctrl-PgUp/PgDn rules",
+                    "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules",
                     Style::default().fg(MUTED),
                 ),
                 Line::styled(state.notice.as_str(), Style::default().fg(AMBER)),
