@@ -246,9 +246,12 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     let selected = rows.iter().position(|(selection, _)| {
         selection.is_some() && selection.as_ref() == state.selected.as_ref()
     });
-    let offset = selected.map_or(0, |i| {
-        i.saturating_sub(usize::from(inner.height).saturating_sub(2))
-    });
+    let offset = selected
+        .map_or(0, |i| {
+            i.saturating_sub(usize::from(inner.height).saturating_sub(2))
+        })
+        .saturating_add(state.lane_scroll)
+        .min(rows.len().saturating_sub(usize::from(inner.height)));
     let lines: Vec<Line<'_>> = rows
         .into_iter()
         .enumerate()

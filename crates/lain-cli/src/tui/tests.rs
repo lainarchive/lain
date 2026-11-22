@@ -172,6 +172,32 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn lane_paging_reaches_long_answers_and_selection_resets_scroll(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.tasks.get_mut("1").ok_or("no sample task")?.text = (0..100)
+        .map(|i| format!("answer {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!render(&state)?.contains("answer 99"));
+    for _ in 0..30 {
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+    }
+    assert!(render(&state)?.contains("answer 99"));
+    for _ in 0..30 {
+        state.key(key(KeyCode::PageUp), Duration::ZERO);
+    }
+    assert!(render(&state)?.contains("answer 00"));
+    for _ in 0..30 {
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+    }
+    state.key(key(KeyCode::Down), Duration::ZERO);
+    assert!(render(&state)?.contains("answer 00"));
+    assert!(!render(&state)?.contains("answer 99"));
+    Ok(())
+}
+
+#[test]
 fn telemetry_events_completion_and_folding() -> Result<(), Box<dyn std::error::Error>> {
     use lain_ipc::Event;
     let mut state = State::new(
