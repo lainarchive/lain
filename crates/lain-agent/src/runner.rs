@@ -86,9 +86,12 @@ impl Canceller {
     }
 }
 
+type ToolGuard = dyn Fn(&ToolCall) -> Result<(), String> + Send + Sync;
+
 pub struct AgentRunner {
     streaming: bool,
     read_only: bool,
+    tool_guard: Option<Arc<ToolGuard>>,
     control: crate::control::AgentControl,
     cancel: Canceller,
     config: AgentConfig,
@@ -165,6 +168,7 @@ impl AgentRunner {
         Ok(Self {
             streaming: false,
             read_only: false,
+            tool_guard: None,
             control: crate::control::AgentControl::default(),
             config,
             provider,
@@ -205,6 +209,13 @@ impl AgentRunner {
 
     pub fn set_read_only(&mut self, enabled: bool) {
         self.read_only = enabled;
+    }
+
+    pub fn set_tool_guard(
+        &mut self,
+        guard: impl Fn(&ToolCall) -> Result<(), String> + Send + Sync + 'static,
+    ) {
+        self.tool_guard = Some(Arc::new(guard));
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
@@ -769,6 +780,15 @@ impl AgentRunner {
                     ToolOutcome::Failed {
                         code: "READ_ONLY_MODE".into(),
                         message: "Architect/Ask only allow built-in read tools".into(),
+                    }
+                } else if let Err(message) = if scratchpad {
+                    Ok(())
+                } else {
+                    self.tool_guard.as_ref().map_or(Ok(()), |guard| guard(call))
+                } {
+                    ToolOutcome::Failed {
+                        code: "TOOL_GUARD_DENIED".into(),
+                        message,
                     }
                 } else {
                     if guarded && self.control.require_approval(&call.id) {

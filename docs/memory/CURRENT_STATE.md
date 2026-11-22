@@ -1,5 +1,27 @@
 # Current Project State
 
+## Launch integration: offline evidence-loop dogfood
+
+- `tests/dogfood_evidence_loop.rs` commits a dependency-free broken crate, discovers `add` and its one-based
+  declaration line through lain-context's Rust AST (comment/string decoys do not match), and creates an isolated
+  harness worktree on `fix/add-sign`. The original repository's source and HEAD remain unchanged.
+- The real AgentRunner consumes scripted provider calls. Its new optional synchronous `set_tool_guard` hook
+  invokes the harness ScopeGuard before approval/dispatch; the test's path-only write_file fixture executes once.
+  Cargo.toml and parent-directory writes produce TOOL_GUARD_DENIED without executing the writer. Existing daemon
+  callers do not automatically install a scope policy; this adds the integration hook, not a new sandbox.
+- Real `cargo test --offline --lib --color never` runs before and after the fix with a per-test temporary target
+  directory. Failed observations cannot verify a prepared StepReport; fresh successful observations do. Explicit
+  worktree removal and original-repository isolation are asserted. Local dogfood runtime: **0.68 s**.
+- TDD first failed on the missing AST-location and runner-guard APIs. Final workspace tests: **264 passed
+  (35 suites, 11.20 s)**; Clippy, fmt, repository hygiene, its eight-check self-test and added-line length checks passed.
+  Root dev dependencies and their hygiene allowlist were updated; no new third-party packages were introduced.
+- Windows standard library target installed successfully. The requested workspace cross-check is **blocked** in
+  ring's native build: `ToolNotFound: failed to find tool "x86_64-w64-mingw32-gcc"`. Environment diagnosis confirmed
+  Cargo is loaded and no MinGW compiler/package is installed. This requires a cross-C compiler even for cargo check;
+  no final executable linker was invoked. MinGW was not installed under the brief's link-only installation condition.
+- Next: allow installing `gcc-mingw-w64-x86-64` to unblock native dependencies, then repeat the Windows workspace
+  check. Windows Rust compilation/runtime remain unverified. Commit locally; do not push.
+
 ## Launch integration: CLI packaging and diagnostics
 
 - Root is now package `lain` plus workspace; `src/main.rs` calls public `lain_cli::run()`. The former binary logic
