@@ -134,6 +134,34 @@ async fn lists_inventory_and_executes_shared_creator_paths() -> TestResult {
 }
 
 #[tokio::test]
+async fn cancelled_proposals_do_not_publish_or_poison_the_next_proposal() -> TestResult {
+    timeout(Duration::from_secs(20),async {
+        let directory=tempfile::tempdir()?;
+        let (mut client,stop,task)=serve(&directory,true,true).await?;
+        client.request(Command::StartSession {session_id:Some("s".into())}).await?;
+        for publish in [false,true] {
+            let mut slow=proposal()?;
+            slow.source="import pathlib,time\npathlib.Path('started').touch()\ntime.sleep(10)\nprint('{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}')".into();
+            let command=if publish {Command::PublishToolProposal {session_id:"s".into(),mode:SessionMode::Code,proposal:slow}} else {Command::TestToolProposal {session_id:"s".into(),proposal:slow}};
+            let request=client.send(command).await?;
+            while !directory.path().join("started").exists() {tokio::task::yield_now().await;}
+            let cancel=client.send(Command::CancelTurn {session_id:"s".into()}).await?;
+            let mut cancelled=false;let mut acknowledged=false;
+            while !cancelled || !acknowledged {
+                let (id,event)=client.recv().await?.ok_or("closed")?;
+                if id==request {assert!(matches!(event,Event::Error {ref code,..} if code=="TOOL_EXECUTION_FAILED"));cancelled=true;}
+                if id==cancel {acknowledged=true;}
+            }
+            assert!(!directory.path().join(".lain/tools/tool-generated.json").exists());
+            std::fs::remove_file(directory.path().join("started"))?;
+            assert!(matches!(client.request(Command::TestToolProposal {session_id:"s".into(),proposal:proposal()?}).await?.as_slice(),[Event::ToolProposalResult {..}]));
+        }
+        client.close().await?;stop.send(true)?;task.await??;
+        Ok::<(),Box<dyn std::error::Error>>(())
+    }).await?
+}
+
+#[tokio::test]
 async fn creator_refusals_do_not_execute_or_write() -> TestResult {
     timeout(Duration::from_secs(20), async {
         for (enabled, grants) in [(false, true), (true, false), (true, true)] {
