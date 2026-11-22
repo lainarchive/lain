@@ -173,6 +173,29 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn whole_assistant_messages_are_separated() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.composer = "answer me".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    for text in ["Commentary", "", "Final answer"] {
+        state.event(
+            &Event::StreamToken {
+                session_id: "s".into(),
+                text: text.into(),
+            },
+            Duration::ZERO,
+        );
+    }
+    let task = state
+        .active
+        .as_ref()
+        .and_then(|id| state.tasks.get(id))
+        .ok_or("missing active turn")?;
+    assert_eq!(task.text, "Commentary\n\nFinal answer");
+    Ok(())
+}
+
+#[test]
 fn busy_steering_retains_the_draft_without_overwriting_edits(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
