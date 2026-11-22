@@ -5,7 +5,7 @@ import type {
   PluginInfo,
   StatusResponse,
 } from "./contracts";
-import { applyEvent, emptyGraph } from "./graph";
+import { applyEvent, emptyGraph } from "./graph.ts";
 
 export function exampleRun() {
   const events: AgentEvent[] = [

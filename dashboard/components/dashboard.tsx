@@ -73,7 +73,7 @@ function TraceCard({ data, selected }: NodeProps<FlowNode>) {
   );
 }
 const nodeTypes = { trace: TraceCard };
-const fitViewOptions = { padding: 0.12, minZoom: 0.85, maxZoom: 1 };
+const fitViewOptions = { padding: 0.08, minZoom: 0.6, maxZoom: 1 };
 function useResource<K extends keyof BridgeResources>(cache: BridgeCache, key: K) {
   return useSyncExternalStore(
     useCallback((listener: () => void) => cache.subscribe(key, listener), [cache, key]),
