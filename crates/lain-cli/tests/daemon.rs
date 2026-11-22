@@ -93,6 +93,48 @@ struct ScriptedProvider {
     pending: bool,
 }
 
+#[tokio::test]
+async fn rules_inspection_omits_oversized_transcripts() -> TestResult {
+    timeout(Duration::from_secs(10), async {
+        let directory = tempfile::tempdir()?;
+        let endpoint = endpoint(&directory);
+        let memory = memory(&directory)?;
+        {
+            let mut store = memory.lock().map_err(|_| "poisoned memory")?;
+            for i in 0..2 {
+                store.remember(MemoryInput {
+                    title: format!("long episode {i}"),
+                    content: "x".repeat(600_000),
+                    trust: Some("untrusted".into()),
+                    source: "lain-agent:prior".into(),
+                    ..MemoryInput::default()
+                })?;
+            }
+            assert!(store.recent_episodes(None, 20)?.iter().map(|r| r.content.len()).sum::<usize>() > lain_ipc::MAX_FRAME_SIZE);
+        }
+        let handler = Arc::new(DaemonHandler::new(memory, Arc::new(ConfigFactory::new(
+            directory.path().join("missing.json"), directory.path(),
+        ))));
+        let (stop, receiver) = watch::channel(false);
+        let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
+        let mut client = IpcClient::connect(&endpoint).await?;
+        let command = serde_json::from_value(serde_json::json!({"type":"inspect_rules", "session_id":null, "limit":20}))?;
+        let events = client.request(command).await?;
+        assert!(matches!(events.as_slice(), [Event::Memory { episodic, procedural }]
+            if episodic.is_empty() && procedural == &["Check fruit before answering."]));
+        let command = serde_json::from_value(serde_json::json!({"type":"inspect_rules", "session_id":"missing", "limit":20}))?;
+        assert!(matches!(client.request(command).await?.as_slice(), [Event::Memory { episodic, procedural }]
+            if episodic.is_empty() && procedural.is_empty()));
+        let command = serde_json::from_value(serde_json::json!({"type":"inspect_rules", "session_id":null, "limit":0}))?;
+        assert!(matches!(client.request(command).await?.as_slice(), [Event::Error { .. }]));
+        assert!(matches!(client.request(Command::Ping).await?.as_slice(), [Event::Pong { .. }]));
+        client.close().await?;
+        stop.send(true)?;
+        server.await??;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }).await?
+}
+
 #[async_trait]
 impl ModelProvider for ScriptedProvider {
     async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, CoreError> {
@@ -122,6 +164,29 @@ impl ModelProvider for ScriptedProvider {
 }
 
 struct ScriptedFactory(Arc<Notify>);
+
+#[tokio::test]
+async fn read_only_ipc_and_telemetry() -> TestResult {
+    timeout(Duration::from_secs(10), async {
+        let directory = tempfile::tempdir()?;
+        let endpoint = endpoint(&directory);
+        let handler = Arc::new(DaemonHandler::new(memory(&directory)?, Arc::new(ScriptedFactory(Arc::new(Notify::new())))));
+        let (stop, receiver) = watch::channel(false);
+        let server = tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler, receiver));
+        let mut client = IpcClient::connect(&endpoint).await?;
+        client.request(Command::StartSession { session_id: Some("readonly".into()) }).await?;
+        assert!(matches!(client.request(Command::GetTelemetry { session_id: "readonly".into() }).await?.as_slice(),
+            [Event::Telemetry { model, tokens_used: 0, .. }] if model == "scripted"));
+        let events = client.request(Command::SendReadOnlyMessage { session_id: "readonly".into(), text: "Plan using memory".into() }).await?;
+        assert!(events.iter().any(|event| matches!(event, Event::ToolFinished { name, ok: true, .. } if name == "memory_read")));
+        assert!(events.iter().any(|event| matches!(event, Event::SessionCompleted { reason, .. } if reason == "completed")));
+        assert!(matches!(client.request(Command::GetTelemetry { session_id: "missing".into() }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_NOT_FOUND"));
+        client.close().await?;
+        stop.send(true)?;
+        server.await??;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }).await?
+}
 
 #[tokio::test]
 async fn dashboard_interventions_validate_steering_and_idle_cancel_preserves_session() -> TestResult

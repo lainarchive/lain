@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 cap-std = "4.0.3"
+sha2 = "0.10"
 thiserror = "2"
 tiktoken-rs = "0.12"
 tree-sitter = "0.25.10"
