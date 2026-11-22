@@ -84,6 +84,7 @@ impl Canceller {
 
 pub struct AgentRunner {
     streaming: bool,
+    read_only: bool,
     control: crate::control::AgentControl,
     cancel: Canceller,
     config: AgentConfig,
@@ -159,6 +160,7 @@ impl AgentRunner {
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Ok(Self {
             streaming: false,
+            read_only: false,
             control: crate::control::AgentControl::default(),
             config,
             provider,
@@ -195,6 +197,10 @@ impl AgentRunner {
 
     pub fn set_streaming(&mut self, enabled: bool) {
         self.streaming = enabled;
+    }
+
+    pub fn set_read_only(&mut self, enabled: bool) {
+        self.read_only = enabled;
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
@@ -608,6 +614,9 @@ impl AgentRunner {
         }
         let hermes = self.config.tool_call_mode == ToolCallMode::HermesTags;
         let mut tool_definitions = self.tools.definitions();
+        if self.read_only {
+            tool_definitions.retain(|tool| self.tools.is_builtin_read_only(&tool.name));
+        }
         tool_definitions.push(self.scratchpad_definition.clone());
         if hermes {
             prefix.push(hermes::instructions(&tool_definitions));
@@ -768,6 +777,14 @@ impl AgentRunner {
                 } else if admission == Ok(false) {
                     ToolOutcome::Skipped {
                         reason: "Denied by operator".into(),
+                    }
+                } else if self.read_only
+                    && !scratchpad
+                    && !self.tools.is_builtin_read_only(&call.name)
+                {
+                    ToolOutcome::Failed {
+                        code: "READ_ONLY_MODE".into(),
+                        message: "Architect/Ask only allow built-in read tools".into(),
                     }
                 } else if scratchpad {
                     let outcome = self.update_scratchpad(call).await?;
@@ -1424,6 +1441,42 @@ mod tests {
 
     fn drain(rx: &mut broadcast::Receiver<AgentEvent>) -> Vec<AgentEvent> {
         std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    #[tokio::test]
+    async fn read_only_turns_filter_schemas_and_deny_unadvertised_writes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let store = Arc::new(Mutex::new(MemoryStore::open(":memory:")?));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(lain_core::tools::RepoMapTool::new(root.path())))?;
+        tools.register(Arc::new(StubTool {
+            name: "write_file",
+            result: Ok(None),
+        }))?;
+        let mut response = calls(None, &["write_file", "repo_map"])?;
+        for call in &mut response.message.tool_calls {
+            call.arguments = json!({});
+        }
+        let provider = ScriptedProvider::new(vec![Ok(response), text("Done")]);
+        let mut agent = AgentRunner::new(config(), provider, Arc::new(tools), store, "read-only")?;
+        agent.set_read_only(true);
+        let request = agent.request(None)?;
+        assert!(request.tools.iter().any(|t| t.name == "repo_map"));
+        assert!(!request.tools.iter().any(|t| t.name == "write_file"));
+        let mut events = agent.subscribe();
+        agent.run("Plan the workspace").await?;
+        let observed = drain(&mut events);
+        assert!(observed.iter().any(|e| matches!(e, AgentEvent::ToolCompleted { name, outcome: ToolOutcome::Failed { code, .. }, .. }
+            if name == "write_file" && code == "READ_ONLY_MODE")));
+        assert!(observed.iter().any(|e| matches!(e, AgentEvent::ToolCompleted { name, outcome: ToolOutcome::Succeeded(_), .. } if name == "repo_map")));
+        agent.set_read_only(false);
+        assert!(agent
+            .request(None)?
+            .tools
+            .iter()
+            .any(|t| t.name == "write_file"));
+        Ok(())
     }
 
     fn kinds(events: &[AgentEvent]) -> Vec<&'static str> {

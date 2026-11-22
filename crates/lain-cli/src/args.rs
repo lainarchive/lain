@@ -11,6 +11,7 @@ Usage:
   lain query \"prompt\"
   lain memory inspect [--limit N] [--session ID]
   lain ui                             Dashboard at http://127.0.0.1:4040
+  lain tui [demo]                      Terminal lane view (demo: offline sample)
   lain daemon [--serve-ui]             (internal)
 
 Options (before or after the command):
@@ -32,6 +33,7 @@ pub enum Action {
     Help,
     Daemon,
     Start,
+    Tui { demo: bool },
     Query(String),
     Memory { limit: u32, session: Option<String> },
 }
@@ -114,6 +116,8 @@ impl Options {
                     Action::Daemon
                 }
                 ["start"] => Action::Start,
+                ["tui"] => Action::Tui { demo: false },
+                ["tui", "demo"] => Action::Tui { demo: true },
                 ["query", prompt] if !prompt.trim().is_empty() => Action::Query((*prompt).into()),
                 ["memory", "inspect"] => Action::Memory {
                     limit: limit.unwrap_or(20),
@@ -165,6 +169,8 @@ mod tests {
         assert_eq!(parse(&["--help"])?.action, Action::Help);
         assert_eq!(parse(&["daemon"])?.action, Action::Daemon);
         assert_eq!(parse(&["start"])?.action, Action::Start);
+        assert_eq!(parse(&["tui"])?.action, Action::Tui { demo: false });
+        assert_eq!(parse(&["tui", "demo"])?.action, Action::Tui { demo: true });
         let args = parse(&[
             "--endpoint",
             "custom",
