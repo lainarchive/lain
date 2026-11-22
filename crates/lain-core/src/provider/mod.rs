@@ -164,6 +164,7 @@ pub struct Usage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
+    Usage(Usage),
     Text(String),
     ToolCall {
         index: usize,
@@ -223,10 +224,13 @@ impl OpenAiCompatibleProvider {
             #[serde(flatten)]
             request: CompletionRequest,
             stream: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            stream_options: Option<Value>,
         }
         let body = WireRequest {
             request: req,
             stream,
+            stream_options: stream.then(|| serde_json::json!({"include_usage":true})),
         };
         let mut request = self
             .client
@@ -264,6 +268,7 @@ struct Choice {
 #[derive(Deserialize)]
 struct StreamEnvelope {
     choices: Vec<StreamChoice>,
+    usage: Option<Usage>,
 }
 #[derive(Deserialize)]
 struct StreamChoice {
@@ -291,6 +296,9 @@ struct FunctionDelta {
 fn parse_event(data: &str) -> Result<Vec<Token>, CoreError> {
     let event: StreamEnvelope = serde_json::from_str(data)?;
     let mut tokens = Vec::new();
+    if let Some(usage) = event.usage {
+        tokens.push(Token::Usage(usage));
+    }
     for choice in event.choices {
         if let Some(text) = choice.delta.content {
             tokens.push(Token::Text(text));

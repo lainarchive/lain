@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+ts-rs = { version = "10.1", features = ["serde-json-impl", "no-serde-warnings"] }
 async-trait = "0.1"
 async-stream = "0.3"
 futures = "0.3"

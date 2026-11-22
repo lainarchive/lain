@@ -58,14 +58,14 @@ impl ToolError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
 pub struct ToolOutput {
     pub content: String,
     pub exit_code: Option<i32>,
 }
 
 #[async_trait]
-pub trait Tool: Send + Sync {
+pub trait Tool: Send + Sync + std::any::Any {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
@@ -160,6 +160,18 @@ impl ToolRegistry {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .contains_key(name)
+    }
+
+    pub fn is_builtin_read_only(&self, name: &str) -> bool {
+        self.tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .is_some_and(|entry| {
+                let identity = entry.tool.as_ref().type_id();
+                identity == std::any::TypeId::of::<MemoryReadTool>()
+                    || identity == std::any::TypeId::of::<RepoMapTool>()
+            })
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
