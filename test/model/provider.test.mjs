@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-4 tests: the provider loader resolves registered models and refuses the rest
- * @requires Chief-of-Staff
- */
+// The provider loader resolves registered models and refuses the rest
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';

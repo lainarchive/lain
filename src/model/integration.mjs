@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  Mock model integration for M-2: one decided, selected, invoked call
- * @requires Chief-of-Staff
- */
+// Mock model integration for M-2: one decided, selected, invoked call
 import { StoreError } from '../core/errors.mjs';
 import { requireRecord, requireString } from '../core/validate.mjs';
 import { decide, permitsExecution } from '../policy/decide.mjs';

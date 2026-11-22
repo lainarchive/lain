@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  The task event bus — the one channel Core events cross to reach live observers (M-9)
- * @requires Chief-of-Staff
- */
+// The task event bus — the one channel Core events cross to reach live observers
 import { EventEmitter } from 'node:events';
 
 /**
@@ -20,13 +16,10 @@ import { EventEmitter } from 'node:events';
  * @property {string} [causation_id]
  */
 
-/** The one event name the bus publishes task records under. */
 export const TASK_EVENT = 'task.event';
 
 /**
- * A fresh bus. One emitter per process keeps backpressure honest: a listener
- * that cannot keep up slows the publisher visibly instead of hiding behind a
- * queue it does not own.
+ * Listeners run synchronously, so a slow observer slows its publisher.
  * @returns {EventEmitter}
  */
 export function createEventBus() {
@@ -37,7 +30,6 @@ export function createEventBus() {
   return bus;
 }
 
-/** The process-wide bus. Core publishes; the TUI subscribes. */
 export const eventBus = createEventBus();
 
 /**

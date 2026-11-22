@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-5 approval ledger: the durable record of human decisions, gated like everything else
- * @requires Chief-of-Staff
- */
+// Approval ledger: the durable record of human decisions, gated like everything else
 import { StoreError } from '../core/errors.mjs';
 import { decide, permitsExecution } from '../policy/decide.mjs';
 import { buildContext, DEFAULT_RULES } from '../policy/rules.mjs';

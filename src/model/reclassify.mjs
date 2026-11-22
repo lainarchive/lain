@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-4 re-classification: an authorized, logged, in-memory override of a model's effect class
- * @requires Chief-of-Staff
- */
+// Re-classification: an authorized, logged, in-memory override of a model's effect class
 import { StoreError } from '../core/errors.mjs';
 import { decide, permitsExecution } from '../policy/decide.mjs';
 import { EFFECT_CLASSES } from '../policy/arms.mjs';

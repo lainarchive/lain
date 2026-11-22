@@ -1,6 +1,4 @@
-/**
- * @purpose  `lain biz <create|validate|approve|show|list>` — Phase 8 Business Intelligence CLI
- */
+// `lain biz <create|validate|approve|show|list>` — Phase 8 Business Intelligence CLI
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

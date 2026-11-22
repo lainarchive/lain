@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  Model selection stub for M-2: one local mock, zero cost
- * @requires Chief-of-Staff
- */
+// Model selection stub for M-2: one local mock, zero cost
 
 /**
  * Round-robin selection collapses to a single entry while the registry holds

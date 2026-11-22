@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-12 tests: Windows DPAPI credential store, precedence, validation, and CLI set/list/delete
- * @requires Chief-of-Staff
- */
+// Windows DPAPI credential store, precedence, validation, and CLI set/list/delete
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

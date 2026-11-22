@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model approval-record` — write or read the human-approval ledger (M-5)
- * @requires Chief-of-Staff
- */
+// `lain model approval-record` — write or read the human-approval ledger
 import { StoreError } from '../../core/errors.mjs';
 import { ModelPolicyError } from '../../model/integration.mjs';
 import { listApprovals, recordApproval } from '../../model/approvalLedger.mjs';

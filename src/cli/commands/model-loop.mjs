@@ -1,6 +1,4 @@
-/**
- * @purpose  `lain model loop --task <file.json>` — M-10 bounded agent loop CLI entry point
- */
+// `lain model loop --task <file.json>` — M-10 bounded agent loop CLI entry point
 import { existsSync, readFileSync } from 'node:fs';
 import { runModelLoop } from '../../agent/loop.mjs';
 import { createPersistentLedger } from '../../model/persistentLedger.mjs';

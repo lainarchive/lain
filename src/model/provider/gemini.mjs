@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-5 Gemini provider stub + M-7 live transport: the stub pins the adapter contract, queryLive is the real free-tier channel
- * @requires Chief-of-Staff
- */
+// Gemini provider stub + M-7 live transport: the stub pins the adapter contract, queryLive is the real free-tier channel
 /**
  * Fixed mock response — same contract as the OpenAI stub, different marker,
  * so a test can tell the two adapters apart. Reaches nothing: no fetch, no

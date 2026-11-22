@@ -1,5 +1,8 @@
 # 07 — Implementation Sequence
 
+Historical plan. Agent instructions and session-memory files cited below are no longer
+distributed. See current implementation docs and `DECISIONS.md` for guidance.
+
 **Status:** Proposed plan. **No step in this document has been executed.** Every "files expected" entry describes a *future authorized implementation*, not work done.
 **Base revision:** `36a3e18003ad41171be96d28cfbbda5b5304441c`
 **Labels:** ESR · UAP · OQ · EUR · M/D/P as established.

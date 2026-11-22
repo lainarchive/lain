@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-5 tests: the approval ledger is gated, shape-checked, and never rewrites history
- * @requires Chief-of-Staff
- */
+// The approval ledger is gated, shape-checked, and never rewrites history
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { listApprovals, recordApproval, resetApprovals } from '../../src/model/approvalLedger.mjs';

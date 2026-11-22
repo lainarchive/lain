@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-3 human-approval gate: an external model invocation stops at A5
- * @requires Chief-of-Staff
- */
+// Human-approval gate: an external model invocation stops at A5
 import { StoreError } from '../core/errors.mjs';
 import { requireString } from '../core/validate.mjs';
 import { decide, permitsExecution } from '../policy/decide.mjs';

@@ -315,8 +315,8 @@ The C flag selects Windows 7 SDK declarations for older MinGW headers, which oth
 `GetTickCount64` from bundled SQLite. `cargo check` still compiles native dependencies. These checks
 cover Windows source and test compilation; native Windows runtime remains unverified.
 
-See [AGENTS.md](AGENTS.md) before editing. [Current state](docs/memory/CURRENT_STATE.md) records
-verification and remaining work; [DECISIONS.md](DECISIONS.md) separates approved decisions from the
+See [code style](docs/implementation/code-style.md) before editing.
+[DECISIONS.md](DECISIONS.md) separates approved decisions from the
 [roadmap](IMPLEMENTATION_ROADMAP.md).
 
 ## Acknowledgments

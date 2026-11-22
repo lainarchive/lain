@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-7/M-12 credential loader: env, Windows DPAPI store, .env fallback, masked everywhere
- * @requires Chief-of-Staff
- */
+// Credential loader: env, Windows DPAPI store, .env fallback, masked everywhere
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';

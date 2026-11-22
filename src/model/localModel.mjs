@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  Zero-cost mock model for M-2
- * @requires Chief-of-Staff
- */
+// Zero-cost mock model for M-2
 
 /**
  * The mock stands in for a provider until M-3. It answers with a constant and

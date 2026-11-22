@@ -1,6 +1,4 @@
-/**
- * @purpose  `lain delegate <list|run>` — Phase 5 bounded specialist delegation CLI
- */
+// `lain delegate <list|run>` — Phase 5 bounded specialist delegation CLI
 import { readFileSync } from 'node:fs';
 import { SPECIALISTS, delegateTask } from '../../agent/delegate.mjs';
 

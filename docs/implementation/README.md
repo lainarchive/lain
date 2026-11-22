@@ -13,7 +13,6 @@ separate from the canonical project documents at the repository root:
 | `open-issues.md` | Known limitations, unresolved guarantees and the decisions they need. |
 | [`memory-rust.md`](memory-rust.md) | Rust SQLite memory store. |
 | [`../../RESOURCE_BUDGET.md`](../../RESOURCE_BUDGET.md) | Measured hardware, configured limits and the admission rules that use them. |
-| [`../memory/CURRENT_STATE.md`](../memory/CURRENT_STATE.md) | Recent implementation and historical milestone records. |
 
 The canonical documents at the repository root remain the source of truth for
 architecture and decisions. If an implementation document and a canonical
