@@ -16,7 +16,7 @@ use super::{
     theme::*,
 };
 
-fn color(phase: Phase) -> Color {
+pub(super) fn color(phase: Phase) -> Color {
     match phase {
         Phase::Running => BLUE,
         Phase::Failed => RED,
@@ -33,12 +33,26 @@ fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
         .style(Style::default().bg(PANEL).fg(TEXT))
 }
 
+fn has_banner(state: &State, now: Duration) -> bool {
+    let notice = state.toast_text(now).unwrap_or(&state.notice);
+    state.velocity(now) > 0.0
+        || state.cost.is_some_and(|c| c.is_finite() && c >= 0.0)
+        || (!notice.is_empty() && !notice.starts_with("Ready") && notice != "New session")
+}
+
 fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     let cost = state
         .cost
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .map_or_else(|| "cost unknown".into(), |cost| format!("cost ${cost:.4}"));
-    let telemetry = format!("{:.1} tok/s · {cost}", state.velocity(now));
+        .map(|cost| format!("cost ${cost:.4}"));
+    let mut telemetry = vec![];
+    if state.velocity(now) > 0.0 {
+        telemetry.push(format!("{:.1} tok/s", state.velocity(now)));
+    }
+    if let Some(cost) = cost {
+        telemetry.push(cost);
+    }
+    let telemetry = telemetry.join(" · ");
     let notice_width = usize::from(area.width).saturating_sub(telemetry.len() + 3);
     let notice =
         super::launch_view::fit(state.toast_text(now).unwrap_or(&state.notice), notice_width);
@@ -383,7 +397,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     }
     let vertical = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(u16::from(has_banner(state, now))),
         Constraint::Min(3),
         Constraint::Length(if state.screen == Screen::Session {
             3
@@ -407,26 +421,66 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                 .slash()
                 .map(|(commands, _)| (commands.len().clamp(1, 4) + 2) as u16)
                 .unwrap_or(0);
-            let parts =
-                Layout::vertical([Constraint::Min(3), Constraint::Length(completion_height)])
-                    .split(*area);
+            let parts = Layout::vertical([
+                Constraint::Min(3),
+                Constraint::Length(completion_height),
+                Constraint::Length(if state.running { 2 } else { 0 }),
+            ])
+            .split(*area);
             let area = parts.first().unwrap_or(area);
             if completion_height > 0 {
                 if let Some(completion) = parts.get(1) {
                     shell_view::completion(frame, *completion, state);
                 }
             }
+            if state.running {
+                if let Some(working) = parts.get(2) {
+                    super::transcript::working(frame, *working, state, now);
+                }
+            }
             if state.launch() {
                 super::launch_view::draw(frame, *area, state);
             } else {
-                let main =
-                    Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
-                        .split(*area);
-                if let Some(area) = main.get(1) {
-                    scroll = drawer(frame, *area, state);
+                let dag = state.dag_drawer.unwrap_or(frame.area().width >= 160);
+                let plan = state.plan_drawer.unwrap_or(frame.area().width >= 160);
+                let main = Layout::horizontal([
+                    Constraint::Min(40),
+                    Constraint::Length(if dag || plan {
+                        (area.width / 3).clamp(40, 64)
+                    } else {
+                        0
+                    }),
+                ])
+                .split(*area);
+                if let Some(right) = main.get(1) {
+                    let sections = Layout::vertical([
+                        Constraint::Percentage(if dag {
+                            if plan {
+                                40
+                            } else {
+                                100
+                            }
+                        } else {
+                            0
+                        }),
+                        Constraint::Min(0),
+                    ])
+                    .split(*right);
+                    if plan {
+                        if let Some(area) = sections.get(1) {
+                            scroll = drawer(frame, *area, state);
+                        }
+                    }
+                    if dag {
+                        if let Some(area) = sections.first() {
+                            (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+                        }
+                    }
                 }
+                scroll.dag_visible = dag;
+                scroll.plan_visible = plan;
                 if let Some(area) = main.first() {
-                    (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+                    super::transcript::draw(frame, *area, state, now, &mut scroll);
                 }
             }
         } else if state.screen == Screen::Plugins {
@@ -456,9 +510,10 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                         .borders(Borders::TOP | Borders::BOTTOM)
                         .border_style(Style::default().fg(MUTED))
                         .title_bottom(
-                            Line::from(if state.launch() {" Tab mode · Ctrl+K commands · F1 help "} else {
-                                " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Tab mode · Ctrl+K commands · F1 help "
-                            })
+                            Line::from(if state.launch() {" Tab mode · Ctrl+K commands · F1 help "}
+                            else if state.plan_drawer.unwrap_or(state.scroll.plan_visible) {
+                                " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Ctrl+G DAG · Ctrl+P close · Ctrl+K commands · F1 help "
+                            } else {" Tab mode · Ctrl+O output · Ctrl+G DAG · Ctrl+P plan/rules · Ctrl+K commands · F1 help "})
                                 .alignment(ratatui::layout::Alignment::Right),
                         ),
                 ),

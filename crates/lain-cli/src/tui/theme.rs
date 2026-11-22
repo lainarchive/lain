@@ -14,6 +14,7 @@ pub const RED: Color = Color::Rgb(239, 155, 152);
 pub const VIOLET: Color = Color::Rgb(179, 160, 238);
 pub const AMBER: Color = Color::Rgb(232, 163, 145);
 pub const PEACH: Color = Color::Rgb(216, 170, 159);
+pub const SHADOW: Color = Color::Rgb(43, 53, 76);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Theme {
@@ -65,6 +66,7 @@ impl Theme {
             PANEL => Color::Black,
             TEXT => Color::White,
             MUTED => Color::Gray,
+            SHADOW => Color::DarkGray,
             RED | AMBER | PEACH => Color::White,
             CYAN | BLUE | GREEN | VIOLET => Color::Gray,
             _ => color,

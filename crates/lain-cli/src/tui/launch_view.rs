@@ -59,7 +59,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
         area.height.saturating_sub(2),
     );
     let sections = Layout::vertical([
-        Constraint::Length(7),
+        Constraint::Length(8),
         Constraint::Length(3),
         Constraint::Length(if width >= 92 { 7 } else { 2 }),
         Constraint::Min(0),
@@ -92,7 +92,12 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
                 frame.render_widget(
                     Paragraph::new(vec![
                         Line::styled(
-                            format!("{} · {}", state.model_chain, state.mode.name()),
+                            if state.model_chain.is_empty() || state.model_chain == "model unknown"
+                            {
+                                state.mode.name().into()
+                            } else {
+                                format!("{} · {}", state.model_chain, state.mode.name())
+                            },
                             Style::default().fg(CYAN),
                         ),
                         Line::from(format!(
@@ -147,18 +152,19 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
 fn wordmark(frame: &mut Frame, area: Rect, theme: Theme) {
     let glyphs = [
         [
-            "10000", "10000", "10000", "10000", "10000", "10000", "11111",
+            "1000000", "1000000", "1000000", "1000000", "1000000", "1000000", "1111111",
         ],
         [
-            "01110", "10001", "10001", "11111", "10001", "10001", "10001",
+            "0011100", "0100010", "1000001", "1000001", "1111111", "1000001", "1000001",
         ],
         [
-            "11111", "00100", "00100", "00100", "00100", "00100", "11111",
+            "1111111", "0001000", "0001000", "0001000", "0001000", "0001000", "1111111",
         ],
         [
-            "10001", "11001", "11001", "10101", "10011", "10011", "10001",
+            "1000001", "1100001", "1010001", "1001001", "1000101", "1000011", "1000001",
         ],
     ];
+    let mut pixels = vec![];
     for y in 0..7 {
         let text = glyphs
             .iter()
@@ -170,20 +176,27 @@ fn wordmark(frame: &mut Frame, area: Rect, theme: Theme) {
             })
             .collect::<Vec<_>>()
             .join("  ");
-        let spans = text
-            .chars()
-            .enumerate()
-            .map(|(x, c)| {
-                Span::styled(
-                    c.to_string(),
-                    Style::default().fg(theme.gradient(x as u16, 46)),
-                )
-            })
-            .collect::<Vec<_>>();
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().add_modifier(Modifier::BOLD)),
-            Rect::new(area.x, area.y + y as u16, area.width, 1),
-        );
+        pixels.push(text);
+    }
+    let width = pixels.first().map_or(0, |row| Line::raw(row).width()) as u16;
+    let origin = area.x + area.width.saturating_sub(width + 1) / 2;
+    for shadow in [true, false] {
+        for (y, row) in pixels.iter().enumerate() {
+            for (x, c) in row.chars().enumerate().filter(|(_, c)| *c != ' ') {
+                let dx = u16::from(shadow);
+                let point = (origin + x as u16 + dx, area.y + y as u16 + dx);
+                if area.contains(point.into()) {
+                    if let Some(cell) = frame.buffer_mut().cell_mut(point) {
+                        cell.set_symbol(&c.to_string())
+                            .set_style(Style::default().fg(if shadow {
+                                SHADOW
+                            } else {
+                                theme.gradient(x as u16, width)
+                            }));
+                    }
+                }
+            }
+        }
     }
 }
 
