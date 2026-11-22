@@ -5,7 +5,9 @@ use lain_core::{
         manifest::{Capability, HOST_PROCESS_PERMISSIONS},
         PluginManager,
     },
-    tools::{publish_tool_proposal, test_tool_proposal, ToolError, ToolSource as CoreSource},
+    tools::{
+        publish_tool_proposal_checked, test_tool_proposal, ToolError, ToolSource as CoreSource,
+    },
 };
 use lain_ipc::{
     ActiveTool, Event, EventSink, PermissionGrant, ScriptProposal, SessionInfo, SessionMode,
@@ -13,6 +15,14 @@ use lain_ipc::{
 };
 
 use super::{DaemonHandler, Error};
+
+struct ProposalCancellation(lain_agent::runner::Canceller);
+
+impl Drop for ProposalCancellation {
+    fn drop(&mut self) {
+        self.0.reset();
+    }
+}
 
 impl DaemonHandler {
     fn plugin_manager(&self, grants: BTreeSet<Capability>) -> Result<PluginManager, Error> {
@@ -143,6 +153,7 @@ impl DaemonHandler {
             .try_lock()
             .map_err(|_| Error::failure("SESSION_BUSY", &session_id))?;
         drop(sessions);
+        let cancellation = ProposalCancellation(session.canceller.clone());
         if !session.config.allow_creator_mode {
             return Err(ToolError::Unknown(
                 if publish_mode.is_some() {
@@ -160,10 +171,26 @@ impl DaemonHandler {
             );
         }
         let manager = self.plugin_manager(session.config.plugin_permissions.clone())?;
-        let report = if publish_mode.is_some() {
-            publish_tool_proposal(&manager, &session.tools, proposal).await?
-        } else {
-            test_tool_proposal(&manager, proposal).await?
+        let cancelled = || ToolError::Execution("Creator proposal cancelled".into());
+        let operation = async {
+            if publish_mode.is_some() {
+                publish_tool_proposal_checked(&manager, &session.tools, proposal, || {
+                    if cancellation.0.is_cancelled() {
+                        Err(cancelled())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .await
+            } else {
+                test_tool_proposal(&manager, proposal).await
+            }
+        };
+        let report = tokio::select! {
+            biased;
+            ()=cancellation.0.cancelled()=>return Err(cancelled().into()),
+            ()=events.closed()=>return Err(cancelled().into()),
+            result=operation=>result?,
         };
         reply(
             events,
