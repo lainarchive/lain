@@ -88,7 +88,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
             Command::GetTelemetry {
                 session_id: session.clone(),
             },
-            Command::InspectMemory {
+            Command::InspectRules {
                 session_id: None,
                 limit: Some(20),
             },
