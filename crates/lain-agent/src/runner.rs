@@ -761,52 +761,51 @@ impl AgentRunner {
                 });
                 self.state.tool_calls += 1;
                 let guarded = !scratchpad && !self.tools.is_builtin_read_only(&call.name);
-                if guarded && self.control.require_approval(&call.id) {
-                    self.emit(AgentEvent::ApprovalRequired {
-                        turn,
-                        call_id: call.id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    });
-                }
-                let admission = self.bounded(self.control.ready()).await;
-                self.control.clear_pending();
-                let outcome = if let Err(reason) = admission {
-                    halt = Some(reason.clone());
-                    skipped(&reason)
-                } else if admission == Ok(false) {
-                    ToolOutcome::Skipped {
-                        reason: "Denied by operator".into(),
-                    }
-                } else if self.read_only
-                    && !scratchpad
-                    && !self.tools.is_builtin_read_only(&call.name)
-                {
+                let outcome = if self.read_only && guarded {
                     ToolOutcome::Failed {
                         code: "READ_ONLY_MODE".into(),
                         message: "Architect/Ask only allow built-in read tools".into(),
                     }
-                } else if scratchpad {
-                    let outcome = self.update_scratchpad(call).await?;
-                    halt = self.interrupted();
-                    outcome
                 } else {
-                    match self
-                        .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
-                        .await
-                    {
-                        Ok(Ok(output)) => ToolOutcome::Succeeded(output),
-                        Ok(Err(error)) => ToolOutcome::Failed {
-                            code: error.code().into(),
-                            message: error.to_string(),
-                        },
-                        // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
-                        Err(reason) => {
-                            let outcome = ToolOutcome::Interrupted {
-                                reason: format!("interrupted while running ({reason:?})"),
-                            };
-                            halt = Some(reason);
-                            outcome
+                    if guarded && self.control.require_approval(&call.id) {
+                        self.emit(AgentEvent::ApprovalRequired {
+                            turn,
+                            call_id: call.id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                        });
+                    }
+                    let admission = self.bounded(self.control.ready()).await;
+                    self.control.clear_pending();
+                    if let Err(reason) = admission {
+                        halt = Some(reason.clone());
+                        skipped(&reason)
+                    } else if admission == Ok(false) {
+                        ToolOutcome::Skipped {
+                            reason: "Denied by operator".into(),
+                        }
+                    } else if scratchpad {
+                        let outcome = self.update_scratchpad(call).await?;
+                        halt = self.interrupted();
+                        outcome
+                    } else {
+                        match self
+                            .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
+                            .await
+                        {
+                            Ok(Ok(output)) => ToolOutcome::Succeeded(output),
+                            Ok(Err(error)) => ToolOutcome::Failed {
+                                code: error.code().into(),
+                                message: error.to_string(),
+                            },
+                            // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
+                            Err(reason) => {
+                                let outcome = ToolOutcome::Interrupted {
+                                    reason: format!("interrupted while running ({reason:?})"),
+                                };
+                                halt = Some(reason);
+                                outcome
+                            }
                         }
                     }
                 };
@@ -1476,6 +1475,26 @@ mod tests {
             .tools
             .iter()
             .any(|t| t.name == "write_file"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn intercepted_read_only_turns_reject_forbidden_tools_without_approval(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let provider = ScriptedProvider::new(vec![calls(None, &["ok"]), text("done")]);
+        let (mut agent, _) = runner(config(), provider);
+        agent.set_read_only(true);
+        let control = agent.control();
+        control.intercept(true);
+        let mut events = agent.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), agent.run("Plan only")).await??;
+        let observed = drain(&mut events);
+        assert!(!observed
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ApprovalRequired { .. })));
+        assert!(observed.iter().any(|event| matches!(event,
+            AgentEvent::ToolCompleted { outcome: ToolOutcome::Failed { code, .. }, .. } if code == "READ_ONLY_MODE")));
+        assert!(control.snapshot().pending_call.is_none());
         Ok(())
     }
 
