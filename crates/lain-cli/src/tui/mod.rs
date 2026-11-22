@@ -1,5 +1,6 @@
 mod app;
 mod input;
+mod plugins;
 mod shell_view;
 mod state;
 mod theme;

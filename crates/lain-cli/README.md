@@ -37,9 +37,20 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 `lain tui` opens the Ratatui app shell. `lain tui demo` renders an **offline synthetic sample**
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
 The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains the existing lane view;
-the other screens are named placeholders for later phases, not working plugin, memory or model managers.
+Plugins browses disk manifests and active session tools. Creator receives a selected manifest template; editing is not implemented yet.
+Memory, Sessions and Models remain named placeholders for later phases.
 Outside overlays, 1–6 switches screens when the Session composer is empty or not focused (on another screen).
 Alt+Left/Right always switches screens, closing overlays while preserving the Session draft and active turn.
+
+On **Plugins (2)**, Up/Down selects manifests or active tools; PgUp/PgDn scrolls the detail pane.
+`r` refreshes both inventories. `/` focuses a case-insensitive filter; Enter applies it and Esc clears it.
+While filtering, digits, `q` and `?` are text, not global shortcuts; F1 and Ctrl+K still work.
+Enter on a valid manifest opens Creator with its metadata in state; it does not read source files or execute anything.
+Malformed manifests remain visible with their paths and errors. Tool details show provenance, schema, backend and capability grants:
+green ✓ granted, red ✗ missing. A manifest without matching active tools has unknown grants, not assumed missing grants.
+For active plugin tools, backend labels come from disk inventory, which can differ from the already-loaded runtime after a disk edit.
+Live mode fetches on first entry and refresh, with explicit unsupported/error messages for older daemons.
+Demo mode uses canned inventory including one malformed manifest. Plugin refresh errors do not terminate an active chat turn.
 
 Ctrl+K opens a command palette. Type a fuzzy subsequence to filter, use Up/Down or Tab to select, and Enter to run.
 On Session, a leading `/` opens inline completion from the same registry: Tab/Up/Down selects and Enter runs.
