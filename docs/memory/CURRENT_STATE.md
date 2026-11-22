@@ -1,5 +1,17 @@
 # Current Project State
 
+## TUI shell review
+
+- Reviewed `f9016ff..HEAD` on `feat/tui-shell`. Primary `SESSION_BUSY` refusals now stop the working state without
+  interrupting a real turn when a steering request is refused. Interrupt/rewind retire the session and quarantine late replies.
+- Help now pages through overflow at supported sizes. Removed obsolete Creator placeholder state, directed tool discovery
+  to `/plugins`, and timestamped fresh demo metadata with the current clock instead of process start.
+- Creator flag/mode gates, concrete-identity read-only authorization, bounded reports and failed-trial publication refusal
+  remain unchanged. Publish mode is still client-supplied, as approved; it is not authoritative daemon session state.
+- Linux verification: 233 workspace tests, Clippy with warnings denied and Rust formatting passed. New regressions cover
+  rejected turns, cancellation bookkeeping, help paging and fresh demo timestamps. Review changes are visually unverified;
+  live-provider cancellation and native Windows remain untested.
+
 ## Terminal inspection screens
 
 - The six-screen shell now includes read-only Memory (`InspectMemory`), Sessions (`ListSessions` + `GetStatus`),
