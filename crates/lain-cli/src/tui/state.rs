@@ -95,6 +95,7 @@ pub struct Task {
     pub ended: Option<Duration>,
     pub tokens: u64,
     pub text: String,
+    stream_start: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -919,6 +920,7 @@ impl State {
                         ended: None,
                         tokens: 0,
                         text: String::new(),
+                        stream_start: None,
                     },
                 );
                 if let Err(error) = self.rebuild() {
@@ -994,14 +996,34 @@ impl State {
         if !self.follow
             && matches!(
                 event,
-                Event::StreamToken { .. } | Event::ToolStarted { .. } | Event::ToolFinished { .. }
+                Event::StreamToken { .. }
+                    | Event::TokenDelta { .. }
+                    | Event::ToolStarted { .. }
+                    | Event::ToolFinished { .. }
             )
         {
             self.unseen = true;
         }
         match event {
+            Event::TokenDelta { text, .. } => {
+                if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+                    let text = clean(text);
+                    if !text.is_empty() {
+                        if task.stream_start.is_none() {
+                            task.stream_start = Some(task.text.len());
+                            if !task.text.is_empty() {
+                                task.text.push_str("\n\n");
+                            }
+                        }
+                        task.text.push_str(&text);
+                    }
+                }
+            }
             Event::StreamToken { text, .. } => {
                 if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+                    if let Some(start) = task.stream_start.take() {
+                        task.text.truncate(start);
+                    }
                     let text = clean(text);
                     if !text.is_empty() {
                         if !task.text.is_empty() {
@@ -1168,6 +1190,7 @@ impl State {
                     ended: None,
                     tokens: 320,
                     text: String::new(),
+                    stream_start: None,
                 },
             );
         }

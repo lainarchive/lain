@@ -262,8 +262,8 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                                     session = Some(ui::start_session(client, &mut renderer).await?);
                                 }
                                 if let Some(id) = &session {
-                                    let command = if read_only { Command::SendReadOnlyMessage { session_id: id.clone(), text } }
-                                        else { Command::SendMessage { session_id: id.clone(), text } };
+                                    let command = if read_only { Command::SendReadOnlyMessage { stream_deltas: true, session_id: id.clone(), text } }
+                                        else { Command::SendMessage { stream_deltas: true, session_id: id.clone(), text } };
                                     active_request = Some(client.send(command).await?);
                                 }
                             } else if state.next_turn==1 {state.seed_demo_turn(started.elapsed());}
@@ -271,8 +271,8 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                         }
                         Effect::Steer(text) => {
                             if let (Some(client), Some(id)) = (&mut client, &session) {
-                                let command = if state.mode.read_only() { Command::SendReadOnlyMessage { session_id: id.clone(), text } }
-                                    else { Command::SendMessage { session_id: id.clone(), text } };
+                                let command = if state.mode.read_only() { Command::SendReadOnlyMessage { stream_deltas: true, session_id: id.clone(), text } }
+                                    else { Command::SendMessage { stream_deltas: true, session_id: id.clone(), text } };
                                 client.send(command).await?;
                                 state.notice = "Steer sent · current daemon rejects mid-turn SendMessage as SESSION_BUSY".into();
                             }

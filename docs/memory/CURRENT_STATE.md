@@ -1,5 +1,18 @@
 # Current Project State
 
+## Launch integration: streaming
+
+- Launch work is on `feat/launch-integration`, based on `origin/main` at `d15e5e2` (includes PRs 14 and 15).
+- Config-backed daemon runners always stream, independently of the dashboard. `TokenDelta` is additive IPC;
+  message requests opt in with `stream_deltas`, preserving whole-message replies and wire shapes for older clients.
+  The TUI joins deltas without separators and replaces only the pending block when a completed message arrives.
+- Daemons, including TUI autospawn, enable Axum by default. `--no-ui` opts out and `--serve-ui` stays a no-op alias.
+  An occupied dashboard port warns without stopping IPC. Local HTTP/SSE regressions cover early dual delivery,
+  matching dashboard/IPC chunks and final text, and legacy requests without deltas. No dependencies were added.
+- Verification: Linux workspace tests (248 tests / 33 suites), Clippy with warnings denied, Rust formatting,
+  repository hygiene and added-line length checks passed. No native Windows, desktop visual or live-provider check.
+  Next action: continue the launch milestone after this local commit; do not push without approval.
+
 ## Bots inspection screen
 
 - Added screen 7 (`/bots`, palette, help) with a wired daemon status card, memory entries read and a paged agent table.

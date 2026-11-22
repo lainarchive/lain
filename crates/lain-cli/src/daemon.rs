@@ -45,7 +45,6 @@ pub trait RunnerFactory: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub struct ConfigFactory {
-    pub stream_responses: bool,
     pub config_path: PathBuf,
     pub working_directory: PathBuf,
     pub allow_shell: bool,
@@ -54,7 +53,6 @@ pub struct ConfigFactory {
 impl ConfigFactory {
     pub fn new(config_path: impl Into<PathBuf>, working_directory: impl Into<PathBuf>) -> Self {
         Self {
-            stream_responses: false,
             config_path: config_path.into(),
             working_directory: working_directory.into(),
             allow_shell: false,
@@ -118,7 +116,7 @@ impl RunnerFactory for ConfigFactory {
         config.validate()?;
         let tools = self.session_tools(memory.clone(), &config)?;
         let mut runner = AgentRunner::from_config(config, tools, memory, id)?;
-        runner.set_streaming(self.stream_responses);
+        runner.set_streaming(true);
         Ok(runner)
     }
 }
@@ -282,11 +280,21 @@ impl DaemonHandler {
                     .send(Event::SessionStarted { session_id: id })
                     .await?;
             }
-            Command::SendMessage { session_id, text } => {
-                self.run(session_id, text, false, events).await?
+            Command::SendMessage {
+                stream_deltas,
+                session_id,
+                text,
+            } => {
+                self.run(session_id, text, false, stream_deltas, events)
+                    .await?
             }
-            Command::SendReadOnlyMessage { session_id, text } => {
-                self.run(session_id, text, true, events).await?
+            Command::SendReadOnlyMessage {
+                stream_deltas,
+                session_id,
+                text,
+            } => {
+                self.run(session_id, text, true, stream_deltas, events)
+                    .await?
             }
             Command::GetTelemetry { session_id } => {
                 let session = self
@@ -414,6 +422,7 @@ impl DaemonHandler {
         id: String,
         text: String,
         read_only: bool,
+        stream_deltas: bool,
         events: &EventSink,
     ) -> Result<(), Error> {
         let sessions = self.sessions.read().await;
@@ -441,7 +450,7 @@ impl DaemonHandler {
                             if let AgentEvent::TurnStarted { turn, .. } = event { session.turn_count.store(*turn, Ordering::Relaxed); }
                             self.dashboard.publish(&id, event.clone());
                         }
-                        forward_agent_event(&id, event, events).await?;
+                        forward_agent_event(&id, event, events,stream_deltas).await?;
                     }
                     result = &mut run => break result,
                     _ = events.closed() => { session.canceller.cancel(); break run.await; }
@@ -457,9 +466,7 @@ impl DaemonHandler {
         }
         while let Ok(event) = source.try_recv() {
             self.dashboard.publish(&id, event.clone());
-            if let Some(event) = map_agent_event(&id, event) {
-                events.send(event).await?;
-            }
+            forward_agent_event(&id, Ok(event), events, stream_deltas).await?;
         }
         if let Err(error) = result {
             self.dashboard.publish(
@@ -616,12 +623,16 @@ async fn forward_agent_event(
     id: &str,
     event: Result<AgentEvent, broadcast::error::RecvError>,
     events: &EventSink,
+    stream_deltas: bool,
 ) -> Result<(), Error> {
     let event = match event {
         Ok(event) => event,
         Err(broadcast::error::RecvError::Lagged(_)) => return Ok(()),
         Err(error) => return Err(Error::failure("AGENT_EVENTS_LOST", error)),
     };
+    if !stream_deltas && matches!(&event, AgentEvent::ThinkingToken { .. }) {
+        return Ok(());
+    }
     if let Some(event) = map_agent_event(id, event) {
         events.send(event).await?;
     }
@@ -631,6 +642,11 @@ async fn forward_agent_event(
 pub fn map_agent_event(id: &str, event: AgentEvent) -> Option<Event> {
     let session_id = id.to_owned();
     match event {
+        AgentEvent::ThinkingToken { turn, text } => Some(Event::TokenDelta {
+            session_id,
+            turn,
+            text,
+        }),
         AgentEvent::Thinking { text, .. } | AgentEvent::OutputGenerated { text, .. } => {
             Some(Event::StreamToken { session_id, text })
         }
@@ -759,6 +775,9 @@ mod tests {
 
     #[test]
     fn event_mapping() {
+        assert!(
+            matches!(map_agent_event("s",AgentEvent::ThinkingToken {turn:2,text:"chunk".into()}),Some(Event::TokenDelta {session_id,turn:2,text}) if session_id=="s" && text=="chunk")
+        );
         for event in [
             AgentEvent::Thinking {
                 turn: 1,

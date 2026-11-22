@@ -281,6 +281,7 @@ async fn turn_with_input(
 ) -> Result<(bool, Option<String>), Error> {
     let id = client
         .send(Command::SendMessage {
+            stream_deltas: false,
             session_id: session.into(),
             text,
         })
@@ -446,7 +447,9 @@ mod tests {
                             })
                             .await;
                     }
-                    Command::SendMessage { session_id, text } => {
+                    Command::SendMessage {
+                        session_id, text, ..
+                    } => {
                         self.started.notify_one();
                         if text == "fail" {
                             let _ = events

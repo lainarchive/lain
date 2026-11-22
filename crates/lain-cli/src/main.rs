@@ -20,7 +20,6 @@ async fn daemon(options: Options) -> Result<(), Error> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.join(".lain/memory.db"));
     let mut factory = ConfigFactory::new(options.config, cwd);
-    factory.stream_responses = options.serve_ui;
     factory.allow_shell = std::env::var("LAIN_ALLOW_SHELL").is_ok_and(|value| value == "1");
     let handler = Arc::new(DaemonHandler::new(
         Arc::new(Mutex::new(MemoryStore::open(memory)?)),
