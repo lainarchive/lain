@@ -1,5 +1,22 @@
 # Current Project State
 
+## Launch README
+
+- Root README now covers installation/config, run exit codes, the IPC/event/dashboard architecture, crate roles,
+  evidence, terminal screens/keys, both palettes, Node entry-point ambiguity and verification commands.
+- Humanizer skill reviewed all eight sections plus the opening paragraph. Fixed mono hex values are not claimed:
+  mono uses terminal-controlled ANSI colors. Merkle/worktree/scope APIs are separated from live daemon behavior;
+  parallel scheduling, session attachment, model selection and live pricing remain unsupported.
+- Current 140x45 TestBackend demo launch/turn renders supplied the shortened ASCII previews. Temporary dump
+  instrumentation was removed; no Rust source or test changes remain. Oh My Hermes/@rlaope is explicitly credited.
+- `cargo install --path .` installed to the default Cargo bin directory (18.59 s). Installed help, doctor (text/JSON),
+  daemon health and run (text/JSON, expected exit 2) passed with the README config against a local fake SSE provider.
+  Both live and demo TUI launched in PTYs and quit with q/exit 0. Fixtures were stopped. Script/render artifacts are
+  outside the repo under `/home/ubuntu/lain-readme-*`. README relative links, all 12 wired hex values, ASCII and
+  <=200-character lines passed; repository hygiene passed (229 ms). Unchanged Linux/Windows Rust gates were reused.
+- Next: push feat/launch-integration as authorized, then await the next instruction. Native Windows runtime and
+  real remote providers remain unverified.
+
 ## Launch integration: offline evidence-loop dogfood
 
 - `tests/dogfood_evidence_loop.rs` commits a dependency-free broken crate, discovers `add` and its one-based
