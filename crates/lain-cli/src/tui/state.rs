@@ -312,10 +312,10 @@ impl State {
                 Effect::None
             }
             KeyCode::Enter if !self.composer.trim().is_empty() => {
-                let text = std::mem::take(&mut self.composer);
                 if self.running {
-                    return Effect::Steer(text);
+                    return Effect::Steer(self.composer.clone());
                 }
+                let text = std::mem::take(&mut self.composer);
                 self.last_prompt.clone_from(&text);
                 self.next_turn += 1;
                 let id = format!("turn-{}", self.next_turn);

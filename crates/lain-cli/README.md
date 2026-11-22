@@ -53,7 +53,7 @@ an OS sandbox or a restriction on other clients' Code requests. A mode change ca
 Enter submits a prompt. While running, Enter sends the text using the existing message command
 (the read-only variant in Architect/Ask). The daemon currently rejects a mid-turn message with
 `SESSION_BUSY`; it neither queues nor applies it as steering. The rejection is displayed without
-cancelling the active turn. The dashboard's separate steering API is not used by this IPC client.
+cancelling the active turn or clearing the composer draft. The dashboard's separate steering API is not used by this IPC client.
 Two Escape presses within 500ms send `CancelTurn`, remove the last turn's displayed blocks and restore
 its submitted prompt. A lone Escape does not rewind. Late replies from that turn are ignored and the
 next submission starts a fresh session. Rewind **does not undo tool side effects or persisted memory**.
