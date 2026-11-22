@@ -1,5 +1,98 @@
 # Current Project State
 
+## Launch README
+
+- Root README now covers installation/config, run exit codes, the IPC/event/dashboard architecture, crate roles,
+  evidence, terminal screens/keys, both palettes, Node entry-point ambiguity and verification commands.
+- Humanizer skill reviewed all eight sections plus the opening paragraph. Fixed mono hex values are not claimed:
+  mono uses terminal-controlled ANSI colors. Merkle/worktree/scope APIs are separated from live daemon behavior;
+  parallel scheduling, session attachment, model selection and live pricing remain unsupported.
+- Current 140x45 TestBackend demo launch/turn renders supplied the shortened ASCII previews. Temporary dump
+  instrumentation was removed; no Rust source or test changes remain. Oh My Hermes/@rlaope is explicitly credited.
+- `cargo install --path .` installed to the default Cargo bin directory (18.59 s). Installed help, doctor (text/JSON),
+  daemon health and run (text/JSON, expected exit 2) passed with the README config against a local fake SSE provider.
+  Both live and demo TUI launched in PTYs and quit with q/exit 0. Fixtures were stopped. Script/render artifacts are
+  outside the repo under `/home/ubuntu/lain-readme-*`. README relative links, all 12 wired hex values, ASCII and
+  <=200-character lines passed; repository hygiene passed (229 ms). Unchanged Linux/Windows Rust gates were reused.
+- Next: push feat/launch-integration as authorized, then await the next instruction. Native Windows runtime and
+  real remote providers remain unverified.
+
+## Launch integration: offline evidence-loop dogfood
+
+- `tests/dogfood_evidence_loop.rs` commits a dependency-free broken crate, discovers `add` and its one-based
+  declaration line through lain-context's Rust AST (comment/string decoys do not match), and creates an isolated
+  harness worktree on `fix/add-sign`. The original repository's source and HEAD remain unchanged.
+- The real AgentRunner consumes scripted provider calls. Its new optional synchronous `set_tool_guard` hook
+  invokes the harness ScopeGuard before approval/dispatch; the test's path-only write_file fixture executes once.
+  Cargo.toml and parent-directory writes produce TOOL_GUARD_DENIED without executing the writer. Existing daemon
+  callers do not automatically install a scope policy; this adds the integration hook, not a new sandbox.
+- Real `cargo test --offline --lib --color never` runs before and after the fix with a per-test temporary target
+  directory. Failed observations cannot verify a prepared StepReport; fresh successful observations do. Explicit
+  worktree removal and original-repository isolation are asserted. Local dogfood runtime: **0.68 s**.
+- TDD first failed on the missing AST-location and runner-guard APIs. Final workspace tests: **264 passed
+  (35 suites, 11.20 s)**; Clippy, fmt, repository hygiene, its eight-check self-test and added-line length checks passed.
+  Root dev dependencies and their hygiene allowlist were updated; no new third-party packages were introduced.
+- Windows verification follow-up: installed `gcc-mingw-w64-x86-64` with the user's authorization. This MinGW SDK
+  defaults `_WIN32_WINNT` to 0x0502, hiding GetTickCount64 from bundled SQLite. The cross-check shell sets
+  `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0601`; no repository build configuration was changed.
+- Windows `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu` and the matching Clippy command
+  with `-- -D warnings` now pass. Clippy exposed Unix-only test imports in repo_map.rs; their cfg guards now match
+  the Unix-only test. Named-pipe transport, reconnect, doctor's pipe probe and run compile unchanged.
+- Linux follow-up gates after the cfg fix: **264 passed (35 suites, 11.98 s)**, Clippy and fmt passed, repository
+  hygiene passed (304 ms). Windows tests were cross-checked, not executed; native Windows runtime remains unverified.
+- Next: await the next launch step. Commit locally; do not push.
+
+## Launch integration: CLI packaging and diagnostics
+
+- Root is now package `lain` plus workspace; `src/main.rs` calls public `lain_cli::run()`. The former binary logic
+  moved into `crates/lain-cli/src/cli.rs`; executable spawn tests moved to root `tests/`. Node entry points remain unchanged.
+- `run` opts into deltas, builds bounded harness StepReports from actual tool events and additive optional
+  ToolFinished exit codes, and returns 0 verified / 2 completed-unverified / 1 failure. Command evidence also requires
+  builtin provenance from the live session's tool inventory; a plugin named bash is not trusted as the builtin.
+  `doctor` probes toolchains,
+  IPC without autospawn, the public origin-guarded `/healthz`, and configured `/models` routes with bounded deadlines.
+  Keys are checked by environment-variable name, never printed/transmitted; redirects and rustup auto-install are disabled.
+- TDD failures were observed for new argument variants, absent exit-code fields/report symbols, doctor functions
+  and missing tool provenance. Final workspace tests: **262 passed (34 suites, 12.04 s)**; Clippy, fmt, repository
+  hygiene and its eight-check self-test passed. The new health test's expected-body assertion was corrected.
+- `cargo install --path . --root /tmp/lain-install` passed (cold release 1m28s; final reinstall 12.14 s); installed
+  `--help` passed. Runtime shutdown has a 100 ms bound so abandoned blocking DNS cannot hold CLI exit.
+- Offline fixture lives in `/home/ubuntu/lain-step3-fixture.py`; runtime files in `/home/ubuntu/lain-step3-samples`.
+  Real installed daemon + fake local SSE provider executed `printf offline-check`; `run --json` reported observed_verified
+  with exit code 0. Final installed `doctor` and `doctor --json` reported 5 passed, no warnings/failures. Fixture and
+  daemon were stopped after verification. No Node entry-point/package changes; new direct Rust dependencies are registered.
+- Next: await the next launch step after the local commit; do not push. Native Windows and real remote providers remain unverified.
+
+## Launch integration: reconnect
+
+- Step 2 adds persistent TUI reconnect state, draft preservation, interrupted turn/tool status and responsive
+  250 ms–5 s retries using the startup autospawner; each connection attempt is capped at six seconds.
+  Reconnection creates a fresh session, clears old request ids/access/catalog caches, and refreshes telemetry/rules.
+  Publish confirmation is invalidated across connection loss, including a confirmation underneath Help.
+- IPC now closes event sinks and polls handlers through cooperative cancellation instead of aborting them first.
+  Only disconnected clients get a two-second fallback deadline; normal shutdown still drains cooperatively.
+  The daemon prioritizes disconnect cancellation and handles a closed sink during event forwarding.
+- Verified: the new daemon client-drop regression failed before the fix (10 s timeout), then passed (0.49 s).
+  Cancelled sessions remain fail-closed and are removed; a subsequent client's fresh session is listed idle.
+- Fake-server return, reconnect rendering, bounded backoff, offline input and quit tests passed. The daemon serves
+  the next client after cancellation; its fresh session is listed idle. No dependencies were added.
+- Verification: workspace tests **254 passed (33 suites, 13.78 s)**; Clippy, fmt, repository hygiene and added-line
+  length checks passed. Commit locally; do not push. Next: await the next launch step.
+  Native Windows, desktop visuals and live providers remain unverified.
+
+## Launch integration: streaming
+
+- Launch work is on `feat/launch-integration`, based on `origin/main` at `d15e5e2` (includes PRs 14 and 15).
+- Config-backed daemon runners always stream, independently of the dashboard. `TokenDelta` is additive IPC;
+  message requests opt in with `stream_deltas`, preserving whole-message replies and wire shapes for older clients.
+  The TUI joins deltas without separators and replaces only the pending block when a completed message arrives.
+- Daemons, including TUI autospawn, enable Axum by default. `--no-ui` opts out and `--serve-ui` stays a no-op alias.
+  An occupied dashboard port warns without stopping IPC. Local HTTP/SSE regressions cover early dual delivery,
+  matching dashboard/IPC chunks and final text, and legacy requests without deltas. No dependencies were added.
+- Verification: Linux workspace tests (248 tests / 33 suites), Clippy with warnings denied, Rust formatting,
+  repository hygiene and added-line length checks passed. No native Windows, desktop visual or live-provider check.
+  Next action: continue the launch milestone after this local commit; do not push without approval.
+
 ## Bots inspection screen
 
 - Added screen 7 (`/bots`, palette, help) with a wired daemon status card, memory entries read and a paged agent table.

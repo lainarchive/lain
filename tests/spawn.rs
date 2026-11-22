@@ -35,8 +35,8 @@ impl Drop for DaemonCleanup {
 }
 
 #[tokio::test]
-async fn clients_reach_output_eof_while_spawned_daemon_is_alive(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn clients_reach_output_eof_while_spawned_daemon_is_alive()
+-> Result<(), Box<dyn std::error::Error>> {
     for args in [
         vec!["start"],
         vec!["query", "hi"],
@@ -53,6 +53,7 @@ async fn clients_reach_output_eof_while_spawned_daemon_is_alive(
             .current_dir(directory.path())
             .env("LAIN_CONFIG", directory.path().join("missing.json"))
             .env("LAIN_MEMORY_DB", directory.path().join("memory.db"))
+            .env("XDG_STATE_HOME", directory.path().join("state"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -65,6 +66,25 @@ async fn clients_reach_output_eof_while_spawned_daemon_is_alive(
             client.request(Command::Ping).await?.as_slice(),
             [Event::Pong { .. }]
         ));
+        timeout(Duration::from_secs(3), async {
+            loop {
+                let logs = std::fs::read_dir(directory.path().join("state/lain"))?
+                    .map(|entry| std::fs::read_to_string(entry?.path()))
+                    .collect::<Result<Vec<_>, std::io::Error>>()?
+                    .join("\n");
+                match client.request(Command::GetDashboardUrl).await?.as_slice() {
+                    [Event::DashboardUrl { url }]
+                        if url.as_ref().is_some_and(|url| logs.contains(url))
+                            || (url.is_none() && logs.contains("continuing with IPC only")) =>
+                    {
+                        break Ok::<_, Box<dyn std::error::Error>>(());
+                    }
+                    _ => {}
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
         client.close().await?;
         drop(cleanup);
         timeout(Duration::from_secs(3), async {

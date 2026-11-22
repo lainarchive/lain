@@ -84,21 +84,26 @@ async fn run_command<H: CommandHandler + ?Sized>(
     let (events, mut receiver) = mpsc::channel(EVENT_CAPACITY);
     let handle = async { handler.handle(command, EventSink(events)).await };
     tokio::pin!(handle);
-    let forward = async {
-        while let Some(event) = receiver.recv().await {
-            sender
-                .send(ServerFrame::new(id, event))
-                .await
-                .map_err(|_| Error::Closed)?;
+    {
+        let forward = async {
+            while let Some(event) = receiver.recv().await {
+                sender
+                    .send(ServerFrame::new(id, event))
+                    .await
+                    .map_err(|_| Error::Closed)?;
+            }
+            Ok::<(), Error>(())
+        };
+        tokio::pin!(forward);
+        tokio::select! {
+            _ = &mut handle => { let _ = forward.await; return; }
+            _ = &mut forward => {}
+            _ = sender.closed() => {}
         }
-        Ok::<(), Error>(())
-    };
-    tokio::pin!(forward);
-    tokio::select! {
-        _ = &mut handle => { let _ = forward.await; }
-        _ = &mut forward => {}
-        _ = sender.closed() => {}
     }
+    // Aborting the handler left provider turns Running; closing its sink lets cancellation settle first.
+    drop(receiver);
+    handle.await;
 }
 
 async fn connection<S, H>(stream: S, handler: Arc<H>, mut shutdown: watch::Receiver<bool>)
@@ -126,7 +131,7 @@ where
     });
     let mut reader = BufReader::new(read);
     let mut commands = JoinSet::new();
-    let disconnected = loop {
+    let mut disconnected = loop {
         if *shutdown.borrow() {
             break false;
         }
@@ -162,20 +167,29 @@ where
         }
     };
     if disconnected {
-        commands.abort_all();
+        writer.abort();
     }
     let mut discard = [0; 1024];
+    let mut deadline =
+        disconnected.then(|| tokio::time::Instant::now() + std::time::Duration::from_secs(2));
     while !commands.is_empty() {
         tokio::select! {
             _ = commands.join_next() => {}
-            _ = sender.closed() => commands.abort_all(),
-            read = reader.read(&mut discard) => {
+            _ = async {match deadline {Some(at)=>tokio::time::sleep_until(at).await,None=>std::future::pending().await}}=>break,
+            _ = sender.closed(), if !disconnected => {
+                disconnected=true;writer.abort();deadline=Some(tokio::time::Instant::now()+std::time::Duration::from_secs(2));
+            },
+            read = reader.read(&mut discard), if !disconnected => {
                 if !matches!(read, Ok(count) if count > 0) {
-                    commands.abort_all();
+                    disconnected=true;
+                    writer.abort();
+                    deadline=Some(tokio::time::Instant::now()+std::time::Duration::from_secs(2));
                 }
             }
         }
     }
+    commands.abort_all();
+    while commands.join_next().await.is_some() {}
     drop(sender);
     let _ = writer.await;
 }

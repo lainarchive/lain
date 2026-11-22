@@ -45,7 +45,6 @@ pub trait RunnerFactory: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub struct ConfigFactory {
-    pub stream_responses: bool,
     pub config_path: PathBuf,
     pub working_directory: PathBuf,
     pub allow_shell: bool,
@@ -54,7 +53,6 @@ pub struct ConfigFactory {
 impl ConfigFactory {
     pub fn new(config_path: impl Into<PathBuf>, working_directory: impl Into<PathBuf>) -> Self {
         Self {
-            stream_responses: false,
             config_path: config_path.into(),
             working_directory: working_directory.into(),
             allow_shell: false,
@@ -118,7 +116,7 @@ impl RunnerFactory for ConfigFactory {
         config.validate()?;
         let tools = self.session_tools(memory.clone(), &config)?;
         let mut runner = AgentRunner::from_config(config, tools, memory, id)?;
-        runner.set_streaming(self.stream_responses);
+        runner.set_streaming(true);
         Ok(runner)
     }
 }
@@ -159,6 +157,7 @@ impl Drop for ActiveTurn<'_> {
 
 pub struct DaemonHandler {
     pub dashboard: DashboardHub,
+    pub(crate) dashboard_url: Mutex<Option<String>>,
     memory: SharedMemory,
     factory: Arc<dyn RunnerFactory>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
@@ -176,6 +175,7 @@ impl DaemonHandler {
     pub fn new(memory: SharedMemory, factory: Arc<dyn RunnerFactory>) -> Self {
         Self {
             dashboard: DashboardHub::default(),
+            dashboard_url: Mutex::new(None),
             memory,
             factory,
             sessions: RwLock::new(HashMap::new()),
@@ -204,6 +204,16 @@ impl DaemonHandler {
             Command::ListTools { session_id } => self.list_tools(session_id, events).await?,
             Command::ListPlugins => self.list_plugins(events).await?,
             Command::ListSessions => self.list_sessions(events).await?,
+            Command::GetDashboardUrl => {
+                let url = self
+                    .dashboard_url
+                    .lock()
+                    .map_err(|_| {
+                        Error::failure("DASHBOARD_ACCESS", "Dashboard access unavailable")
+                    })?
+                    .clone();
+                events.send(Event::DashboardUrl { url }).await?;
+            }
             Command::TestToolProposal {
                 session_id,
                 proposal,
@@ -282,11 +292,21 @@ impl DaemonHandler {
                     .send(Event::SessionStarted { session_id: id })
                     .await?;
             }
-            Command::SendMessage { session_id, text } => {
-                self.run(session_id, text, false, events).await?
+            Command::SendMessage {
+                stream_deltas,
+                session_id,
+                text,
+            } => {
+                self.run(session_id, text, false, stream_deltas, events)
+                    .await?
             }
-            Command::SendReadOnlyMessage { session_id, text } => {
-                self.run(session_id, text, true, events).await?
+            Command::SendReadOnlyMessage {
+                stream_deltas,
+                session_id,
+                text,
+            } => {
+                self.run(session_id, text, true, stream_deltas, events)
+                    .await?
             }
             Command::GetTelemetry { session_id } => {
                 let session = self
@@ -414,6 +434,7 @@ impl DaemonHandler {
         id: String,
         text: String,
         read_only: bool,
+        stream_deltas: bool,
         events: &EventSink,
     ) -> Result<(), Error> {
         let sessions = self.sessions.read().await;
@@ -436,15 +457,18 @@ impl DaemonHandler {
             loop {
                 tokio::select! {
                     biased;
+                    _ = events.closed() => { session.canceller.cancel(); break run.await; }
                     event = source.recv() => {
                         if let Ok(event) = &event {
                             if let AgentEvent::TurnStarted { turn, .. } = event { session.turn_count.store(*turn, Ordering::Relaxed); }
                             self.dashboard.publish(&id, event.clone());
                         }
-                        forward_agent_event(&id, event, events).await?;
+                        if let Err(error)=forward_agent_event(&id, event, events,stream_deltas).await {
+                            if matches!(error,Error::Ipc(lain_ipc::Error::Closed)) {session.canceller.cancel();break run.await;}
+                            return Err(error);
+                        }
                     }
                     result = &mut run => break result,
-                    _ = events.closed() => { session.canceller.cancel(); break run.await; }
                 }
             }
         };
@@ -457,9 +481,7 @@ impl DaemonHandler {
         }
         while let Ok(event) = source.try_recv() {
             self.dashboard.publish(&id, event.clone());
-            if let Some(event) = map_agent_event(&id, event) {
-                events.send(event).await?;
-            }
+            forward_agent_event(&id, Ok(event), events, stream_deltas).await?;
         }
         if let Err(error) = result {
             self.dashboard.publish(
@@ -616,12 +638,16 @@ async fn forward_agent_event(
     id: &str,
     event: Result<AgentEvent, broadcast::error::RecvError>,
     events: &EventSink,
+    stream_deltas: bool,
 ) -> Result<(), Error> {
     let event = match event {
         Ok(event) => event,
         Err(broadcast::error::RecvError::Lagged(_)) => return Ok(()),
         Err(error) => return Err(Error::failure("AGENT_EVENTS_LOST", error)),
     };
+    if !stream_deltas && matches!(&event, AgentEvent::ThinkingToken { .. }) {
+        return Ok(());
+    }
     if let Some(event) = map_agent_event(id, event) {
         events.send(event).await?;
     }
@@ -631,6 +657,11 @@ async fn forward_agent_event(
 pub fn map_agent_event(id: &str, event: AgentEvent) -> Option<Event> {
     let session_id = id.to_owned();
     match event {
+        AgentEvent::ThinkingToken { turn, text } => Some(Event::TokenDelta {
+            session_id,
+            turn,
+            text,
+        }),
         AgentEvent::Thinking { text, .. } | AgentEvent::OutputGenerated { text, .. } => {
             Some(Event::StreamToken { session_id, text })
         }
@@ -652,6 +683,10 @@ pub fn map_agent_event(id: &str, event: AgentEvent) -> Option<Event> {
             ..
         } => {
             let ok = matches!(&outcome, ToolOutcome::Succeeded(output) if output.exit_code.is_none_or(|code| code == 0));
+            let exit_code = match &outcome {
+                ToolOutcome::Succeeded(output) => output.exit_code,
+                _ => None,
+            };
             let summary = match outcome {
                 ToolOutcome::Succeeded(output) => output.content,
                 ToolOutcome::Failed { message, .. } => message,
@@ -663,6 +698,7 @@ pub fn map_agent_event(id: &str, event: AgentEvent) -> Option<Event> {
                 name,
                 ok,
                 summary,
+                exit_code,
             })
         }
         AgentEvent::ReflectionFailed { code } => Some(Event::Error {
@@ -759,6 +795,9 @@ mod tests {
 
     #[test]
     fn event_mapping() {
+        assert!(
+            matches!(map_agent_event("s",AgentEvent::ThinkingToken {turn:2,text:"chunk".into()}),Some(Event::TokenDelta {session_id,turn:2,text}) if session_id=="s" && text=="chunk")
+        );
         for event in [
             AgentEvent::Thinking {
                 turn: 1,
@@ -812,8 +851,8 @@ mod tests {
             ),
         ] {
             assert!(
-                matches!(map_agent_event("s", AgentEvent::ToolCompleted { turn: 1, call_id: "c".into(), name: "tool".into(), outcome }),
-                Some(Event::ToolFinished { ok, .. }) if ok == expected)
+                matches!(map_agent_event("s", AgentEvent::ToolCompleted { turn: 1, call_id: "c".into(), name: "tool".into(), outcome:outcome.clone() }),
+                Some(Event::ToolFinished { ok, exit_code,.. }) if ok == expected && exit_code==match outcome {ToolOutcome::Succeeded(output)=>output.exit_code,_=>None})
             );
         }
         assert!(

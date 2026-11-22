@@ -105,6 +105,7 @@ pub enum Command {
         mode: SessionMode,
     },
     ListSessions,
+    GetDashboardUrl,
     Ping,
     StartSession {
         session_id: Option<String>,
@@ -112,10 +113,14 @@ pub enum Command {
     SendMessage {
         session_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stream_deltas: bool,
     },
     SendReadOnlyMessage {
         session_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stream_deltas: bool,
     },
     GetTelemetry {
         session_id: String,
@@ -140,6 +145,9 @@ pub enum Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Event {
+    DashboardUrl {
+        url: Option<String>,
+    },
     Tools {
         session_id: String,
         allow_creator_mode: bool,
@@ -174,6 +182,11 @@ pub enum Event {
         session_id: String,
         text: String,
     },
+    TokenDelta {
+        session_id: String,
+        turn: u32,
+        text: String,
+    },
     ToolStarted {
         session_id: String,
         call_id: String,
@@ -186,6 +199,8 @@ pub enum Event {
         name: String,
         ok: bool,
         summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
     },
     ReflectionGenerated {
         session_id: String,
@@ -219,6 +234,7 @@ impl Event {
         matches!(
             self,
             Self::Tools { .. }
+                | Self::DashboardUrl { .. }
                 | Self::Plugins { .. }
                 | Self::ToolProposalResult { .. }
                 | Self::Sessions { .. }
@@ -274,9 +290,28 @@ mod tests {
 
     #[test]
     fn commands_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = serde_json::json!({"type":"tool_finished","session_id":"s","call_id":"c","name":"bash","ok":true,"summary":"ok"});
+        let event: Event = serde_json::from_value(legacy.clone())?;
+        assert!(matches!(
+            event,
+            Event::ToolFinished {
+                exit_code: None,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(event)?, legacy);
+        for kind in ["send_message", "send_read_only_message"] {
+            let legacy = serde_json::json!({"type":kind,"session_id":"s","text":"hello"});
+            let command: Command = serde_json::from_value(legacy.clone())?;
+            assert_eq!(serde_json::to_value(command)?, legacy);
+            let streaming = serde_json::json!({"type":kind,"session_id":"s","text":"hello","stream_deltas":true});
+            let command: Command = serde_json::from_value(streaming.clone())?;
+            assert_eq!(serde_json::to_value(command)?, streaming);
+        }
         let commands = vec![
             Command::Ping,
             Command::SendReadOnlyMessage {
+                stream_deltas: false,
                 session_id: "s".into(),
                 text: "plan".into(),
             },
@@ -288,6 +323,7 @@ mod tests {
                 session_id: Some("s".into()),
             },
             Command::SendMessage {
+                stream_deltas: false,
                 session_id: "s".into(),
                 text: "hello\nworld".into(),
             },
@@ -323,6 +359,11 @@ mod tests {
     #[test]
     fn events_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let events = vec![
+            Event::TokenDelta {
+                session_id: "s".into(),
+                turn: 1,
+                text: "part".into(),
+            },
             Event::Pong {
                 server_version: PROTOCOL_VERSION,
             },
@@ -345,6 +386,7 @@ mod tests {
                 name: "tool".into(),
                 ok: false,
                 summary: "failed".into(),
+                exit_code: None,
             },
             Event::ReflectionGenerated {
                 session_id: "s".into(),

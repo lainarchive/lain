@@ -95,6 +95,7 @@ pub struct Task {
     pub ended: Option<Duration>,
     pub tokens: u64,
     pub text: String,
+    stream_start: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -183,6 +184,7 @@ pub struct State {
     pub rules: Vec<String>,
     pub notice: String,
     pub running: bool,
+    pub reconnecting: bool,
     pub selected: Option<Selection>,
     pub collapsed_layers: BTreeSet<usize>,
     pub collapsed_nodes: BTreeSet<String>,
@@ -204,6 +206,7 @@ impl State {
                 ..super::inspect::Inspect::default()
             },
             demo: false,
+            reconnecting: false,
             follow: true,
             unseen: false,
             dag_drawer: None,
@@ -319,6 +322,53 @@ impl State {
 
     pub fn notify(&mut self, text: impl Into<String>, now: Duration) {
         self.toast = Some((text.into(), now.saturating_add(Duration::from_secs(5))));
+    }
+
+    pub fn disconnected(&mut self, now: Duration) {
+        self.underlays
+            .retain(|overlay| !matches!(overlay, Overlay::Publish { .. }));
+        if matches!(self.overlay, Some(Overlay::Publish { .. })) {
+            self.close();
+        }
+        self.reconnecting = true;
+        self.running = false;
+        self.session_id = None;
+        for task in self
+            .tasks
+            .values_mut()
+            .filter(|task| task.phase == Phase::Running)
+        {
+            task.phase = Phase::Interrupted;
+            task.ended = Some(now);
+            task.stream_start = None;
+        }
+        for tool in self.tools.iter_mut().filter(|tool| tool.ok.is_none()) {
+            tool.ok = Some(false);
+            tool.ended = Some(now);
+            tool.output
+                .push_str("\nInterrupted: daemon connection lost");
+        }
+        self.creator.reset_access();
+        self.notice = "reconnecting… · draft kept · Ctrl+C / q quits".into();
+        self.notify(
+            "Connection lost · reconnecting… · in-flight work interrupted",
+            now,
+        );
+    }
+
+    pub fn reconnected(&mut self, now: Duration) {
+        self.reconnecting = false;
+        self.samples.clear();
+        self.total_tokens = 0;
+        self.model_chain = "model unknown".into();
+        self.context = 0;
+        self.context_window = 0;
+        self.cost = None;
+        self.notice = "Connected · fresh session".into();
+        self.notify(
+            "Reconnected · previous session was not resumed; the daemon may have restarted",
+            now,
+        );
     }
 
     pub fn tick(&mut self, now: Duration) {
@@ -919,6 +969,7 @@ impl State {
                         ended: None,
                         tokens: 0,
                         text: String::new(),
+                        stream_start: None,
                     },
                 );
                 if let Err(error) = self.rebuild() {
@@ -994,14 +1045,34 @@ impl State {
         if !self.follow
             && matches!(
                 event,
-                Event::StreamToken { .. } | Event::ToolStarted { .. } | Event::ToolFinished { .. }
+                Event::StreamToken { .. }
+                    | Event::TokenDelta { .. }
+                    | Event::ToolStarted { .. }
+                    | Event::ToolFinished { .. }
             )
         {
             self.unseen = true;
         }
         match event {
+            Event::TokenDelta { text, .. } => {
+                if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+                    let text = clean(text);
+                    if !text.is_empty() {
+                        if task.stream_start.is_none() {
+                            task.stream_start = Some(task.text.len());
+                            if !task.text.is_empty() {
+                                task.text.push_str("\n\n");
+                            }
+                        }
+                        task.text.push_str(&text);
+                    }
+                }
+            }
             Event::StreamToken { text, .. } => {
                 if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+                    if let Some(start) = task.stream_start.take() {
+                        task.text.truncate(start);
+                    }
                     let text = clean(text);
                     if !text.is_empty() {
                         if !task.text.is_empty() {
@@ -1168,6 +1239,7 @@ impl State {
                     ended: None,
                     tokens: 320,
                     text: String::new(),
+                    stream_start: None,
                 },
             );
         }
