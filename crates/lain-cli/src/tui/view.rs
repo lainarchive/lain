@@ -232,7 +232,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
     rows
 }
 
-fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
+fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> usize {
     let block = panel(" Execution DAG ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -246,12 +246,14 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     let selected = rows.iter().position(|(selection, _)| {
         selection.is_some() && selection.as_ref() == state.selected.as_ref()
     });
-    let offset = selected
+    let max = rows.len().saturating_sub(usize::from(inner.height));
+    let base = selected
         .map_or(0, |i| {
             i.saturating_sub(usize::from(inner.height).saturating_sub(2))
         })
-        .saturating_add(state.scroll.lane)
-        .min(rows.len().saturating_sub(usize::from(inner.height)));
+        .min(max);
+    let scroll = state.scroll.lane.min(max.saturating_sub(base));
+    let offset = base + scroll;
     let lines: Vec<Line<'_>> = rows
         .into_iter()
         .enumerate()
@@ -265,6 +267,7 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
+    scroll
 }
 
 fn scroll_panel(
@@ -404,11 +407,11 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     if let Some(area) = vertical.get(1) {
         let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
             .split(*area);
-        if let Some(area) = main.first() {
-            lanes(frame, *area, state, now);
-        }
         if let Some(area) = main.get(1) {
             scroll = drawer(frame, *area, state);
+        }
+        if let Some(area) = main.first() {
+            scroll.lane = lanes(frame, *area, state, now);
         }
     }
     if let Some(area) = vertical.get(2) {
