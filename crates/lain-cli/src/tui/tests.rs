@@ -1176,12 +1176,7 @@ fn plugins_browse_filter_and_pass_creator_template() -> Result<(), Box<dyn std::
     assert!(state.plugins.filter.is_empty());
     state.key(key(KeyCode::Enter), Duration::ZERO);
     assert_eq!(state.screen, Screen::Creator);
-    let template = state.creator_template.as_ref().ok_or("missing template")?;
-    assert_eq!(
-        template.path,
-        std::path::PathBuf::from(".lain/plugins/echo.json")
-    );
-    assert!(template.manifest.as_ref().is_ok_and(|m| m.name == "echo"));
+    assert_eq!(state.creator.template.as_deref(), Some("echo"));
     assert_eq!(state.creator.name.lines(), &["demo_echo"]);
     assert!(state
         .creator
@@ -1223,7 +1218,7 @@ fn plugins_show_errors_and_keep_filter_input_out_of_global_shortcuts(
     assert!(render(&state)?.contains("Load error"));
     state.key(key(KeyCode::Enter), Duration::ZERO);
     assert_eq!(state.screen, Screen::Plugins);
-    assert!(state.creator_template.is_none());
+    assert!(state.creator.template.is_none());
     state.plugins.inventory_error =
         Some("Daemon does not support ListPlugins: IPC_INVALID_FRAME".into());
     state.plugins.tools_error = Some("ListTools failed: SESSION_NOT_FOUND".into());

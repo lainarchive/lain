@@ -160,7 +160,6 @@ pub struct State {
     pub session_id: Option<String>,
     pub creator: super::creator::Creator,
     pub plugins: super::plugins::Plugins,
-    pub creator_template: Option<lain_ipc::ManifestEntry>,
     pub screen: Screen,
     pub overlay: Option<Overlay>,
     pub toast: Option<(String, Duration)>,
@@ -213,7 +212,6 @@ impl State {
             session_id: None,
             creator: super::creator::Creator::default(),
             plugins: super::plugins::Plugins::default(),
-            creator_template: None,
             screen: Screen::Session,
             overlay: None,
             toast: None,
@@ -723,7 +721,6 @@ impl State {
                     return Effect::None;
                 }
                 self.creator.prefill(&template);
-                self.creator_template = Some(template);
                 self.navigate(Screen::Creator);
             }
             Err(error) => self.notify(error, now),
