@@ -148,10 +148,14 @@ async fn lain_fixes_lain_with_observed_evidence() -> Result<(), Box<dyn Error>> 
     let repo = temp.path().join("repo");
     std::fs::create_dir(&repo)?;
     std::fs::create_dir(repo.join("src"))?;
+    std::fs::write(repo.join(".gitattributes"), "* text eol=lf\n")?;
     std::fs::write(repo.join("Cargo.toml"), MANIFEST)?;
     std::fs::write(repo.join("src/lib.rs"), BUGGY)?;
     git(&repo, &["init", "-b", "main"])?;
-    git(&repo, &["add", "Cargo.toml", "src/lib.rs"])?;
+    git(
+        &repo,
+        &["add", ".gitattributes", "Cargo.toml", "src/lib.rs"],
+    )?;
     git(&repo, &["commit", "-m", "Seed the broken addition"])?;
     let head = git(&repo, &["rev-parse", "HEAD"])?;
     let map = RepoMap::scan(&repo)?;
