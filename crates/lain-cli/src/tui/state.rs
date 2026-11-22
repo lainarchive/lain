@@ -110,6 +110,10 @@ pub struct Scroll {
     pub drawer: u16,
     pub plan: u16,
     pub rules: u16,
+    pub lane_page: usize,
+    pub drawer_page: u16,
+    pub plan_page: u16,
+    pub rules_page: u16,
 }
 
 pub struct State {
@@ -283,15 +287,15 @@ impl State {
                     .modifiers
                     .intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
                 {
-                    let scroll = if key.modifiers.contains(KeyModifiers::SHIFT) {
-                        &mut self.scroll.plan
+                    let (scroll, page) = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        (&mut self.scroll.plan, self.scroll.plan_page.max(1))
                     } else {
-                        &mut self.scroll.rules
+                        (&mut self.scroll.rules, self.scroll.rules_page.max(1))
                     };
                     *scroll = if key.code == KeyCode::PageDown {
-                        scroll.saturating_add(5)
+                        scroll.saturating_add(page)
                     } else {
-                        scroll.saturating_sub(5)
+                        scroll.saturating_sub(page)
                     };
                     return Effect::None;
                 }
@@ -300,17 +304,19 @@ impl State {
                     _ => false,
                 };
                 if !expanded {
+                    let page = self.scroll.lane_page.max(1);
                     self.scroll.lane = if key.code == KeyCode::PageDown {
-                        self.scroll.lane.saturating_add(5)
+                        self.scroll.lane.saturating_add(page)
                     } else {
-                        self.scroll.lane.saturating_sub(5)
+                        self.scroll.lane.saturating_sub(page)
                     };
                     return Effect::None;
                 }
+                let page = self.scroll.drawer_page.max(1);
                 if key.code == KeyCode::PageDown {
-                    self.scroll.drawer = self.scroll.drawer.saturating_add(5);
+                    self.scroll.drawer = self.scroll.drawer.saturating_add(page);
                 } else {
-                    self.scroll.drawer = self.scroll.drawer.saturating_sub(5);
+                    self.scroll.drawer = self.scroll.drawer.saturating_sub(page);
                 }
                 Effect::None
             }

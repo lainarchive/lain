@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use lain_ipc::Event;
@@ -91,8 +91,10 @@ fn output_preview_and_full_drawer() -> Result<(), Box<dyn std::error::Error>> {
     state.tools.first_mut().ok_or("no sample tool")?.output =
         format!("{}TAIL", "word ".repeat(600));
     state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
     for _ in 0..20 {
         state.key(key(KeyCode::PageDown), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
     }
     assert!(render(&state)?.contains("TAIL"));
     state
@@ -189,6 +191,101 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
+) -> Result<(), Box<dyn std::error::Error>> {
+    fn visible(text: &str, kind: &str) -> BTreeSet<usize> {
+        let content = if kind == "lane" {
+            text.to_owned()
+        } else {
+            let title = match kind {
+                "tool" => "Full output",
+                "plan" => "Scratchpad",
+                _ => "Procedural rules",
+            };
+            text.lines()
+                .skip_while(|line| !line.contains(title))
+                .skip(1)
+                .map_while(|line| line.split_once("││").map(|(_, right)| right))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        content
+            .lines()
+            .filter_map(|line| {
+                line.split_once(&format!("{kind} "))?
+                    .1
+                    .chars()
+                    .take(2)
+                    .collect::<String>()
+                    .parse()
+                    .ok()
+            })
+            .collect()
+    }
+    for height in [30, 33, 45] {
+        for (kind, modifiers) in [
+            ("tool", KeyModifiers::NONE),
+            ("plan", KeyModifiers::SHIFT),
+            ("rule", KeyModifiers::CONTROL),
+            ("lane", KeyModifiers::NONE),
+        ] {
+            let mut state = State::sample()?;
+            state.plan = (0..40)
+                .map(|i| format!("[ ] plan {i:02}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            state.rules = (0..40).map(|i| format!("rule {i:02}")).collect();
+            state.tools.first_mut().ok_or("missing tool")?.output = (0..40)
+                .map(|i| format!("tool {i:02}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            state.tasks.get_mut("1").ok_or("missing lane")?.text = (0..40)
+                .map(|i| format!("lane {i:02}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            state.select_tool(0);
+            state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+            if kind == "lane" {
+                state.selected = Some(super::state::Selection::Node("1".into()));
+            }
+            let mut terminal = Terminal::new(TestBackend::new(140, height))?;
+            draw_scrolled(&mut terminal, &mut state)?;
+            let mut previous = visible(&contents(&terminal), kind);
+            let mut seen = previous.clone();
+            for _ in 0..40 {
+                if seen.len() == 40 {
+                    break;
+                }
+                state.key(KeyEvent::new(KeyCode::PageDown, modifiers), Duration::ZERO);
+                draw_scrolled(&mut terminal, &mut state)?;
+                let next = visible(&contents(&terminal), kind);
+                if previous.len() > 1 && next.last() > previous.last() && next.last() < Some(&39) {
+                    assert_eq!(
+                        previous.intersection(&next).count(),
+                        1,
+                        "{kind} at {height} rows"
+                    );
+                }
+                seen.extend(next.iter().copied());
+                previous = next;
+            }
+            assert_eq!(seen.len(), 40, "{kind} at {height} rows: {seen:?}");
+            let mut seen = previous;
+            for _ in 0..40 {
+                if seen.len() == 40 {
+                    break;
+                }
+                state.key(KeyEvent::new(KeyCode::PageUp, modifiers), Duration::ZERO);
+                draw_scrolled(&mut terminal, &mut state)?;
+                seen.extend(visible(&contents(&terminal), kind));
+            }
+            assert_eq!(seen.len(), 40, "reverse {kind} at {height} rows: {seen:?}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn paging_up_moves_immediately_after_the_lanes_reach_bottom(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::new(
@@ -247,6 +344,7 @@ fn sticky_panels_scroll_independently_and_do_not_overshoot(
     );
     draw_scrolled(&mut terminal, &mut state)?;
     assert!(!contents(&terminal).contains("[ ] plan 79"));
+    let plan_scroll = state.scroll.plan;
     for _ in 0..40 {
         state.key(
             KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL),
@@ -255,7 +353,7 @@ fn sticky_panels_scroll_independently_and_do_not_overshoot(
         draw_scrolled(&mut terminal, &mut state)?;
     }
     assert!(contents(&terminal).contains("rule 79"));
-    assert!(contents(&terminal).contains("[ ] plan 74"));
+    assert_eq!(state.scroll.plan, plan_scroll);
     state.key(
         KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL),
         Duration::ZERO,
@@ -564,16 +662,20 @@ fn lane_paging_reaches_long_answers_and_selection_resets_scroll(
         .collect::<Vec<_>>()
         .join("\n");
     assert!(!render(&state)?.contains("answer 99"));
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
     for _ in 0..30 {
         state.key(key(KeyCode::PageDown), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
     }
     assert!(render(&state)?.contains("answer 99"));
     for _ in 0..30 {
         state.key(key(KeyCode::PageUp), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
     }
     assert!(render(&state)?.contains("answer 00"));
     for _ in 0..30 {
         state.key(key(KeyCode::PageDown), Duration::ZERO);
+        draw_scrolled(&mut terminal, &mut state)?;
     }
     state.key(key(KeyCode::Down), Duration::ZERO);
     assert!(render(&state)?.contains("answer 00"));
