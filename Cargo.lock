@@ -960,6 +960,7 @@ dependencies = [
  "crossterm",
  "futures",
  "futures-util",
+ "getrandom 0.3.4",
  "lain-agent",
  "lain-core",
  "lain-ipc",
