@@ -1,5 +1,21 @@
 # Current Project State
 
+## After the neural dashboard merge
+
+- The Rust CLI and daemon live in [`crates/lain-cli/`](../../crates/lain-cli/README.md).
+  `lain ui` starts the daemon with the Axum bridge for the
+  [Next.js dashboard](../../dashboard/README.md). The earlier
+  [Node CLI](../CLI.md) and its `tui` command are separate.
+- The [root README](../../README.md) maps the source trees and their verification commands.
+  The cleanup removed the unreferenced Python AppContainer network probe; the
+  experiment recorded in the [V-3 report](../research/v3-read-isolation/appcontainer-feasibility.md)
+  uses the JavaScript probe, which remains in `tools/experiments/`.
+- On Linux, the cleanup passed 146 Cargo tests, workspace Clippy, Rust
+  formatting, and 21 dashboard tests plus dashboard lint, type-check, and build.
+  The [Node verification issues](../implementation/open-issues.md#node-verification-after-the-neural-dashboard-merge)
+  also reproduce on unchanged main. No runtime behavior or architecture
+  decisions changed.
+
 ## Rust dynamic plugin increment
 
 - The daemon loads local JSON/YAML manifests per session with explicit operator capability grants.
@@ -63,6 +79,12 @@
   named-pipe startup, detached console hiding, PowerShell cancellation, and interactive rendering. This increment does
   not change accepted architecture decisions or the earlier Node containment guarantees; Lain is not a sandbox.
 
+## Historical Node implementation record
+
+The sections below retain the November 2026 Node milestone evidence. Branch
+positions, tool availability, test counts, and next actions there describe those
+sessions, not the current checkout or the Rust workspace.
+
 **Record status:** Implementation record, verified 2026-11-08. Supersedes the planning baseline of 2026-11-05.
 **Repository revision inspected:** `d12fda0086b88ed3f6ee12cc9caee1e93c7f38d5` at the start of the V-1 session; V-1 itself is
 `2b90c9b5416a77992fa8f62a8be0c04f7a86fe90` (`feat: run one authorized task end to end without a model`), followed by
@@ -72,7 +94,7 @@ this record describes. The working tree is clean.
 **Recorded because the previous version was wrong:** this file said there was "no implementation source tree" and "no active implementation milestone or completed
 code work". Both were true on 2026-11-05 and are false now. The claims are kept visible in this history rather than silently replaced.
 
-## Verified facts
+### Verified facts
 
 - This is the `lainarchive/lain` Git repository; `origin` is `https://github.com/lainarchive/lain.git`. `main` is **in sync with `origin/main`**: the owner
   approved the push on 2026-11-08 and 18 commits were published fast-forward (`7074c0d..7f41c82`), verified afterwards by a live `git ls-remote` reading
@@ -108,7 +130,7 @@ code work". Both were true on 2026-11-05 and are false now. The claims are kept 
   likewise a set of recommendations: the user approved **V-1**, then **D-P9** (install gitleaks) and **D-P1** (publish to `origin`), so those two are **answered
   and closed**. The rest of the register is still open.
 
-## Current position
+### Position at the time
 
 **M-1, V-1 (One Authorized Task), V-2 (Contained Execution) and V-3 (Read Isolation) are implemented and committed.** The local history ends
 `ec166c7` → `0e0e69e`, and `main` is **19 commits ahead of `origin/main`**; the published tip is still `c204604a91d51b2d4b792f3be25cca19efeaeb1f`, so nothing
@@ -168,7 +190,7 @@ pulled. The daemon was indeed down, but the model — `qwen3-4b-instruct-2507:la
 returned `READY` in 12.8 s of which 12.4 s was load time; the generation itself was two tokens. So the fact asserted was wrong rather than stale: the capability was
 there the whole time and nobody had started the service. Recorded because a claim repeated across several documents is exactly the kind that stops being checked.
 
-## Constraints to preserve
+### Constraints recorded at the time
 
 - Keep Lain independent; DSH and prior projects are research inputs, not source to import.
 - Do not silently promote proposed technology candidates or open decisions to accepted decisions. The event-store ownership recommendation, the M-2 decision
@@ -180,7 +202,7 @@ there the whole time and nobody had started the service. Recorded because a clai
 - **No push without explicit permission**, and never amend or rewrite published history. `main` is now in sync with `origin/main`; a further push needs a further
   explicit approval.
 
-## Next action
+### Next actions at the time
 
 V-2 is complete and its evidence is recorded, every gate is green, and the work past the published tip is local. What remains needs a decision rather than a keystroke:
 
@@ -199,7 +221,7 @@ V-2 is complete and its evidence is recorded, every gate is green, and the work 
 **Backups are same-disk only** (the machine has one physical disk), so `origin` is now the only genuinely off-machine copy; removable media remains the follow-up
 D-P1 named.
 
-## Evidence
+### Evidence
 
 - Implementation documentation: [`docs/implementation/README.md`](../implementation/README.md), [`event-store.md`](../implementation/event-store.md),
   [`host-and-budget.md`](../implementation/host-and-budget.md), [`task-execution.md`](../implementation/task-execution.md),
