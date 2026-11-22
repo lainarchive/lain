@@ -32,6 +32,13 @@ pub enum Command {
         session_id: String,
         text: String,
     },
+    SendReadOnlyMessage {
+        session_id: String,
+        text: String,
+    },
+    GetTelemetry {
+        session_id: String,
+    },
     CancelTurn {
         session_id: String,
     },
@@ -42,12 +49,24 @@ pub enum Command {
         session_id: Option<String>,
         limit: Option<u32>,
     },
+    InspectRules {
+        session_id: Option<String>,
+        limit: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Event {
+    Telemetry {
+        session_id: String,
+        model: String,
+        context_tokens: usize,
+        context_window: usize,
+        tokens_used: u64,
+        scratchpad: String,
+    },
     Pong {
         server_version: u32,
     },
@@ -101,6 +120,7 @@ impl Event {
         matches!(
             self,
             Self::Pong { .. }
+                | Self::Telemetry { .. }
                 | Self::SessionStarted { .. }
                 | Self::SessionCompleted { .. }
                 | Self::Status { .. }
@@ -153,6 +173,13 @@ mod tests {
     fn commands_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let commands = vec![
             Command::Ping,
+            Command::SendReadOnlyMessage {
+                session_id: "s".into(),
+                text: "plan".into(),
+            },
+            Command::GetTelemetry {
+                session_id: "s".into(),
+            },
             Command::StartSession { session_id: None },
             Command::StartSession {
                 session_id: Some("s".into()),
@@ -248,6 +275,14 @@ mod tests {
             Event::Memory {
                 episodic: vec![],
                 procedural: vec![],
+            },
+            Event::Telemetry {
+                session_id: "s".into(),
+                model: "local".into(),
+                context_tokens: 42,
+                context_window: 128,
+                tokens_used: 100,
+                scratchpad: "[ ] Plan".into(),
             },
             Event::error("TEST", "error"),
         ];

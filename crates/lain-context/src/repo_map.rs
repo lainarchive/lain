@@ -1,25 +1,27 @@
 use std::{
     borrow::Cow,
-    io::{self, Read},
-    path::{Path, PathBuf},
+    collections::{BTreeMap, BTreeSet},
+    io,
+    path::Path,
     time::{Duration, Instant},
 };
 
-use cap_std::{
-    ambient_authority,
-    fs::{Dir, Metadata},
-};
 use tree_sitter::{Node, ParseOptions, ParseState, Parser};
 
-const MAX_ENTRIES: usize = 16_384;
-const MAX_DEPTH: usize = 32;
-const MAX_SOURCE_BYTES: usize = 256 * 1024;
-const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+use crate::{
+    merkle::{leaf_hash, MerkleHash},
+    workspace::{self, Entry, MAX_DEPTH},
+};
+
+#[cfg(test)]
+use crate::workspace::{read_bytes as read_source, MAX_SOURCE_BYTES, MAX_TOTAL_BYTES};
+#[cfg(test)]
+use cap_std::{ambient_authority, fs::Dir};
+
 const MAX_MAP_BYTES: usize = 16 * 1024;
 const MAX_SYMBOLS_PER_FILE: usize = 256;
 const MAX_SIGNATURE_BYTES: usize = 240;
 const MAX_DOC_BYTES: usize = 120;
-const MAX_SCAN_TIME: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoMapError {
@@ -36,96 +38,61 @@ pub struct RepoMap {
     truncated: bool,
 }
 
+#[derive(Debug, Default)]
+pub struct RepoMapCache {
+    outlines: BTreeMap<(Language, MerkleHash), Vec<String>>,
+    parse_count: usize,
+}
+
+impl RepoMapCache {
+    pub fn parse_count(&self) -> usize {
+        self.parse_count
+    }
+
+    pub fn scan(&mut self, root: impl AsRef<Path>) -> Result<RepoMap, RepoMapError> {
+        let mut index = Index::new()?;
+        let mut map = RepoMap::default();
+        let mut seen = BTreeSet::new();
+        let truncated = workspace::walk(
+            root,
+            |path| Language::for_path(path).is_some(),
+            |entry| {
+                let Entry::File(path, bytes) = entry else {
+                    return true;
+                };
+                let Some(language) = Language::for_path(path) else {
+                    return true;
+                };
+                let Ok(source) = std::str::from_utf8(bytes) else {
+                    map.truncated = true;
+                    return true;
+                };
+                let key = (language, leaf_hash(bytes));
+                seen.insert(key);
+                let symbols = if let Some(symbols) = self.outlines.get(&key) {
+                    symbols.clone()
+                } else {
+                    self.parse_count = self.parse_count.saturating_add(1);
+                    let (symbols, truncated) = index.symbols(language, source);
+                    map.truncated |= truncated;
+                    if !truncated {
+                        self.outlines.insert(key, symbols.clone());
+                    }
+                    symbols
+                };
+                symbols.is_empty() || map.add_file(path, symbols)
+            },
+        )?;
+        map.truncated |= truncated;
+        self.outlines.retain(|key, _| seen.contains(key));
+        Ok(map)
+    }
+}
+
 impl RepoMap {
     /// Scans a caller-authorized workspace; symlinks, hidden paths and common build/vendor directories are skipped.
     pub fn scan(root: impl AsRef<Path>) -> Result<Self, RepoMapError> {
-        let root = Dir::open_ambient_dir(root, ambient_authority())?;
-        let deadline = Instant::now() + MAX_SCAN_TIME;
-        let mut index = Index::new()?;
-        let mut map = Self::default();
-        let mut entries_left = MAX_ENTRIES;
-        let mut bytes_left = MAX_TOTAL_BYTES;
-        let mut pending = vec![(PathBuf::new(), 0)];
-        while let Some((directory, depth)) = pending.pop() {
-            let entries = if depth == 0 {
-                root.entries()
-            } else {
-                root.read_dir(&directory)
-            };
-            let entries = match entries {
-                Ok(entries) => entries,
-                Err(error) if depth == 0 => return Err(error.into()),
-                Err(_) => {
-                    map.truncated = true;
-                    continue;
-                }
-            };
-            let mut files = Vec::new();
-            let mut subdirs = Vec::new();
-            for entry in entries.take(entries_left) {
-                if Instant::now() >= deadline {
-                    map.truncated = true;
-                    return Ok(map);
-                }
-                entries_left -= 1;
-                let Ok(entry) = entry else {
-                    map.truncated = true;
-                    continue;
-                };
-                let name = entry.file_name();
-                let Some(name) = name.to_str() else { continue };
-                if name.starts_with('.') || name.chars().any(char::is_control) {
-                    continue;
-                }
-                let path = directory.join(name);
-                let Ok(metadata) = root.symlink_metadata(&path) else {
-                    map.truncated = true;
-                    continue;
-                };
-                if is_link(&metadata) {
-                    continue;
-                }
-                if metadata.is_dir() && !skip_directory(name) {
-                    if depth < MAX_DEPTH {
-                        subdirs.push(path);
-                    } else {
-                        map.truncated = true;
-                    }
-                } else if metadata.is_file() {
-                    if let Some(language) = Language::for_path(&path) {
-                        files.push((path, language));
-                    }
-                }
-            }
-            files.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-            for (path, language) in files {
-                let cap = bytes_left.min(MAX_SOURCE_BYTES + 1);
-                if cap == 0 || Instant::now() >= deadline {
-                    map.truncated = true;
-                    return Ok(map);
-                }
-                let Ok(source) = read_source(&root, &path, cap, &mut bytes_left) else {
-                    map.truncated = true;
-                    continue;
-                };
-                let Some(source) = source else {
-                    map.truncated = true;
-                    continue;
-                };
-                let (symbols, truncated) = index.symbols(language, &source);
-                map.truncated |= truncated;
-                if !symbols.is_empty() && !map.add_file(&path, symbols) {
-                    return Ok(map);
-                }
-            }
-            if entries_left == 0 {
-                map.truncated = true;
-                break;
-            }
-            subdirs.sort_unstable();
-            pending.extend(subdirs.into_iter().rev().map(|path| (path, depth + 1)));
-        }
-        Ok(map)
+        RepoMapCache::default().scan(root)
     }
 
     pub fn as_str(&self) -> &str {
@@ -162,51 +129,7 @@ impl RepoMap {
     }
 }
 
-fn skip_directory(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "node_modules" | "target" | "dist" | "build" | "coverage" | "vendor"
-    )
-}
-
-fn is_link(metadata: &Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use cap_std::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return true;
-        }
-    }
-    metadata.is_symlink()
-}
-
-fn read_source(
-    root: &Dir,
-    path: &Path,
-    cap: usize,
-    bytes_left: &mut usize,
-) -> io::Result<Option<String>> {
-    let metadata = root.symlink_metadata(path)?;
-    if !metadata.is_file() || is_link(&metadata) || metadata.len() >= cap as u64 {
-        return Ok(None);
-    }
-    // Metadata is only a filter; the directory handle also constrains resolution at open time.
-    let file = root.open(path)?;
-    let opened = file.metadata()?;
-    if !opened.is_file() || is_link(&opened) || opened.len() >= cap as u64 {
-        return Ok(None);
-    }
-    let mut bytes = Vec::new();
-    let result = file.take(cap as u64).read_to_end(&mut bytes);
-    *bytes_left -= bytes.len();
-    result?;
-    Ok((bytes.len() < cap)
-        .then(|| String::from_utf8(bytes).ok())
-        .flatten())
-}
-
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Language {
     Rust,
     TypeScript,
@@ -650,6 +573,48 @@ fn compact(text: &str, cap: usize) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn cache_reuses_leaf_hashes_and_reparses_only_modified_sources() -> Result<(), RepoMapError> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("a.rs"), "pub fn before() {}")?;
+        fs::write(root.path().join("b.ts"), "export function stable() {}")?;
+        let mut cache = RepoMapCache::default();
+        let first = cache.scan(root.path())?;
+        assert_eq!(cache.parse_count(), 2);
+        assert_eq!(cache.scan(root.path())?, first);
+        assert_eq!(cache.parse_count(), 2);
+        fs::write(root.path().join("a.rs"), "pub fn after() {}")?;
+        let changed = cache.scan(root.path())?;
+        assert_eq!(cache.parse_count(), 3);
+        assert!(changed.as_str().contains("pub fn after()"));
+        assert!(!changed.as_str().contains("before"));
+        assert_eq!(changed, RepoMap::scan(root.path())?);
+        fs::remove_file(root.path().join("a.rs"))?;
+        assert!(!cache.scan(root.path())?.as_str().contains("a.rs"));
+        assert_eq!(cache.parse_count(), 3);
+        assert_eq!(cache.outlines.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_keeps_language_in_key_and_does_not_reuse_incomplete_outlines(
+    ) -> Result<(), RepoMapError> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("a.rs"), "pub fn rust() {}")?;
+        fs::write(root.path().join("b.ts"), "pub fn rust() {}")?;
+        let mut cache = RepoMapCache::default();
+        let map = cache.scan(root.path())?;
+        assert_eq!(cache.parse_count(), 2);
+        assert!(map.is_truncated());
+        assert_eq!(cache.outlines.len(), 1);
+        cache.scan(root.path())?;
+        assert_eq!(cache.parse_count(), 3);
+        let empty = tempfile::tempdir()?;
+        assert!(cache.scan(empty.path())?.as_str().is_empty());
+        assert!(cache.outlines.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn extracts_rust_items_and_public_api_without_bodies() -> Result<(), RepoMapError> {
