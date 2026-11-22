@@ -293,20 +293,37 @@ impl Tool for BashTool {
         json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false})
     }
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
-        let command = args
+        let script = args
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Arguments("command must be a string".into()))?;
-        let mut child = tokio::process::Command::new("bash")
+        let mut command = tokio::process::Command::new("bash");
+        command
             .arg("-c")
-            .arg(command)
+            .arg(script)
             .current_dir(&self.working_directory)
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        for key in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "SystemRoot",
+            "WINDIR",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let mut child = command
             .spawn()
             .map_err(|e| ToolError::Execution(e.to_string()))?;
         let stdout = child
@@ -541,7 +558,18 @@ impl Tool for PowerShellTool {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        for key in ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"] {
+        for key in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "SystemRoot",
+            "WINDIR",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+        ] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }

@@ -450,7 +450,9 @@ fn detached_worktrees_are_outside_active_tree_and_cleaned_up() -> TestResult {
     assert!(Worktree::detached(repo.path(), "../escape").is_err());
     let mut tree = Worktree::detached(repo.path(), "lane-a")?;
     let path = tree.path().to_path_buf();
-    assert!(path.starts_with(repo.path().join(".git")));
+    assert!(
+        std::fs::canonicalize(&path)?.starts_with(std::fs::canonicalize(repo.path().join(".git"))?)
+    );
     assert!(path.join(".git").is_file());
     assert!(tree.branch_label().starts_with("detached@"));
     assert!(Worktree::detached(repo.path(), "lane-a").is_err());

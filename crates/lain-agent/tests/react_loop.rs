@@ -1,9 +1,10 @@
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::time::Duration;
     use std::{
         collections::VecDeque,
         sync::{Arc, Mutex},
-        time::Duration,
     };
 
     use async_trait::async_trait;
@@ -17,7 +18,7 @@ mod tests {
         provider::{
             CompletionRequest, CompletionResponse, Message, ModelProvider, Role, Token, ToolCall,
         },
-        tools::{BashTool, MemoryReadTool, ToolRegistry},
+        tools::{MemoryReadTool, ToolRegistry},
         CoreError,
     };
     use lain_memory::{MemoryInput, MemoryStore};
@@ -205,7 +206,7 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
     }
 
     #[tokio::test]
-    async fn read_memory_then_bash_then_answer() {
+    async fn read_memory_then_shell_then_answer() {
         let workspace = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(MemoryStore::open(":memory:").unwrap()));
         store
@@ -224,19 +225,38 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
         registry
             .register(Arc::new(MemoryReadTool::new(store.clone())))
             .unwrap();
+        #[cfg(unix)]
         registry
-            .register(Arc::new(BashTool {
+            .register(Arc::new(lain_core::tools::BashTool {
                 working_directory: workspace.path().into(),
                 timeout: Duration::from_secs(5),
                 output_byte_cap: 4096,
             }))
             .unwrap();
+        #[cfg(windows)]
+        registry
+            .register(Arc::new(lain_core::tools::PowerShellTool::new(
+                workspace.path(),
+            )))
+            .unwrap();
 
         let steps: Vec<(Check, Message)> = vec![
             (
                 Box::new(|req| {
-                    let names: Vec<_> = req.tools.iter().map(|t| t.name.as_str()).collect();
-                    assert_eq!(names, ["bash", "memory_read", "UpdateScratchpad"]);
+                    let mut names: Vec<_> = req.tools.iter().map(|t| t.name.as_str()).collect();
+                    names.sort();
+                    assert_eq!(
+                        names,
+                        [
+                            "UpdateScratchpad",
+                            if cfg!(windows) { "memory_read" } else { "bash" },
+                            if cfg!(windows) {
+                                "powershell"
+                            } else {
+                                "memory_read"
+                            }
+                        ]
+                    );
                     assert_eq!(req.messages.first().unwrap().role, Role::System);
                 }),
                 call("c-mem", "memory_read", json!({"query": "codename"})),
@@ -248,8 +268,11 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
                 }),
                 call(
                     "c-bash",
-                    "bash",
-                    json!({"command": "echo NIGHTJAR | tr A-Z a-z > name.txt && cat name.txt"}),
+                    if cfg!(windows) { "powershell" } else { "bash" },
+                    json!({"command": if cfg!(windows) {
+                        concat!("[IO.File]::WriteAllText((Join-Path (Get-Location) 'name.txt'), ('NIGHTJAR'.ToLower() + \"`n\")); ",
+                            "[Console]::Out.Write([IO.File]::ReadAllText((Join-Path (Get-Location) 'name.txt')))")
+                    } else { "echo NIGHTJAR | tr A-Z a-z > name.txt && cat name.txt" }}),
                 ),
             ),
             (
@@ -308,7 +331,13 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
                 _ => None,
             })
             .collect();
-        assert_eq!(invoked, ["memory_read", "bash"]);
+        assert_eq!(
+            invoked,
+            [
+                "memory_read",
+                if cfg!(windows) { "powershell" } else { "bash" }
+            ]
+        );
         assert!(seen.iter().all(|e| !matches!(
             e,
             AgentEvent::ToolCompleted {
@@ -340,7 +369,13 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
             assert_eq!(record.trust, "untrusted", "{id}");
         }
         let bash = store.get("it-session/turn/2/tool/0").unwrap().unwrap();
-        assert!(bash.content.contains("tr A-Z a-z") && bash.content.contains("nightjar"));
+        assert!(
+            bash.content.contains(if cfg!(windows) {
+                "ToLower"
+            } else {
+                "tr A-Z a-z"
+            }) && bash.content.contains("nightjar")
+        );
         let recalled = store
             .search("codename", lain_memory::SearchOptions::default())
             .unwrap();

@@ -96,7 +96,7 @@ async fn lists_inventory_and_executes_shared_creator_paths() -> TestResult {
             if sessions.len() == 1 && sessions.first().is_some_and(|s| s.id == "s" && s.turn_count == 0 && s.model.as_deref() == Some("inventory-test") && s.mode.is_none())));
         let tested = client.request(Command::TestToolProposal {session_id:"s".into(), proposal:proposal()?}).await?;
         assert!(matches!(tested.as_slice(), [Event::ToolProposalResult {execution, written_paths, ..}]
-            if execution.exit_code == Some(0) && execution.result == Some(json!({"value":7})) && execution.stderr == "trace\n" && written_paths.is_empty()));
+            if execution.exit_code == Some(0) && execution.result == Some(json!({"value":7})) && execution.stderr.lines().collect::<Vec<_>>() == ["trace"] && written_paths.is_empty()));
         assert!(!directory.path().join(".lain").exists());
         let published = client.request(Command::PublishToolProposal {session_id:"s".into(), mode:SessionMode::Code, proposal:proposal()?}).await?;
         assert!(matches!(published.as_slice(), [Event::ToolProposalResult {execution, written_paths, ..}]
