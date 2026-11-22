@@ -4,17 +4,19 @@ use lain_harness::{advisor::AdvisorKind, evidence::Status};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
 use super::{
-    state::{Mode, Phase, Scroll, Selection, State},
+    app::Screen,
+    plugins, shell_view,
+    state::{Phase, Scroll, Selection, State},
     theme::*,
 };
 
-fn color(phase: Phase) -> Color {
+pub(super) fn color(phase: Phase) -> Color {
     match phase {
         Phase::Running => BLUE,
         Phase::Failed => RED,
@@ -31,50 +33,39 @@ fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
         .style(Style::default().bg(PANEL).fg(TEXT))
 }
 
-fn count(n: usize) -> String {
-    if n >= 1000 {
-        format!("{}k", n / 1000)
-    } else {
-        n.to_string()
-    }
+fn has_banner(state: &State, now: Duration) -> bool {
+    let notice = state.toast_text(now).unwrap_or(&state.notice);
+    state.velocity(now) > 0.0
+        || state.cost.is_some_and(|c| c.is_finite() && c >= 0.0)
+        || (!notice.is_empty() && !notice.starts_with("Ready") && notice != "New session")
 }
 
 fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     let cost = state
         .cost
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .map_or_else(|| "cost unknown".into(), |cost| format!("cost ${cost:.4}"));
-    let context = if state.context_window == 0 || state.context == 0 {
-        "ctx unknown".into()
-    } else {
-        let percent = (state.context as f64 / state.context_window as f64 * 100.0).round() as usize;
-        let filled = (percent.min(100) / 10).min(10);
-        format!(
-            "ctx [{}{}] {percent}% {}/{}",
-            "━".repeat(filled),
-            "─".repeat(10 - filled),
-            count(state.context),
-            count(state.context_window)
-        )
-    };
-    let text = vec![
-        Line::from(vec![
+        .map(|cost| format!("cost ${cost:.4}"));
+    let mut telemetry = vec![];
+    if let Some(rate) = state.token_rate(now).filter(|rate| *rate > 0.0) {
+        telemetry.push(format!("{rate:.1} tok/s"));
+    }
+    if let Some(cost) = cost {
+        telemetry.push(cost);
+    }
+    let telemetry = telemetry.join(" · ");
+    let notice_width = usize::from(area.width).saturating_sub(telemetry.len() + 3);
+    let notice =
+        super::launch_view::fit(state.toast_text(now).unwrap_or(&state.notice), notice_width);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled(
-                format!(" {}", state.model_chain),
-                Style::default().fg(VIOLET).add_modifier(Modifier::BOLD),
+                format!("{notice:<notice_width$}   "),
+                Style::default().fg(MUTED),
             ),
-            Span::styled(format!("  ·  {}", state.branch), Style::default().fg(MUTED)),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!(" {:.1} tok/s / 5s", state.velocity(now)),
-                Style::default().fg(BLUE),
-            ),
-            Span::raw(format!("  ·  {cost}  ·  ")),
-            Span::styled(context, Style::default().fg(CYAN)),
-        ]),
-    ];
-    frame.render_widget(Paragraph::new(text).block(panel(" Lain · frontier ")), area);
+            Span::styled(telemetry, Style::default().fg(MUTED)),
+        ])),
+        area,
+    );
 }
 
 fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>, Line<'static>)> {
@@ -382,8 +373,29 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
     scroll
 }
 
-pub fn has_room(area: Rect) -> bool {
-    area.width >= 120 && area.height >= 30
+pub fn has_room(area: Rect, state: &State) -> bool {
+    let (width, height) = if state.launch() { (80, 24) } else { (120, 30) };
+    area.width >= width && area.height >= height
+}
+
+fn composer_rows(text: &str, width: u16) -> Vec<String> {
+    let input = format!("› {}", text.replace('\t', "    ").replace('\n', "\n  "));
+    let mut rows = Vec::new();
+    for line in input.split('\n') {
+        let mut row = String::new();
+        let mut used = 0;
+        for glyph in Span::raw(line).styled_graphemes(Style::default()) {
+            let n = Line::raw(glyph.symbol).width();
+            if used + n > usize::from(width.max(1)) && !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+                used = 0;
+            }
+            row.push_str(glyph.symbol);
+            used += n;
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
@@ -391,92 +403,198 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
         frame.area(),
     );
-    if !has_room(frame.area()) {
+    if !has_room(frame.area(), state) {
+        let size = if state.launch() { "80x24" } else { "120x30" };
         frame.render_widget(
-            Paragraph::new("terminal too small (need 120x30)\nResize to continue · Ctrl-C quits")
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(format!(
+                "terminal too small (need {size})\nResize to continue · Ctrl-C quits"
+            ))
+            .wrap(Wrap { trim: false }),
             frame.area(),
         );
+        state.theme.apply(frame.buffer_mut());
         return Scroll::default();
     }
+    let draft = composer_rows(&state.composer, frame.area().width.saturating_sub(1));
     let vertical = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(1),
+        Constraint::Length(u16::from(has_banner(state, now))),
         Constraint::Min(3),
-        Constraint::Length(3),
-        Constraint::Length(3),
+        Constraint::Length(if state.screen == Screen::Session {
+            draft.len().clamp(1, 6) as u16 + 2
+        } else {
+            1
+        }),
+        Constraint::Length(1),
     ])
     .split(frame.area());
     let Some(banner_area) = vertical.first() else {
         return Scroll::default();
     };
     let mut scroll = state.scroll;
-    banner(frame, *banner_area, state, now);
+    shell_view::tabs(frame, *banner_area, state);
     if let Some(area) = vertical.get(1) {
-        let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
-            .split(*area);
-        if let Some(area) = main.get(1) {
-            scroll = drawer(frame, *area, state);
-        }
-        if let Some(area) = main.first() {
-            (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
-        }
+        banner(frame, *area, state, now);
     }
     if let Some(area) = vertical.get(2) {
-        let input = format!("› {}", state.composer);
-        let width = Line::from(input.clone()).width();
-        let scroll = width
-            .saturating_sub(usize::from(area.width.saturating_sub(3)))
-            .min(usize::from(u16::MAX)) as u16;
+        if state.screen == Screen::Session {
+            let completion_height = state
+                .slash()
+                .map(|(commands, _)| (commands.len().clamp(1, 4) + 2) as u16)
+                .unwrap_or(0);
+            let parts = Layout::vertical([
+                Constraint::Min(3),
+                Constraint::Length(completion_height),
+                Constraint::Length(if state.running { 2 } else { 0 }),
+            ])
+            .split(*area);
+            let area = parts.first().unwrap_or(area);
+            if completion_height > 0 {
+                if let Some(completion) = parts.get(1) {
+                    shell_view::completion(frame, *completion, state);
+                }
+            }
+            if state.running {
+                if let Some(working) = parts.get(2) {
+                    super::transcript::working(frame, *working, state, now);
+                }
+            }
+            if state.launch() {
+                super::launch_view::draw(frame, *area, state);
+            } else {
+                let dag = state.dag_drawer.unwrap_or(frame.area().width >= 160);
+                let plan = state.plan_drawer.unwrap_or(frame.area().width >= 160);
+                let main = Layout::horizontal([
+                    Constraint::Min(40),
+                    Constraint::Length(if dag || plan {
+                        (area.width / 3).clamp(40, 64)
+                    } else {
+                        0
+                    }),
+                ])
+                .split(*area);
+                if let Some(right) = main.get(1) {
+                    let sections = Layout::vertical([
+                        Constraint::Percentage(if dag {
+                            if plan {
+                                40
+                            } else {
+                                100
+                            }
+                        } else {
+                            0
+                        }),
+                        Constraint::Min(0),
+                    ])
+                    .split(*right);
+                    if plan {
+                        if let Some(area) = sections.get(1) {
+                            scroll = drawer(frame, *area, state);
+                        }
+                    }
+                    if dag {
+                        if let Some(area) = sections.first() {
+                            (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+                        }
+                    }
+                }
+                scroll.dag_visible = dag;
+                scroll.plan_visible = plan;
+                if let Some(area) = main.first() {
+                    super::transcript::draw(frame, *area, state, now, &mut scroll);
+                }
+            }
+        } else if state.screen == Screen::Plugins {
+            plugins::draw(frame, *area, &state.plugins, &mut scroll);
+        } else if state.screen == Screen::Creator {
+            super::creator_view::draw(frame, *area, state, &mut scroll);
+        } else {
+            match state.screen {
+                Screen::Bots => super::bots::draw(frame, *area, &state.inspect, now),
+                Screen::Sessions => super::inspect::sessions(frame, *area, &state.inspect, now),
+                Screen::Memory => {
+                    super::inspect::memory(frame, *area, &state.inspect, now, &mut scroll)
+                }
+                Screen::Models => super::inspect::models(frame, *area, state, now),
+                _ => {}
+            }
+        }
+    }
+    if let Some(area) = vertical.get(3).filter(|_| state.screen == Screen::Session) {
+        let visible = usize::from(area.height.saturating_sub(2));
+        scroll.composer_max = draft.len().saturating_sub(visible);
+        scroll.composer = scroll.composer.min(scroll.composer_max);
+        let start = scroll.composer_max.saturating_sub(scroll.composer);
+        let input = draft
+            .iter()
+            .skip(start)
+            .take(visible)
+            .cloned()
+            .map(Line::from)
+            .collect::<Vec<_>>();
         frame.render_widget(
             Paragraph::new(input)
-                .scroll((0, scroll))
-                .block(panel(if state.running {
-                    " Steer (daemon may reject busy) "
+                .style(Style::default().fg(if state.composer.is_empty() {
+                    MUTED
                 } else {
-                    " Compose "
-                })),
-            *area,
-        );
-        if area.width > 3 && area.height > 2 {
-            frame.set_cursor_position((
-                area.x + 1 + (width.saturating_sub(usize::from(scroll)) as u16).min(area.width - 3),
-                area.y + 1,
-            ));
-        }
-    }
-    if let Some(area) = vertical.get(3) {
-        let mut modes = vec![];
-        for (i, mode) in [Mode::Architect, Mode::Code, Mode::Ask].iter().enumerate() {
-            if i > 0 {
-                modes.push(Span::styled(" | ", Style::default().fg(MUTED)));
-            }
-            modes.push(Span::styled(
-                mode.name(),
-                if *mode == state.mode {
-                    Style::default()
-                        .fg(BACKGROUND)
-                        .bg(CYAN)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(MUTED)
-                },
-            ));
-        }
-        modes.push(Span::styled(
-            " · Tab mode · Enter send · ↑↓ select · Space fold · Esc Esc rewind · q/Ctrl-C quit",
-            Style::default().fg(MUTED),
-        ));
-        frame.render_widget(
-            Paragraph::new(Text::from(vec![
-                Line::from(modes),
-                Line::styled(
-                    "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules",
-                    Style::default().fg(MUTED),
+                    TEXT
+                }))
+                .block(
+                    Block::default()
+                        .borders(Borders::TOP | Borders::BOTTOM)
+                        .border_style(Style::default().fg(MUTED))
+                        .title_bottom(
+                            Line::from(if draft.len()>1 {" ↑/↓ scroll draft · Enter submit · Ctrl+K commands · F1 help "}
+                            else if state.launch() {" Tab mode · Ctrl+K commands · F1 help "}
+                            else if state.plan_drawer.unwrap_or(state.scroll.plan_visible) {
+                                " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Ctrl+G DAG · Ctrl+P close · Ctrl+K commands · F1 help "
+                            } else {" Tab mode · Ctrl+O output · Ctrl+G DAG · Ctrl+P plan/rules · Ctrl+K commands · F1 help "})
+                                .alignment(ratatui::layout::Alignment::Right),
+                        ),
                 ),
-                Line::styled(state.notice.as_str(), Style::default().fg(AMBER)),
-            ])),
             *area,
         );
+        if state.composer.is_empty() {
+            frame.render_widget(
+                Paragraph::new("› Ask Lain anything").style(Style::default().fg(MUTED)),
+                Rect::new(area.x, area.y + 1, area.width, 1),
+            );
+        }
+        super::launch_view::rule(frame, Rect::new(area.x, area.y, area.width, 1), state.theme);
+        if area.width > 3 && area.height > 2 && state.overlay.is_none() && scroll.composer == 0 {
+            frame.set_cursor_position((
+                area.x
+                    + draft
+                        .last()
+                        .map_or(0, |line| Line::raw(line).width())
+                        .min(usize::from(area.width - 1)) as u16,
+                area.y
+                    + 1
+                    + draft
+                        .len()
+                        .saturating_sub(start + 1)
+                        .min(visible.saturating_sub(1)) as u16,
+            ));
+        }
     }
+    if let Some(area) = vertical.get(4) {
+        super::launch_view::footer(frame, *area, state);
+    }
+    if !matches!(state.screen, Screen::Session | Screen::Bots) {
+        if let Some(area) = vertical.get(3) {
+            frame.render_widget(
+                Paragraph::new(match state.screen {
+                    Screen::Sessions => "↑↓ select · Enter attach status · r refresh · Ctrl+K commands · F1 help",
+                    Screen::Memory => "↑↓ select · / filter · PgUp/PgDn detail · r refresh · Ctrl+K commands · F1 help",
+                    Screen::Models => "r reload local config · Ctrl+K commands · F1 help · Alt+←/→ screens",
+                    _=>"Ctrl+K commands · F1 help · Alt+←/→ screens",
+                })
+                    .style(Style::default().fg(MUTED)),
+                *area,
+            );
+        }
+    }
+    shell_view::overlay(frame, state, &mut scroll);
+    state.theme.apply(frame.buffer_mut());
     scroll
 }
