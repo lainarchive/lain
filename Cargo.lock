@@ -1119,8 +1119,15 @@ dependencies = [
 name = "lain"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
+ "lain-agent",
  "lain-cli",
+ "lain-context",
+ "lain-core",
+ "lain-harness",
  "lain-ipc",
+ "lain-memory",
  "serde_json",
  "tempfile",
  "tokio",
