@@ -112,28 +112,6 @@ fn abandon_turn(
     session.take()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn abandoning_a_turn_quarantines_stream_and_poll_and_retires_its_session() {
-        let mut session = Some("cancelled".into());
-        let mut active = Some(10);
-        let mut poll = Some(11);
-        let mut ignored = BTreeSet::new();
-        assert_eq!(
-            abandon_turn(&mut session, &mut active, &mut poll, &mut ignored),
-            Some("cancelled".into())
-        );
-        assert!(session.is_none() && active.is_none() && poll.is_none());
-        assert_eq!(ignored, BTreeSet::from([10, 11]));
-        assert_eq!(
-            abandon_turn(&mut session, &mut active, &mut poll, &mut ignored),
-            None
-        );
-    }
-}
-
 pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let cwd = std::env::current_dir()?;
     let mut state = if demo {
@@ -328,4 +306,26 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
         let _ = client.close().await;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn abandoning_a_turn_quarantines_stream_and_poll_and_retires_its_session() {
+        let mut session = Some("cancelled".into());
+        let mut active = Some(10);
+        let mut poll = Some(11);
+        let mut ignored = BTreeSet::new();
+        assert_eq!(
+            abandon_turn(&mut session, &mut active, &mut poll, &mut ignored),
+            Some("cancelled".into())
+        );
+        assert!(session.is_none() && active.is_none() && poll.is_none());
+        assert_eq!(ignored, BTreeSet::from([10, 11]));
+        assert_eq!(
+            abandon_turn(&mut session, &mut active, &mut poll, &mut ignored),
+            None
+        );
+    }
 }
