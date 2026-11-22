@@ -264,13 +264,13 @@ fn shell_help_and_tab_highlight_fit_minimum_size() -> Result<(), Box<dyn std::er
     let text = contents(&terminal);
     let x = text
         .lines()
-        .nth(4)
+        .next()
         .and_then(|line| line.find("3 Creator"))
         .ok_or("missing tab")?;
     let cell = terminal
         .backend()
         .buffer()
-        .cell((x as u16, 4))
+        .cell((x as u16, 0))
         .ok_or("missing cell")?;
     assert_eq!(cell.fg, super::theme::CYAN);
     assert_eq!(cell.bg, super::theme::PANEL);
@@ -402,6 +402,149 @@ fn creator_reports_page_by_the_viewport_without_overshooting(
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn launch_state() -> Result<State, Box<dyn std::error::Error>> {
+    let mut state = State::new(
+        "feat/wired".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    state.plugins = super::plugins::Plugins::sample()?;
+    state.session_id = Some("demo-local".into());
+    state.model_chain = "demo-model".into();
+    state.context = 38_000;
+    state.context_window = 1_000_000;
+    state.notice = "OFFLINE DEMO · synthetic telemetry".into();
+    Ok(state)
+}
+
+#[test]
+fn themes_cycle_from_slash_and_palette_and_recolor_editors(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = launch_state()?;
+    assert_eq!(state.theme, super::theme::Theme::Wired);
+    for c in "/theme".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.theme, super::theme::Theme::Mono);
+    state.screen = Screen::Creator;
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .all(|cell| match cell.fg {
+            ratatui::style::Color::Rgb(r, g, b) => r == g && g == b,
+            _ => true,
+        }));
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    for c in "theme".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.theme, super::theme::Theme::Wired);
+    Ok(())
+}
+
+#[test]
+fn launch_layout_is_responsive_and_footer_uses_known_telemetry(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = launch_state()?;
+    let text = render(&state)?;
+    for expected in [
+        "λ lain v",
+        "session",
+        "get started",
+        "demo-local",
+        "/creator",
+        "/plugins",
+        "/theme",
+        "type / to find one",
+        "plugin echo",
+        "demo_echo",
+        "branch:feat/wired",
+        "3% 38k/1M",
+        "Ask Lain anything",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    if let Some(path) = std::env::var_os("LAIN_VIS_A_DUMP") {
+        std::fs::write(path, format!("{text}\n"))?;
+    }
+    let mut terminal = Terminal::new(TestBackend::new(80, 24))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    let compact = contents(&terminal);
+    assert!(!compact.contains("terminal too small"));
+    assert!(!compact.contains("get started"));
+    assert!(!compact.contains("type / to find one"));
+    assert!(compact.contains("Ask Lain anything"));
+    assert!(compact.contains("/creator"));
+    assert!(matches!(
+        super::input::handle_key(
+            &mut state,
+            key(KeyCode::Char('x')),
+            Duration::ZERO,
+            ratatui::layout::Rect::new(0, 0, 80, 24)
+        ),
+        Effect::None
+    ));
+    assert_eq!(state.composer, "x");
+    state.model_chain = "model unknown".into();
+    state.context_window = 0;
+    let text = render(&state)?;
+    let footer = text.lines().last().ok_or("missing footer")?;
+    assert!(!footer.contains("ctx"));
+    assert!(!footer.contains("model unknown"));
+    Ok(())
+}
+
+#[test]
+fn launch_grid_overflow_and_small_screen_guards() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = launch_state()?;
+    let mut tool = state.plugins.tools.first().ok_or("missing tool")?.clone();
+    tool.source = lain_ipc::ToolSource::Builtin;
+    for n in 0..20 {
+        tool.name = format!("other_{n:02}");
+        state.plugins.tools.push(tool.clone());
+    }
+    assert!(render(&state)?.contains("+"));
+    assert!(render(&state)?.contains("more"));
+    for (width, height, cards) in [(100, 24, true), (80, 24, false)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+        draw_scrolled(&mut terminal, &mut state)?;
+        let text = contents(&terminal);
+        assert_eq!(text.contains("get started"), cards);
+        assert!(!text.contains("type / to find one"));
+    }
+    assert!(!view::has_room(
+        ratatui::layout::Rect::new(0, 0, 79, 24),
+        &state
+    ));
+    state.plugins.tools.clear();
+    state.plugins.tools_error = Some("Daemon does not support ListTools".into());
+    assert!(render(&state)?.contains("Daemon does not support ListTools"));
+    for mode in [Mode::Architect, Mode::Code, Mode::Ask] {
+        state.mode = mode;
+        assert!(render(&state)?
+            .lines()
+            .last()
+            .unwrap_or("")
+            .contains(mode.name()));
+    }
+    state.composer = "start".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(!state.launch());
+    assert!(!view::has_room(
+        ratatui::layout::Rect::new(0, 0, 80, 24),
+        &state
+    ));
+    Ok(())
 }
 
 #[test]
@@ -680,7 +823,7 @@ fn banner_lanes_and_sticky_plan() -> Result<(), Box<dyn std::error::Error>> {
         "tok/s",
         "cost unknown",
         "ctx",
-        "33%",
+        "32%",
         "42k/128k",
         "feat/frontier",
         "layer 1",
@@ -793,7 +936,7 @@ fn empty_and_error_events_are_visible() -> Result<(), Box<dyn std::error::Error>
         "detached@abcdef0".into(),
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
     )?;
-    assert!(render(&state)?.contains("No turns yet"));
+    assert!(render(&state)?.contains("get started"));
     assert!(matches!(
         state.key(key(KeyCode::Enter), Duration::ZERO),
         Effect::None
@@ -1076,7 +1219,7 @@ fn small_terminals_show_a_resize_message_and_recover_at_minimum_size(
         "Execution DAG",
         "Scratchpad",
         "Procedural rules",
-        "Compose",
+        "Ask Lain anything",
         "Tab mode",
     ] {
         assert!(text.contains(expected), "missing {expected}");
