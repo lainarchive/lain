@@ -671,6 +671,10 @@ pub fn map_agent_event(id: &str, event: AgentEvent) -> Option<Event> {
             ..
         } => {
             let ok = matches!(&outcome, ToolOutcome::Succeeded(output) if output.exit_code.is_none_or(|code| code == 0));
+            let exit_code = match &outcome {
+                ToolOutcome::Succeeded(output) => output.exit_code,
+                _ => None,
+            };
             let summary = match outcome {
                 ToolOutcome::Succeeded(output) => output.content,
                 ToolOutcome::Failed { message, .. } => message,
@@ -682,6 +686,7 @@ pub fn map_agent_event(id: &str, event: AgentEvent) -> Option<Event> {
                 name,
                 ok,
                 summary,
+                exit_code,
             })
         }
         AgentEvent::ReflectionFailed { code } => Some(Event::Error {
@@ -834,8 +839,8 @@ mod tests {
             ),
         ] {
             assert!(
-                matches!(map_agent_event("s", AgentEvent::ToolCompleted { turn: 1, call_id: "c".into(), name: "tool".into(), outcome }),
-                Some(Event::ToolFinished { ok, .. }) if ok == expected)
+                matches!(map_agent_event("s", AgentEvent::ToolCompleted { turn: 1, call_id: "c".into(), name: "tool".into(), outcome:outcome.clone() }),
+                Some(Event::ToolFinished { ok, exit_code,.. }) if ok == expected && exit_code==match outcome {ToolOutcome::Succeeded(output)=>output.exit_code,_=>None})
             );
         }
         assert!(

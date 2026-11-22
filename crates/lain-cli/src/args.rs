@@ -7,17 +7,22 @@ use crate::Error;
 pub const USAGE: &str = "lain — local agent CLI
 
 Usage:
+  lain tui [demo]                      Terminal lane view (demo: offline sample)
+  lain daemon [--no-ui]                IPC daemon + dashboard (default)
+  lain run \"prompt\" [--json]           Streaming reply and observed evidence report
+  lain doctor [--json]                 Bounded, offline-safe environment checks
+
+Secondary commands:
+  lain ui                             Dashboard at http://127.0.0.1:4040
   lain start
   lain query \"prompt\"
   lain memory inspect [--limit N] [--session ID]
-  lain ui                             Dashboard at http://127.0.0.1:4040
-  lain tui [demo]                      Terminal lane view (demo: offline sample)
-  lain daemon [--no-ui]                IPC daemon + dashboard (default)
 
 Options (before or after the command):
   --endpoint PATH   IPC endpoint; defaults to LAIN_IPC_ENDPOINT or the OS default
   --config PATH     AgentConfig JSON; defaults to LAIN_CONFIG or ./lain.json
   --plain           No colors, spinner, or terminal boxes
+  --json            Machine-readable run/doctor report (no streamed stdout text)
   --help, -h        Show this help
 
 The daemon opens LAIN_MEMORY_DB or ./.lain/memory.db in its working directory.
@@ -27,6 +32,8 @@ No provider is contacted until a configured session receives a message.
 Provider token deltas stream to the TUI; plain clients print completed messages.
 --no-ui disables the daemon dashboard. --serve-ui remains a compatibility alias.
 Interactive commands: /quit, /status, /memory, /cancel. Ctrl-C cancels a turn.
+run exits: 0 completed with verified bounded claims; 2 completed but unverified;
+1 failure (including tool failure, cancellation or disconnect). doctor: 1 if any ✗.
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +43,8 @@ pub enum Action {
     Start,
     Tui { demo: bool },
     Query(String),
+    Run(String),
+    Doctor,
     Memory { limit: u32, session: Option<String> },
 }
 
@@ -46,6 +55,7 @@ pub struct Options {
     pub config: PathBuf,
     pub plain: bool,
     pub serve_ui: bool,
+    pub json: bool,
 }
 
 impl Options {
@@ -59,6 +69,7 @@ impl Options {
             .map(PathBuf::from)
             .unwrap_or_else(|| "lain.json".into());
         let mut plain = false;
+        let mut json = false;
         let mut help = false;
         let mut serve_ui = true;
         let mut ui_option = false;
@@ -69,6 +80,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => help = true,
                 "--plain" => plain = true,
+                "--json" => json = true,
                 "--serve-ui" => ui_option = true,
                 "--no-ui" => {
                     serve_ui = false;
@@ -122,6 +134,8 @@ impl Options {
                 ["tui"] => Action::Tui { demo: false },
                 ["tui", "demo"] => Action::Tui { demo: true },
                 ["query", prompt] if !prompt.trim().is_empty() => Action::Query((*prompt).into()),
+                ["run", prompt] if !prompt.trim().is_empty() => Action::Run((*prompt).into()),
+                ["doctor"] => Action::Doctor,
                 ["memory", "inspect"] => Action::Memory {
                     limit: limit.unwrap_or(20),
                     session: session.clone(),
@@ -148,12 +162,19 @@ impl Options {
                 "--limit and --session require memory inspect",
             ));
         }
+        if json && !matches!(action, Action::Run(_) | Action::Doctor | Action::Help) {
+            return Err(Error::failure(
+                "CLI_ARGUMENTS",
+                "--json requires run or doctor",
+            ));
+        }
         Ok(Self {
             action,
             endpoint,
             config,
             plain,
             serve_ui,
+            json,
         })
     }
 }
@@ -168,6 +189,11 @@ mod tests {
 
     #[test]
     fn commands_and_options() -> Result<(), Error> {
+        assert!(matches!(
+            parse(&["run", "hello", "--json"])?.action,
+            Action::Run(_)
+        ));
+        assert_eq!(parse(&["doctor", "--json"])?.action, Action::Doctor);
         assert!(parse(&["daemon"])?.serve_ui);
         assert!(parse(&["ui"])?.serve_ui);
         assert!(parse(&["daemon", "--serve-ui"])?.serve_ui);
@@ -206,6 +232,10 @@ mod tests {
 
     #[test]
     fn rejects_bad_arguments() {
+        assert!(parse(&["run"]).is_err());
+        assert!(parse(&["run", ""]).is_err());
+        assert!(parse(&["doctor", "extra"]).is_err());
+        assert!(parse(&["query", "hi", "--json"]).is_err());
         for args in [
             vec!["query"],
             vec!["query", ""],

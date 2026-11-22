@@ -2315,6 +2315,7 @@ fn telemetry_events_completion_and_folding() -> Result<(), Box<dyn std::error::E
             name: "repo_map".into(),
             ok: true,
             summary: "symbols".into(),
+            exit_code: None,
         },
         Duration::ZERO,
     );

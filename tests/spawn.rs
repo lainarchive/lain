@@ -35,8 +35,8 @@ impl Drop for DaemonCleanup {
 }
 
 #[tokio::test]
-async fn clients_reach_output_eof_while_spawned_daemon_is_alive(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn clients_reach_output_eof_while_spawned_daemon_is_alive()
+-> Result<(), Box<dyn std::error::Error>> {
     for args in [
         vec!["start"],
         vec!["query", "hi"],
