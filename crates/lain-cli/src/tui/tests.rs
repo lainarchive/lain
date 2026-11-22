@@ -173,6 +173,44 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn second_demo_rewind_keeps_sample_notes_but_removes_its_own(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    let prior = state.notes.clone();
+    state.composer = "first".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.event(
+        &Event::SessionCompleted {
+            session_id: "s".into(),
+            reason: "completed".into(),
+            scratchpad: None,
+        },
+        Duration::ZERO,
+    );
+    state.composer = "second".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    let turn = state
+        .active
+        .as_ref()
+        .and_then(|id| id.strip_prefix("turn-"))
+        .ok_or("missing turn id")?
+        .parse()?;
+    state.notes.push(lain_harness::advisor::AdvisorNote {
+        kind: lain_harness::advisor::AdvisorKind::Aside,
+        turn,
+        text: "current turn".into(),
+    });
+    state.key(key(KeyCode::Esc), Duration::from_millis(10));
+    assert!(matches!(
+        state.key(key(KeyCode::Esc), Duration::from_millis(20)),
+        Effect::Rewind
+    ));
+    assert_eq!(state.notes, prior);
+    assert_eq!(state.composer, "second");
+    Ok(())
+}
+
+#[test]
 fn q_inserts_into_a_draft_and_only_quits_an_empty_composer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
