@@ -8,7 +8,7 @@ are both named `lain`; use the entry point for the implementation you want.
 
 | Area | Source and entry point |
 | --- | --- |
-| Rust CLI and daemon | [`crates/lain-cli/`](crates/lain-cli/README.md); `cargo run -p lain-cli -- --help` |
+| Rust CLI and daemon | [`crates/lain-cli/`](crates/lain-cli/README.md); `cargo install --path .`, then `lain --help` (or `cargo run -p lain -- --help`) |
 | Rust runtime | [`crates/`](crates/): `lain-agent` runs turns, `lain-core` provides model and tool interfaces, and `lain-ipc`, `lain-memory`, `lain-context`, and `lain-plugin` handle transport, memory, repository context, and extensions. |
 | Neural dashboard (browser) | [`dashboard/`](dashboard/README.md) is the Next.js client; its HTTP and WebSocket bridge is in [`crates/lain-cli/src/dashboard.rs`](crates/lain-cli/src/dashboard.rs). The Rust command is `lain ui`. |
 | Node CLI and terminal dashboard | [`src/`](src/) and [`test/`](test/); `node src/cli/index.mjs` for the [CLI](docs/CLI.md), or add `tui` for the [terminal dashboard](docs/ui/README.md). |

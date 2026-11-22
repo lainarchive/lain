@@ -395,6 +395,7 @@ pub fn router(
     token: String,
 ) -> Router {
     Router::new()
+        .route("/healthz",get(||async {Json(serde_json::json!({"service":"lain","protocol_version":lain_ipc::PROTOCOL_VERSION}))}))
         .route("/api/v1/status", get(status))
         .route("/api/v1/memory", get(memory))
         .route("/api/v1/plugins", get(plugins))
@@ -947,6 +948,8 @@ mod tests {
             );
         }
         for (path, host, auth, expected) in [
+            ("/healthz", address.to_string(), "", 200),
+            ("/healthz", "evil.example".into(), "", 403),
             (
                 "/api/v1/status",
                 address.to_string(),
@@ -1003,6 +1006,10 @@ mod tests {
                 let body: serde_json::Value =
                     serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
                 match path {
+                    "/healthz" => assert_eq!(
+                        body,
+                        json!({"service":"lain","protocol_version":lain_ipc::PROTOCOL_VERSION})
+                    ),
                     "/api/v1/status" => assert_eq!(
                         body,
                         json!({"protocol_version":1,"sessions":[],"latest_sequence":0})
