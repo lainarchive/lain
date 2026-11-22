@@ -50,6 +50,41 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn primary_busy_rejection_stops_working_but_steer_errors_do_not(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_turn()?;
+    let now = Duration::from_secs(2);
+    let event = Event::Error {
+        code: "SESSION_BUSY".into(),
+        message: "s".into(),
+    };
+    state.event(&event, now);
+    assert!(state.running);
+    state.reject_turn("SESSION_BUSY", now);
+    assert!(!state.running);
+    let task = state
+        .active
+        .as_ref()
+        .and_then(|id| state.tasks.get(id))
+        .ok_or("missing active turn")?;
+    assert_eq!(task.phase, super::state::Phase::NotSent);
+    assert_eq!(task.ended, Some(now));
+    assert!(state.notice.contains("SESSION_BUSY"));
+    state.running = true;
+    state.reject_turn("SESSION_NOT_FOUND", now);
+    assert!(!state.running);
+    assert_eq!(
+        state
+            .active
+            .as_ref()
+            .and_then(|id| state.tasks.get(id))
+            .map(|t| t.phase),
+        Some(super::state::Phase::Failed)
+    );
+    Ok(())
+}
+
+#[test]
 fn palette_scores_filters_and_dispatches() -> Result<(), Box<dyn std::error::Error>> {
     assert!(app::score("plugins", "plugins") > app::score("pg", "plugins"));
     assert!(app::score("PLG", "Plugins").is_some());

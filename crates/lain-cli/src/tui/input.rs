@@ -264,14 +264,11 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     if Some(request) == poll_request { poll_request = None; }
                     if Some(request) == active_request {
                         state.event(&event, started.elapsed());
-                        if matches!(&event, Event::Error { code, .. } if code != "SESSION_BUSY") {
-                            state.running = false;
-                            if let Some(task) = state.active.as_ref().and_then(|id| state.tasks.get_mut(id)) {
-                                task.phase = Phase::Failed; task.ended = Some(started.elapsed());
-                            }
+                        if let Event::Error {code,..} = &event {
+                            state.reject_turn(code,started.elapsed());
                             ignored.insert(request);
                             active_request = None;
-                            session = None;
+                            if code!="SESSION_BUSY" {session = None;}
                         }
                         if let Event::SessionCompleted { reason, .. } = &event {
                             active_request = None;
