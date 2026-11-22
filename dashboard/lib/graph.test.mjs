@@ -82,6 +82,20 @@ test('replay duplicates are ignored and missing history is surfaced', () => {
   assert.equal(run([]), emptyGraph);
 });
 
+test('compact layout leaves a gap around 200 by 56 nodes', () => {
+  assert.deepEqual(layoutNodes([]), []);
+  const nodes = [
+    { id: 'intent' },
+    { id: 'a', parents: ['intent'] },
+    { id: 'b', parents: ['intent'] },
+  ];
+  const [intent, a, b] = layoutNodes(nodes);
+  assert.equal(a.x - intent.x, 244);
+  assert.equal(b.x, a.x);
+  assert.equal(b.y - a.y, 88);
+  assert.deepEqual(nodes[0], { id: 'intent' });
+});
+
 test('reflection retains its summary and rules and sessions remain isolated', () => {
   let graph = run([intent, turn]);
   graph = run([{ type: 'intent_received', text: 'other' }], 'other', graph);
