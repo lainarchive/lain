@@ -15,12 +15,15 @@
 - TDD first failed on the missing AST-location and runner-guard APIs. Final workspace tests: **264 passed
   (35 suites, 11.20 s)**; Clippy, fmt, repository hygiene, its eight-check self-test and added-line length checks passed.
   Root dev dependencies and their hygiene allowlist were updated; no new third-party packages were introduced.
-- Windows standard library target installed successfully. The requested workspace cross-check is **blocked** in
-  ring's native build: `ToolNotFound: failed to find tool "x86_64-w64-mingw32-gcc"`. Environment diagnosis confirmed
-  Cargo is loaded and no MinGW compiler/package is installed. This requires a cross-C compiler even for cargo check;
-  no final executable linker was invoked. MinGW was not installed under the brief's link-only installation condition.
-- Next: allow installing `gcc-mingw-w64-x86-64` to unblock native dependencies, then repeat the Windows workspace
-  check. Windows Rust compilation/runtime remain unverified. Commit locally; do not push.
+- Windows verification follow-up: installed `gcc-mingw-w64-x86-64` with the user's authorization. This MinGW SDK
+  defaults `_WIN32_WINNT` to 0x0502, hiding GetTickCount64 from bundled SQLite. The cross-check shell sets
+  `CFLAGS_x86_64_pc_windows_gnu=-D_WIN32_WINNT=0x0601`; no repository build configuration was changed.
+- Windows `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu` and the matching Clippy command
+  with `-- -D warnings` now pass. Clippy exposed Unix-only test imports in repo_map.rs; their cfg guards now match
+  the Unix-only test. Named-pipe transport, reconnect, doctor's pipe probe and run compile unchanged.
+- Linux follow-up gates after the cfg fix: **264 passed (35 suites, 11.98 s)**, Clippy and fmt passed, repository
+  hygiene passed (304 ms). Windows tests were cross-checked, not executed; native Windows runtime remains unverified.
+- Next: await the next launch step. Commit locally; do not push.
 
 ## Launch integration: CLI packaging and diagnostics
 
