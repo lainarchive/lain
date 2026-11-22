@@ -17,7 +17,13 @@ export function captureToken(
 }
 
 export function dashboardToken() {
-  return captureToken(location.hash, sessionStorage, () => {
+  let storage: Pick<Storage, "getItem" | "setItem">;
+  try {
+    storage = sessionStorage;
+  } catch {
+    storage = { getItem: () => token, setItem: () => {} };
+  }
+  return captureToken(location.hash, storage, () => {
     history.replaceState(null, "", location.pathname + location.search);
   });
 }
