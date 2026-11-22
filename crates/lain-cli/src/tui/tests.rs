@@ -623,6 +623,140 @@ fn transcript_drawers_working_and_follow_contract() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn live_sessions_omit_unknown_columns_and_page_rows() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new(
+        "main".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    state.screen = Screen::Sessions;
+    state.inspect.sessions.accept(
+        (0..40)
+            .map(|i| {
+                super::inspect::SessionRow::from(lain_ipc::SessionInfo {
+                    id: format!("live-{i:02}"),
+                    model: Some("known-model".into()),
+                    mode: None,
+                    turn_count: i,
+                })
+            })
+            .collect(),
+        Duration::ZERO,
+    );
+    state.inspect.daemon.accept("ready".into(), Duration::ZERO);
+    for _ in 0..50 {
+        state.key(key(KeyCode::Down), Duration::ZERO);
+    }
+    assert_eq!(state.inspect.session_selected, 39);
+    for (width, height) in [(140, 45), (120, 30)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+        draw_scrolled(&mut terminal, &mut state)?;
+        let text = contents(&terminal);
+        assert!(text.contains("live-39"));
+        assert!(text.contains("/40 · read just now"));
+        for omitted in ["In tokens", "Out tokens", "Cost", "Age", "pid ", "uptime "] {
+            assert!(!text.contains(omitted), "invented {omitted}");
+        }
+    }
+    state.key(key(KeyCode::Char('r')), Duration::ZERO);
+    assert!(matches!(
+        state.inspect.sessions.state,
+        super::inspect::ReadState::Idle
+    ));
+    Ok(())
+}
+
+#[test]
+fn memory_detail_pages_by_the_visible_height() -> Result<(), Box<dyn std::error::Error>> {
+    for height in [30, 45] {
+        let mut state = State::demo_turn()?;
+        state.screen = Screen::Memory;
+        state.inspect.memory.accept(
+            vec![super::inspect::MemoryEntry {
+                kind: "episode",
+                text: (0..100).map(|i| format!("record line {i}\n")).collect(),
+            }],
+            Duration::ZERO,
+        );
+        let mut terminal = Terminal::new(TestBackend::new(140, height))?;
+        draw_scrolled(&mut terminal, &mut state)?;
+        let page = state.scroll.memory_page;
+        assert!(page > 1);
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+        assert_eq!(state.scroll.memory_detail, page);
+        draw_scrolled(&mut terminal, &mut state)?;
+        let right = contents(&terminal)
+            .lines()
+            .map(|line| line.chars().skip(56).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!right.contains("record line 0"));
+        state.key(key(KeyCode::PageUp), Duration::ZERO);
+        assert_eq!(state.scroll.memory_detail, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn model_rate_needs_a_real_interval_and_excludes_initial_lifetime_tokens(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new(
+        "main".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    state.screen = Screen::Models;
+    assert!(render(&state)?.contains("Current model · unavailable"));
+    assert!(!render(&state)?.contains("tok/s"));
+    for (at, tokens) in [(0, 10_000), (2, 10_100)] {
+        state.event(
+            &Event::Telemetry {
+                session_id: "live".into(),
+                model: "known-model".into(),
+                context_tokens: 100,
+                context_window: 1000,
+                tokens_used: tokens,
+                scratchpad: String::new(),
+            },
+            Duration::from_secs(at),
+        );
+        if at == 0 {
+            assert_eq!(state.token_rate(Duration::ZERO), None);
+        }
+    }
+    assert_eq!(state.token_rate(Duration::from_secs(2)), Some(50.0));
+    assert_eq!(state.token_rate(Duration::from_secs(8)), None);
+    let text = render(&state)?;
+    assert!(text.contains("50.0 tok/s"));
+    assert!(text.contains("Tokens used · 10100"));
+    assert!(!text.contains("cost $"));
+    state
+        .inspect
+        .config
+        .unavailable("Local config metadata unavailable");
+    assert!(render(&state)?.contains("Local config metadata unavailable"));
+    Ok(())
+}
+
+#[test]
+fn transcript_polish_uses_compact_arguments_and_useful_tips(
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(super::transcript::arguments("{}"), "");
+    assert_eq!(
+        super::transcript::arguments(r#"{"path":"crates/lain-cli/src/tui"}"#),
+        "crates/lain-cli/src/tui"
+    );
+    assert_eq!(super::transcript::arguments("invalid"), "invalid");
+    let state = State::demo_turn()?;
+    let text = render(&state)?;
+    assert!(!text.contains("● running"));
+    assert!(text.contains("repo_map()"));
+    assert!(text.contains("memory_read(Creator publishing workflow)"));
+    assert_eq!(text.matches("└ crates/lain-cli").count(), 1);
+    assert!(!text.contains("└   creator.rs"));
+    assert!(text.contains("Esc Esc rewinds"));
+    Ok(())
+}
+
+#[test]
 fn demo_launch_has_real_builtin_names_and_known_sample_telemetry(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = State::demo_launch()?;
@@ -648,6 +782,76 @@ fn demo_launch_has_real_builtin_names_and_known_sample_telemetry(
     )?;
     assert!(!render(&fresh)?.contains("0.0 tok/s"));
     assert!(!render(&fresh)?.contains("cost unknown"));
+    Ok(())
+}
+
+#[test]
+fn inspection_screens_show_real_data_and_unavailable_states(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_turn()?;
+    state.screen = Screen::Sessions;
+    let text = render(&state)?;
+    for expected in [
+        "live sessions",
+        "Model",
+        "Mode",
+        "Turns",
+        "rows 1-",
+        "read just now",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    state.key(key(KeyCode::Down), Duration::ZERO);
+    assert_eq!(state.inspect.session_selected, 1);
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(render(&state)?.contains("not available over the socket yet"));
+    state.toast = None;
+    state.screen = Screen::Memory;
+    assert!(render(&state)?.contains("episodic"));
+    state.key(key(KeyCode::Char('/')), Duration::ZERO);
+    state.paste("unsandboxed");
+    assert!(render(&state)?.contains("unsandboxed"));
+    assert!(!render(&state)?.contains("episode ·"));
+    state.key(key(KeyCode::Char('6')), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Memory);
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    state.screen = Screen::Models;
+    for expected in [
+        "Current model",
+        "Context",
+        "Tokens used",
+        "cost $",
+        "Configured locally",
+        "open_ai_compatible",
+        "selection",
+    ] {
+        assert!(render(&state)?.contains(expected), "missing {expected}");
+    }
+    let mut fresh = State::new(
+        "main".into(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )?;
+    for screen in [Screen::Sessions, Screen::Memory, Screen::Models] {
+        fresh.screen = screen;
+        let text = render(&fresh)?;
+        assert!(!text.contains("cost $"));
+        assert!(!text.contains("0.0 tok/s"));
+        assert!(!text.contains("In tokens"));
+    }
+    fresh.inspect.sessions.unavailable("unsupported");
+    fresh.inspect.memory.unavailable("unsupported");
+    for screen in [Screen::Sessions, Screen::Memory] {
+        fresh.screen = screen;
+        assert!(render(&fresh)?.contains("not available over the socket yet"));
+    }
+    fresh.inspect.sessions.accept(vec![], Duration::ZERO);
+    fresh.screen = Screen::Sessions;
+    let text = render(&fresh)?;
+    assert!(text.contains("No live sessions"));
+    assert!(text.contains("rows 0-0/0"));
+    fresh.inspect.memory.accept(vec![], Duration::ZERO);
+    fresh.screen = Screen::Memory;
+    assert!(render(&fresh)?.contains("No matching memory"));
     Ok(())
 }
 

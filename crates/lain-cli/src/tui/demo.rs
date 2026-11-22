@@ -20,6 +20,24 @@ impl State {
         self.cost = Some(0.0128);
         self.context = 38_000;
         self.context_window = 1_000_000;
+        self.event(
+            &lain_ipc::Event::Telemetry {
+                session_id: "demo-local-01".into(),
+                model: self.model_chain.clone(),
+                context_tokens: 38_000,
+                context_window: 1_000_000,
+                tokens_used: 3400,
+                scratchpad: String::new(),
+            },
+            Duration::ZERO,
+        );
+        for screen in [
+            super::app::Screen::Sessions,
+            super::app::Screen::Memory,
+            super::app::Screen::Models,
+        ] {
+            self.inspect.demo_refresh(screen, Duration::ZERO);
+        }
         self.notice = "OFFLINE DEMO · all activity and telemetry are synthetic · no provider or scripts called".into();
         self.creator = super::creator::Creator::sample();
         self.plugins = super::plugins::Plugins::sample()?;
@@ -93,7 +111,12 @@ impl State {
             (1, "repo_map", "crates/lain-cli/src/tui/\n  creator.rs\n  creator_ipc.rs\n  creator_view.rs\n  plugins.rs\n  transcript.rs\n  theme.rs", true),
             (2, "demo_notes", "Preparing a catalog summary…", false),
         ] {
-            state.tools.push(ToolBlock {node:"turn-1".into(),call_id:format!("demo-{index}"), name:name.into(),arguments:"{}".into(),output:output.into(),
+            let arguments = match name {
+                "memory_read" => json!({"query":"Creator publishing workflow"}).to_string(),
+                "demo_notes" => json!({"topic":"Creator catalog"}).to_string(),
+                _ => "{}".into(),
+            };
+            state.tools.push(ToolBlock {node:"turn-1".into(),call_id:format!("demo-{index}"), name:name.into(),arguments,output:output.into(),
                 ok:finished.then_some(true),expanded:false,started:Duration::ZERO, ended:finished.then_some(Duration::from_millis(400))});
         }
         state.notes.push(AdvisorNote {

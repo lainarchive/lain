@@ -247,8 +247,25 @@ pub fn screen_keys(screen: Screen) -> &'static [(&'static str, &'static str)] {
                 "Apply filter or open manifest template in Creator / clear filter",
             ),
         ]
+    } else if screen == Screen::Sessions {
+        &[
+            ("↑↓ / Enter", "Select row / attachment availability"),
+            ("r", "Refresh daemon status and live sessions"),
+        ]
+    } else if screen == Screen::Memory {
+        &[
+            ("↑↓ / PgUp/PgDn", "Select memory / scroll full detail"),
+            ("/ / Enter / Esc", "Filter locally / apply / clear"),
+            ("r", "Refresh recent workspace memory"),
+        ]
     } else {
-        &[("—", "Placeholder: screen actions arrive in a later phase")]
+        &[
+            ("r", "Reload local config metadata; never builds a provider"),
+            (
+                "—",
+                "Read only: change model/provider in config and start a new session",
+            ),
+        ]
     }
 }
 
