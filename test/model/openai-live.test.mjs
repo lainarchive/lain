@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-7 tests: the OpenAI live transport's request shape and response mapping, pinned against an injected fetch — no network
- * @requires Chief-of-Staff
- */
+// The OpenAI live transport's request shape and response mapping, pinned against an injected fetch — no network
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OPENAI_URL, OPENAI_MODEL, queryLive } from '../../src/model/provider/openai.mjs';

@@ -2,8 +2,8 @@
 
 `crates/lain-memory` is the owner-approved synchronous port of
 `src/memory/store.mjs`. It does not replace or wrap Node's store, choose an
-async runtime, or accept ADR-011. The root Cargo workspace inherits the lints
-in `.devin/rust_core.md`; its lockfile is committed. `target/` was already
+async runtime, or accept ADR-011. The root Cargo workspace declares its lints
+in `Cargo.toml`; its lockfile is committed. `target/` was already
 ignored before this slice.
 
 `MemoryStore::open(path)` accepts a filesystem path or `:memory:`. Its methods

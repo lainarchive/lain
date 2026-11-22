@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain tui` — launch the live task dashboard (M-9)
- * @requires Chief-of-Staff
- */
+// `lain tui` — launch the live task dashboard
 const EXIT = { ok: 0, usage: 2, refused: 3, failed: 4 };
 
 const USAGE = `lain tui — the live task dashboard (M-9)

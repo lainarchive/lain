@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-9 dashboard: the state machine, the deterministic renderer, the bus wiring, and the real OpenTUI frame
- * @requires Chief-of-Staff
- */
+// Dashboard: the state machine, the deterministic renderer, the bus wiring, and the real OpenTUI frame
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { createTestRenderer } from '@opentui/core/testing';

@@ -1,5 +1,8 @@
 # Phase 4 — Documentation Integrity and Architecture Reconciliation Audit
 
+Historical audit. Agent instructions, session memory and the transcript cited below
+are no longer distributed. Quoted findings describe the files as audited, not current guidance.
+
 **Audited revision:** `36a3e18003ad41171be96d28cfbbda5b5304441c`
 **Status:** Complete. Read-only. Every correction is a proposal.
 **Predecessor:** `.lain-audit/13-documentation-reconciliation.md` (historical input, outside the repository).

@@ -1,5 +1,8 @@
 # M-1 Foundation Readiness — Overview
 
+Historical snapshot. Agent instructions and session-memory files cited below are no longer
+distributed. See current implementation docs and `DECISIONS.md` for guidance.
+
 **Status:** Research and proposed specification. **Nothing here is an accepted decision, and nothing here has been implemented.**
 **Base revision:** `36a3e18003ad41171be96d28cfbbda5b5304441c` (`main`, 11 commits, 13 tracked files, no implementation source tree)
 **Authorized scope of this package:** read and document only — no code, no canonical-document edits, no Git operations, no dependency installation. The only files created are the ten documents in this directory.

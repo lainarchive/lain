@@ -3,13 +3,13 @@
 ## Source and integrity
 
 - Original user-provided file: `Pasted text.txt`.
-- Archived copy: [`sources/recovered-lain-conversation.txt`](sources/recovered-lain-conversation.txt).
+- The transcript is no longer distributed with the repository. These notes retain the historical findings.
 - The source header describes an extracted 352-page PDF conversation plus five signed-in continuation chats. This provenance is reported by the supplied file; completeness and the underlying PDF were not independently verified here.
 - The archived copy is 556,115 bytes. Its SHA-256 matches the user-provided file: `C5AAB53C0A033C6D7161F56CDF1718A524FC1E3D428E3638118B48BD83FE1276`.
 
 ## How to use it
 
-This is historical source material, not a replacement for the current repository or `DECISIONS.md`. User-authored preferences are evidence of past intent; assistant recommendations and research claims in the transcript are not automatically approved decisions or verified facts. Resolve conflicts using the source-of-truth hierarchy in `AGENTS.md` and record unresolved conflicts explicitly.
+This is historical source material, not a replacement for the current repository or `DECISIONS.md`. User-authored preferences are evidence of past intent; assistant recommendations and research claims in the transcript are not automatically approved decisions or verified facts. Current owner instructions and approved decisions take precedence over these notes.
 
 ## Requirements and proposals surfaced by the recovered chain
 

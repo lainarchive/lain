@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-3 model registry: one entry per invokable model, classed for the approval gate
- * @requires Chief-of-Staff
- */
+// Model registry: one entry per invokable model, classed for the approval gate
 import { listApprovals } from './approvalLedger.mjs';
 
 /**
@@ -32,9 +28,7 @@ export const MODEL_REGISTRY = Object.freeze({
 });
 
 /**
- * Look up one model by id. Unknown ids return undefined; the caller decides
- * what an unknown model means — for the approval gate it is a caller error,
- * not an approval need.
+ * An unknown id is a caller error, not a request for approval.
  *
  * @param {string} id
  * @returns {{ id: string, provider: string, name: string, cost: number, effect_class: string } | undefined}
@@ -58,16 +52,12 @@ export function getModel(id) {
  */
 
 /**
- * Resolve a ledger decision for one invocation. M-8: this is the seam that
- * lets a recorded human approval do more than feed the engine's approval
- * status — when the entry is `granted` AND bound to the task asking, the
- * caller may treat the approval as the task's `model.invoke.external` grant.
+ * A granted decision bound to this task supplies its `model.invoke.external` grant.
  *
  * The binding is the load-bearing half of that rule. An approval recorded for
  * task X must never hand its capability to task Y, and a task file that
  * carries no id cannot prove it is the task the approver saw, so it is never
- * augmented — which is exactly the M-7 invariant (an approval does not
- * substitute for the capability) surviving M-8 rather than being rewritten.
+ * augmented.
  * The outcome itself still feeds the engine unbound, as M-7 shipped: a denied
  * entry denies whoever presents its decision id, because presenting someone
  * else's denied decision id is its own finding.

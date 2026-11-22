@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model credentials list|set|delete` — manage and report provider credentials (M-7/M-12)
- * @requires Chief-of-Staff
- */
+// `lain model credentials list|set|delete` — manage and report provider credentials (M-7/M-12)
 import { readFileSync } from 'node:fs';
 import {
   deleteStoredCredential,

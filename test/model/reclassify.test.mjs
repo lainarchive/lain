@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-4 tests: re-classification is authorized, logged, and never mutates the frozen registry
- * @requires Chief-of-Staff
- */
+// Re-classification is authorized, logged, and never mutates the frozen registry
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

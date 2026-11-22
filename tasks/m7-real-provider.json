@@ -1,9 +1,0 @@
-{
-  "id": "M7-001",
-  "title": "Scaffold real provider integration: credential loader, invoke and credentials CLI",
-  "owner": "Gemini",
-  "status": "pending",
-  "dependencies": [
-    "M6-001"
-  ]
-}

@@ -1,5 +1,8 @@
 # Phase 4 — Documentation Integrity and Architecture Reconciliation Audit
 
+Historical audit. Agent instructions, session memory and the transcript cited below
+are no longer distributed. Quoted findings describe the files as audited, not current guidance.
+
 **Status:** Complete (read-only audit). No canonical document was modified.
 **Audited revision:** `36a3e18003ad41171be96d28cfbbda5b5304441c` (`main`, 13 tracked files, working tree `?? .gitignore`).
 **Date of audit:** 2026-11-08.

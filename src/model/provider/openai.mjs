@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  M-5 OpenAI provider stub + M-7 live transport: the stub pins the adapter contract, queryLive is the real channel
- * @requires Chief-of-Staff
- */
+// OpenAI provider stub + M-7 live transport: the stub pins the adapter contract, queryLive is the real channel
 /**
  * Fixed mock response. The stub exists to pin the adapter contract — one
  * function, prompt in, structured answer out — before any real channel is

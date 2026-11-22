@@ -7,12 +7,8 @@
  * first version of that probe imported `execFileSync` directly — which the check
  * caught, correctly.
  *
- * The answer is not to widen the allow-list, because then the next module with a
- * reasonable excuse would widen it again. The answer is one function here, with
- * the same properties every other process launch in Lain gets: a minimal
- * environment rather than an inherited one, a hard timeout, an output ceiling,
- * `shell: false` so nothing is interpreted, and a result that says whether the
- * thing ran at all rather than throwing where a caller might not look.
+ * Keep the allow-list narrow. Probes use the same minimal environment, timeout,
+ * output ceiling and shell-free execution as other launches.
  */
 import { spawnSync } from 'node:child_process';
 

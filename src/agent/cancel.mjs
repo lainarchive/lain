@@ -441,10 +441,7 @@ export function createCanceller({
       });
     }
 
-    // States the machine has no edge from. Refusing beats forging a transition:
-    // after the two branches above and the two edges added to TRANSITIONS, this is
-    // reachable only for a state nobody has classified. I keep the list as a guard
-    // rather than as a policy.
+    // Refuse unclassified states rather than forging a transition.
     if (NON_CANCELLABLE_STATES.includes(state) || !CANCELLABLE_STATES.includes(state)) {
       const from = state;
       write('task.cancel.refused', {

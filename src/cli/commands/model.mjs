@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain model run <task.json>` — the M-2 mock model entry point
- * @requires Chief-of-Staff
- */
+// `lain model run <task.json>` — the M-2 mock model entry point
 import { readFileSync } from 'node:fs';
 import { ModelPolicyError, runTask } from '../../model/integration.mjs';
 

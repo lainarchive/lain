@@ -1,8 +1,4 @@
-/**
- * @generated
- * @purpose  `lain tui` entry point — the OpenTUI screen, the dashboard mount, and the key bindings (M-9)
- * @requires Chief-of-Staff
- */
+// `lain tui` entry point — the OpenTUI screen, the dashboard mount, and the key bindings
 import { createCliRenderer } from '@opentui/core';
 import { handleDashboardKey, mountDashboard } from './dashboard.mjs';
 

@@ -18,9 +18,11 @@
 .lain-audit/
 
 # ── Local runtime state ──────────────────────────────────────────────────────
-# Agent/session state is per-machine and per-run. AGENTS.md's session-init
-# protocol reads some of this; none of it is shared or reviewable.
+# Agent/session state is per-machine and per-run.
 .lain/
+.devin/
+.agents/
+/AGENTS.md
 
 # ── Databases (runtime data, regenerable) ────────────────────────────────────
 # Lain's event log and knowledge store are local SQLite. WAL and shared-memory
