@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex, PoisonError, RwLock},
@@ -10,6 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use lain_memory::{MemoryStore, SearchOptions};
+use lain_plugin::manifest::Capability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -84,6 +85,9 @@ pub trait Tool: Send + Sync + std::any::Any {
     /// Display metadata only; read-only authorization still uses concrete tool identity.
     fn source(&self) -> ToolSource {
         ToolSource::Builtin
+    }
+    fn manifest_permissions(&self) -> Option<BTreeSet<Capability>> {
+        None
     }
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError>;
 }
@@ -205,6 +209,14 @@ impl ToolRegistry {
             .unwrap_or_else(PoisonError::into_inner)
             .get(name)
             .map(|entry| entry.tool.source())
+    }
+
+    pub fn manifest_permissions(&self, name: &str) -> Option<BTreeSet<Capability>> {
+        self.tools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .and_then(|entry| entry.tool.manifest_permissions())
     }
 
     pub async fn dispatch(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {

@@ -1211,6 +1211,7 @@ dependencies = [
 name = "lain-ipc"
 version = "0.1.0"
 dependencies = [
+ "lain-plugin",
  "serde",
  "serde_json",
  "tempfile",

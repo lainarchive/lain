@@ -3,10 +3,10 @@ use std::time::Duration;
 use std::{
     collections::HashMap,
     future::Future,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -34,8 +34,13 @@ use crate::Error;
 pub type SharedMemory = Arc<Mutex<MemoryStore>>;
 pub const MAX_SESSIONS: usize = 32;
 
+mod catalog;
+
 pub trait RunnerFactory: Send + Sync + 'static {
     fn create(&self, id: &str, memory: SharedMemory) -> Result<AgentRunner, Error>;
+    fn workspace(&self) -> Option<&Path> {
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -93,6 +98,10 @@ impl ConfigFactory {
 }
 
 impl RunnerFactory for ConfigFactory {
+    fn workspace(&self) -> Option<&Path> {
+        Some(&self.working_directory)
+    }
+
     fn create(&self, id: &str, memory: SharedMemory) -> Result<AgentRunner, Error> {
         let bytes = std::fs::read(&self.config_path).map_err(|error| {
             Error::failure(
@@ -115,6 +124,8 @@ impl RunnerFactory for ConfigFactory {
 }
 
 struct Session {
+    config: AgentConfig,
+    turn_count: AtomicU32,
     control: lain_agent::control::AgentControl,
     tools: Arc<ToolRegistry>,
     runner: AsyncMutex<AgentRunner>,
@@ -164,6 +175,24 @@ impl DaemonHandler {
 
     async fn dispatch(&self, command: Command, events: &EventSink) -> Result<(), Error> {
         match command {
+            Command::ListTools { session_id } => self.list_tools(session_id, events).await?,
+            Command::ListPlugins => self.list_plugins(events).await?,
+            Command::ListSessions => self.list_sessions(events).await?,
+            Command::TestToolProposal {
+                session_id,
+                proposal,
+            } => {
+                self.tool_proposal(session_id, proposal, None, events)
+                    .await?
+            }
+            Command::PublishToolProposal {
+                session_id,
+                proposal,
+                mode,
+            } => {
+                self.tool_proposal(session_id, proposal, Some(mode), events)
+                    .await?
+            }
             Command::Ping => {
                 events
                     .send(Event::Pong {
@@ -210,6 +239,8 @@ impl DaemonHandler {
                 sessions.insert(
                     id.clone(),
                     Arc::new(Session {
+                        config: runner.config().clone(),
+                        turn_count: AtomicU32::new(runner.state().turn_count),
                         control,
                         tools,
                         runner: AsyncMutex::new(runner),
@@ -370,7 +401,10 @@ impl DaemonHandler {
                 tokio::select! {
                     biased;
                     event = source.recv() => {
-                        if let Ok(event) = &event { self.dashboard.publish(&id, event.clone()); }
+                        if let Ok(event) = &event {
+                            if let AgentEvent::TurnStarted { turn, .. } = event { session.turn_count.store(*turn, Ordering::Relaxed); }
+                            self.dashboard.publish(&id, event.clone());
+                        }
                         forward_agent_event(&id, event, events).await?;
                     }
                     result = &mut run => break result,
@@ -378,6 +412,9 @@ impl DaemonHandler {
                 }
             }
         };
+        session
+            .turn_count
+            .store(runner.state().turn_count, Ordering::Relaxed);
         if matches!(runner.state().status, AgentStatus::Terminated(_)) {
             self.sessions.write().await.remove(&id);
         }
