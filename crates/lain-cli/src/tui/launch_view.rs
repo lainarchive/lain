@@ -336,6 +336,9 @@ pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
             right = context;
         }
     }
+    if state.reconnecting {
+        right = "reconnecting…".into();
+    }
     let right_width = Line::raw(&right)
         .width()
         .min(usize::from(area.width).saturating_sub(34));

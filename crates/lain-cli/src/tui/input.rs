@@ -1,7 +1,9 @@
 use std::{
     collections::BTreeSet,
+    future::Future,
     io,
     path::Path,
+    pin::Pin,
     process::Command as Process,
     time::{Duration, Instant},
 };
@@ -36,6 +38,20 @@ pub(super) fn handle_key(
     now: Duration,
     area: ratatui::layout::Rect,
 ) -> Effect {
+    if state.reconnecting {
+        if key.code == KeyCode::Char('q')
+            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            return Effect::Quit;
+        }
+        if key.code == KeyCode::Enter {
+            state.notify(
+                "Reconnecting · draft kept; submit after the connection returns",
+                now,
+            );
+            return Effect::None;
+        }
+    }
     if view::has_room(area, state) {
         state.key(key, now)
     } else if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -143,33 +159,16 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     } else {
         State::new(branch(&cwd), &cwd)?
     };
-    let mut client = if demo {
-        None
-    } else {
-        Some(ui::connect_or_spawn(options).await?)
-    };
+    let mut client = None;
     let mut renderer = Renderer::new(true);
-    let mut session = match &mut client {
-        Some(client) => Some(ui::start_session(client, &mut renderer).await?),
-        None => None,
-    };
-    if let (Some(client), Some(session)) = (&mut client, &session) {
-        for command in [
-            Command::GetTelemetry {
-                session_id: session.clone(),
-            },
-            Command::InspectRules {
-                session_id: None,
-                limit: Some(20),
-            },
-        ] {
-            for event in client.request(command).await? {
-                if let Event::Error { code, message } = &event {
-                    return Err(Error::failure("TUI_DAEMON", format!("{code}: {message}")));
-                }
-                state.event(&event, Duration::ZERO);
-            }
-        }
+    let mut session: Option<String> = None;
+    let mut retry: Pin<Box<dyn Future<Output = (IpcClient, String)> + Send>> =
+        Box::pin(std::future::pending());
+    let mut previously_connected = false;
+    if !demo {
+        state.reconnecting = true;
+        state.notice = "Connecting to daemon…".into();
+        retry = Box::pin(super::reconnect::retry(options.clone()));
     }
     let _screen = Screen::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
@@ -185,7 +184,8 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut creator_requests = creator_ipc::Requests::default();
     let mut inspect_requests = super::inspect::Requests::default();
     let mut plugins_session = session.clone();
-    let result = async {
+    let result = loop {
+        let outcome = async {
         loop {
             if new_session.is_some() {state.notify("Starting a new session · Ctrl+C quits",started.elapsed());}
             if !demo {state.session_id = session.clone();state.inspect.config_path=options.config.clone();}
@@ -201,21 +201,32 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
             if (state.screen == super::app::Screen::Plugins || state.launch()) && !state.plugins.loaded {
                 if let Some(client) = &mut client {
                     plugin_requests.refresh(client, session.as_deref(), &mut state.plugins).await?;
-                } else { state.plugins.load_demo()?; }
+                } else if demo { state.plugins.load_demo()?; }
             }
             if state.screen == super::app::Screen::Creator && !state.creator.access_loaded {
                 if let Some(client) = &mut client {
                     creator_requests.access(client, session.as_deref(), &mut state.creator).await?;
-                } else {state.creator.set_access(true);}
+                } else if demo {state.creator.set_access(true);}
             }
             state.inspect.tick(state.screen,started.elapsed());
             if let Some(client)=&mut client {
                 inspect_requests.ensure(client,&mut state.inspect,state.screen,started.elapsed()).await?;
-            } else {state.inspect.demo_refresh(state.screen,started.elapsed());}
+            } else if demo {state.inspect.demo_refresh(state.screen,started.elapsed());}
             terminal.draw(|frame| {
                 state.scroll = view::draw(frame, &state, started.elapsed());
             })?;
             tokio::select! {
+                (connected,id)=&mut retry => {
+                    retry=Box::pin(std::future::pending());
+                    client=Some(connected);session=Some(id.clone());ignored.clear();
+                    if previously_connected {state.reconnected(started.elapsed());}
+                    else {state.reconnecting=false;state.notice="Connected · fresh session".into();}
+                    previously_connected=true;
+                    if let Some(client)=&mut client {
+                        poll_request=Some(client.send(Command::GetTelemetry {session_id:id}).await?);
+                        client.send(Command::InspectRules {session_id:None,limit:Some(20)}).await?;
+                    }
+                }
                 input = keys.next() => {
                     let Some(input) = input else { break; };
                     let input = input?;
@@ -236,7 +247,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                             state.scroll.creator_output = 0;
                             if let Some(client) = &mut client {
                                 creator_requests.submit(client, session.as_deref(), &mut state.creator, state.mode, operation).await?;
-                            } else if state.creator.request(state.mode, operation) != Effect::None {
+                            } else if demo && state.creator.request(state.mode, operation) != Effect::None {
                                 if let Err(error) = state.creator.simulate(operation) {state.creator.error = Some(error);}
                             }
                         }
@@ -248,7 +259,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                                             Ok(request)=>new_session=Some((request,candidate)),
                                             Err(error)=>state.notify(error.to_string(),started.elapsed()),
                                         }
-                                    } else {
+                                    } else if demo {
                                         candidate.demo_metadata(started.elapsed())?;
                                         state=candidate;
                                     }
@@ -259,21 +270,22 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                         Effect::Submit { text, read_only } => {
                             if let Some(client) = &mut client {
                                 if session.is_none() {
-                                    session = Some(ui::start_session(client, &mut renderer).await?);
+                                    session = Some(ui::start_session(client, &mut renderer).await.inspect_err(|_|state.composer.clone_from(&text))?);
                                 }
                                 if let Some(id) = &session {
-                                    let command = if read_only { Command::SendReadOnlyMessage { stream_deltas: true, session_id: id.clone(), text } }
-                                        else { Command::SendMessage { stream_deltas: true, session_id: id.clone(), text } };
-                                    active_request = Some(client.send(command).await?);
+                                    let command = if read_only { Command::SendReadOnlyMessage { stream_deltas: true, session_id: id.clone(), text:text.clone() } }
+                                        else { Command::SendMessage { stream_deltas: true, session_id: id.clone(), text:text.clone() } };
+                                    active_request = Some(client.send(command).await.inspect_err(|_|state.composer=text)?);
                                 }
-                            } else if state.next_turn==1 {state.seed_demo_turn(started.elapsed());}
-                            else { state.not_sent(started.elapsed()); }
+                            } else if demo && state.next_turn==1 {state.seed_demo_turn(started.elapsed());}
+                            else if demo { state.not_sent(started.elapsed()); }
+                            else {state.composer=text;state.disconnected(started.elapsed());}
                         }
                         Effect::Steer(text) => {
                             if let (Some(client), Some(id)) = (&mut client, &session) {
-                                let command = if state.mode.read_only() { Command::SendReadOnlyMessage { stream_deltas: true, session_id: id.clone(), text } }
-                                    else { Command::SendMessage { stream_deltas: true, session_id: id.clone(), text } };
-                                client.send(command).await?;
+                                let command = if state.mode.read_only() { Command::SendReadOnlyMessage { stream_deltas: true, session_id: id.clone(), text:text.clone() } }
+                                    else { Command::SendMessage { stream_deltas: true, session_id: id.clone(), text:text.clone() } };
+                                client.send(command).await.inspect_err(|_|state.composer=text)?;
                                 state.notice = "Steer sent · current daemon rejects mid-turn SendMessage as SESSION_BUSY".into();
                             }
                         }
@@ -341,6 +353,30 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
         }
         Ok(())
     }.await;
+        match outcome {
+            Err(error)
+                if !demo
+                    && (matches!(error, Error::Ipc(_))
+                        || matches!(error.code(), "TUI_DISCONNECTED" | "DAEMON_CLOSED")) =>
+            {
+                client = None;
+                session = None;
+                active_request = None;
+                poll_request = None;
+                new_session = None;
+                plugins_session = None;
+                ignored.clear();
+                drop(plugin_requests.clear());
+                drop(creator_requests.clear());
+                drop(inspect_requests.clear());
+                state.inspect.reset_socket();
+                state.plugins.refresh();
+                state.disconnected(started.elapsed());
+                retry = Box::pin(super::reconnect::retry(options.clone()));
+            }
+            other => break other,
+        }
+    };
     if let Some(mut client) = client {
         if state.running {
             if let Some(session_id) = session {
@@ -355,6 +391,43 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reconnecting_keeps_input_as_a_draft_and_quits_even_with_a_draft() -> Result<(), Error> {
+        let mut state = State::demo_launch()?;
+        state.composer = "keep me".into();
+        state.disconnected(Duration::ZERO);
+        let area = ratatui::layout::Rect::new(0, 0, 140, 45);
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                Duration::ZERO,
+                area
+            ),
+            Effect::None
+        );
+        assert_eq!(state.composer, "keep me");
+        assert!(!state.running);
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                Duration::ZERO,
+                area
+            ),
+            Effect::Quit
+        );
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                Duration::ZERO,
+                area
+            ),
+            Effect::Quit
+        );
+        Ok(())
+    }
     #[test]
     fn new_session_failure_preserves_the_old_conversation() -> Result<(), Box<dyn std::error::Error>>
     {

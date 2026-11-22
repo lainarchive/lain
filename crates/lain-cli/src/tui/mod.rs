@@ -9,6 +9,7 @@ mod input;
 mod inspect;
 mod launch_view;
 mod plugins;
+mod reconnect;
 mod shell_view;
 mod state;
 mod theme;

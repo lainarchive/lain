@@ -152,6 +152,48 @@ fn token_deltas_join_and_whole_messages_replace_only_the_pending_block(
 }
 
 #[test]
+fn disconnect_preserves_the_draft_and_interrupts_the_working_turn(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.composer = "run".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.composer = "unfinished\ndraft".into();
+    state.disconnected(Duration::from_secs(1));
+    assert!(state.reconnecting);
+    assert!(!state.running);
+    assert_eq!(state.composer, "unfinished\ndraft");
+    assert!(state
+        .tasks
+        .values()
+        .all(|task| task.phase == super::state::Phase::Interrupted));
+    assert!(render(&state)?.contains("reconnecting"));
+    state.reconnected(Duration::from_secs(2));
+    assert!(!state.reconnecting);
+    assert_eq!(state.composer, "unfinished\ndraft");
+    assert!(state
+        .toast_text(Duration::from_secs(2))
+        .is_some_and(|text| text.contains("not resumed")));
+    Ok(())
+}
+
+#[test]
+fn disconnect_invalidates_publish_consent_without_discarding_the_draft(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.composer = "keep".into();
+    state.overlay = Some(Overlay::Publish { typed: "y".into() });
+    state.disconnected(Duration::ZERO);
+    assert!(state.overlay.is_none());
+    state.overlay = Some(Overlay::Publish { typed: "y".into() });
+    state.key(key(KeyCode::F(1)), Duration::ZERO);
+    state.disconnected(Duration::ZERO);
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.composer, "keep");
+    Ok(())
+}
+
+#[test]
 fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_launch()?;
