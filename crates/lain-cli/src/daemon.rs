@@ -25,6 +25,10 @@ use lain_ipc::{Command, CommandHandler, Event, EventSink, PROTOCOL_VERSION};
 use lain_memory::MemoryStore;
 use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
 
+use crate::dashboard::{
+    DashboardHub, Intervention, MemoryResponse, PluginInfo, SemanticStatus, SessionSnapshot,
+    StatusResponse,
+};
 use crate::Error;
 
 pub type SharedMemory = Arc<Mutex<MemoryStore>>;
@@ -36,6 +40,7 @@ pub trait RunnerFactory: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub struct ConfigFactory {
+    pub stream_responses: bool,
     pub config_path: PathBuf,
     pub working_directory: PathBuf,
     pub allow_shell: bool,
@@ -44,6 +49,7 @@ pub struct ConfigFactory {
 impl ConfigFactory {
     pub fn new(config_path: impl Into<PathBuf>, working_directory: impl Into<PathBuf>) -> Self {
         Self {
+            stream_responses: false,
             config_path: config_path.into(),
             working_directory: working_directory.into(),
             allow_shell: false,
@@ -102,17 +108,22 @@ impl RunnerFactory for ConfigFactory {
             .map_err(|error| Error::failure("CONFIG_INVALID", error))?;
         config.validate()?;
         let tools = self.session_tools(memory.clone(), &config)?;
-        Ok(AgentRunner::from_config(config, tools, memory, id)?)
+        let mut runner = AgentRunner::from_config(config, tools, memory, id)?;
+        runner.set_streaming(self.stream_responses);
+        Ok(runner)
     }
 }
 
 struct Session {
+    control: lain_agent::control::AgentControl,
+    tools: Arc<ToolRegistry>,
     runner: AsyncMutex<AgentRunner>,
     canceller: Canceller,
     created: u64,
 }
 
 pub struct DaemonHandler {
+    pub dashboard: DashboardHub,
     memory: SharedMemory,
     factory: Arc<dyn RunnerFactory>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
@@ -128,6 +139,7 @@ impl std::fmt::Debug for DaemonHandler {
 impl DaemonHandler {
     pub fn new(memory: SharedMemory, factory: Arc<dyn RunnerFactory>) -> Self {
         Self {
+            dashboard: DashboardHub::default(),
             memory,
             factory,
             sessions: RwLock::new(HashMap::new()),
@@ -181,12 +193,25 @@ impl DaemonHandler {
                 };
                 let runner = self.factory.create(&id, self.memory.clone())?;
                 let canceller = runner.canceller();
+                let control = runner.control();
+                let tools = runner.tool_registry();
                 if let Some(evict) = evict {
                     sessions.remove(&evict);
+                    self.dashboard.remove(&evict);
                 }
+                self.dashboard.insert(SessionSnapshot {
+                    session_id: id.clone(),
+                    model: runner.config().model.clone(),
+                    status: "idle".into(),
+                    token_limit: runner.config().budget.max_total_tokens,
+                    context_window: runner.config().context_window_tokens,
+                    ..SessionSnapshot::default()
+                });
                 sessions.insert(
                     id.clone(),
                     Arc::new(Session {
+                        control,
+                        tools,
                         runner: AsyncMutex::new(runner),
                         canceller,
                         created: self.next_session.fetch_add(1, Ordering::Relaxed),
@@ -297,7 +322,10 @@ impl DaemonHandler {
             loop {
                 tokio::select! {
                     biased;
-                    event = source.recv() => forward_agent_event(&id, event, events).await?,
+                    event = source.recv() => {
+                        if let Ok(event) = &event { self.dashboard.publish(&id, event.clone()); }
+                        forward_agent_event(&id, event, events).await?;
+                    }
                     result = &mut run => break result,
                     _ = events.closed() => { session.canceller.cancel(); break run.await; }
                 }
@@ -307,11 +335,19 @@ impl DaemonHandler {
             self.sessions.write().await.remove(&id);
         }
         while let Ok(event) = source.try_recv() {
+            self.dashboard.publish(&id, event.clone());
             if let Some(event) = map_agent_event(&id, event) {
                 events.send(event).await?;
             }
         }
         if let Err(error) = result {
+            self.dashboard.publish(
+                &id,
+                AgentEvent::ErrorTripped {
+                    code: error.code().into(),
+                    message: error.to_string(),
+                },
+            );
             events.send(Error::from(error).into_event()).await?;
         }
         if runner.state().inputs > 0
@@ -322,6 +358,16 @@ impl DaemonHandler {
         {
             match runner.reflect_and_compact(&id).await {
                 Ok(reflection) => {
+                    self.dashboard.publish(
+                        &id,
+                        AgentEvent::ReflectionGenerated {
+                            summary: format!(
+                                "{} turns, {} tool calls",
+                                reflection.turns, reflection.tool_calls
+                            ),
+                            rules: reflection.rules.clone(),
+                        },
+                    );
                     events
                         .send(Event::ReflectionGenerated {
                             session_id: id.clone(),
@@ -341,6 +387,12 @@ impl DaemonHandler {
         } else {
             serde_json::to_string(&runner.state().status)?
         };
+        self.dashboard.publish(
+            &id,
+            AgentEvent::SessionCompleted {
+                reason: reason.clone(),
+            },
+        );
         events
             .send(Event::SessionCompleted {
                 session_id: id,
@@ -348,6 +400,95 @@ impl DaemonHandler {
                 scratchpad: Some(runner.state().scratchpad.plan.clone()),
             })
             .await?;
+        Ok(())
+    }
+
+    pub async fn dashboard_status(&self) -> StatusResponse {
+        let mut status = self.dashboard.status();
+        let sessions = self.sessions.read().await;
+        for snapshot in &mut status.sessions {
+            if let Some(session) = sessions.get(&snapshot.session_id) {
+                snapshot.control = session.control.snapshot();
+                if snapshot.control.paused {
+                    snapshot.status = "paused".into();
+                }
+                if snapshot.control.pending_call.is_some() {
+                    snapshot.status = "approval_required".into();
+                }
+            }
+        }
+        status
+    }
+
+    pub fn dashboard_memory(&self) -> Result<MemoryResponse, Error> {
+        let store = self
+            .memory
+            .lock()
+            .map_err(|_| Error::failure("MEMORY_LOCK", "Memory lock poisoned"))?;
+        Ok(MemoryResponse {
+            episodic: store
+                .recent_episodes(None, 50)?
+                .into_iter()
+                .map(|r| format!("{}: {}", r.title, r.content))
+                .collect(),
+            procedural: store.recent_procedural_rules(None, 50)?,
+            semantic: SemanticStatus {
+                backend: "sqlite_fts5".into(),
+                embeddings_available: false,
+            },
+        })
+    }
+
+    pub async fn dashboard_plugins(&self) -> Vec<PluginInfo> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .iter()
+            .flat_map(|(id, session)| {
+                session
+                    .tools
+                    .definitions()
+                    .into_iter()
+                    .map(|tool| PluginInfo {
+                        session_id: id.clone(),
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.parameters,
+                    })
+            })
+            .collect()
+    }
+
+    pub async fn intervene(&self, command: Intervention) -> Result<(), Error> {
+        let session = self.session(command.session_id()).await?;
+        let accepted = match command {
+            Intervention::Pause { .. } => {
+                session.control.pause(true);
+                true
+            }
+            Intervention::Resume { .. } => {
+                session.control.pause(false);
+                true
+            }
+            Intervention::Cancel { .. } => {
+                if session.runner.try_lock().is_err() {
+                    session.canceller.cancel();
+                }
+                true
+            }
+            Intervention::Intercept { enabled, .. } => {
+                session.control.intercept(enabled);
+                true
+            }
+            Intervention::Steer { text, .. } => session.control.steer(text),
+            Intervention::Approve { call_id, .. } => session.control.decide(&call_id, true),
+            Intervention::Deny { call_id, .. } => session.control.decide(&call_id, false),
+        };
+        if !accepted {
+            return Err(Error::failure(
+                "INTERVENTION_REJECTED",
+                "Stale approval, empty steering, or steering queue full",
+            ));
+        }
         Ok(())
     }
 }

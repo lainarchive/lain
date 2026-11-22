@@ -54,6 +54,9 @@ coverage/
 
 # ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/tsconfig.tsbuildinfo
 
 # ── Python (audit and tooling scripts) ───────────────────────────────────────
 __pycache__/

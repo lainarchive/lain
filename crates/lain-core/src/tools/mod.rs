@@ -58,7 +58,7 @@ impl ToolError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ts_rs::TS)]
 pub struct ToolOutput {
     pub content: String,
     pub exit_code: Option<i32>,
