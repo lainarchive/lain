@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { updatePositions, graphEdges, toolKind } from './flow.ts';
+import { updatePositions, graphEdges, toolKind, fitSearchMatches } from './flow.ts';
 
 test('React Flow measurement and selection notifications do not create state updates', () => {
   const positions = { a: { x: 10, y: 20 } };
@@ -44,4 +44,15 @@ test('edges share the semantic status tokens used by nodes', () => {
     const [edge] = graphEdges([{ id: 'a', status }, { id: 'b', parents: ['a'], status }]);
     assert.equal(edge.style.stroke, `var(--${status})`);
   }
+});
+
+test('search centers matches but empty searches and missing matches leave the viewport alone', () => {
+  const calls = [];
+  const view = { fitView: options => calls.push(options) };
+  fitSearchMatches('', ['a'], view);
+  fitSearchMatches('Bash', [], view);
+  fitSearchMatches('Bash', ['b'], null);
+  assert.deepEqual(calls, []);
+  fitSearchMatches('Bash', ['b', 'c'], view);
+  assert.deepEqual(calls, [{ nodes: [{ id: 'b' }, { id: 'c' }], padding: 0.2, minZoom: 0.6, maxZoom: 1 }]);
 });
