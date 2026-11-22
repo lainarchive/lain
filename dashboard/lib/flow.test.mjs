@@ -38,3 +38,10 @@ test('tool cards distinguish shell, AST maps and custom plugins', () => {
     ['RepoMap', 'AST MAP'], ['company.lookup', 'CUSTOM PLUGIN'],
   ]) assert.equal(toolKind(name), expected);
 });
+
+test('edges share the semantic status tokens used by nodes', () => {
+  for (const status of ['pending', 'running', 'success', 'failed']) {
+    const [edge] = graphEdges([{ id: 'a', status }, { id: 'b', parents: ['a'], status }]);
+    assert.equal(edge.style.stroke, `var(--${status})`);
+  }
+});
