@@ -50,16 +50,39 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
-fn switching_to_code_recomputes_only_stale_creator_mode_refusals() -> Result<(),Box<dyn std::error::Error>> {
-    let mut state=State::demo_launch()?;
-    state.creator.request(Mode::Architect,super::creator::Operation::Publish);
-    assert!(state.creator.error.as_deref().is_some_and(|error|error.contains("Architect is read-only")));
-    state.composer="/code".into();
-    state.key(key(KeyCode::Enter),Duration::ZERO);
+fn switching_to_code_recomputes_only_stale_creator_mode_refusals(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state
+        .creator
+        .request(Mode::Architect, super::creator::Operation::Publish);
+    assert!(state
+        .creator
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("Architect is read-only")));
+    state.composer = "/code".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
     assert!(state.creator.error.is_none());
-    state.creator.error=Some("real execution failure".into());
-    state.composer="/ask".into();state.key(key(KeyCode::Enter),Duration::ZERO);
-    assert_eq!(state.creator.error.as_deref(),Some("real execution failure"));
+    state.composer = "/architect".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state
+        .creator
+        .request(Mode::Architect, super::creator::Operation::Publish);
+    state.composer = "/ask".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(state
+        .creator
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("Ask is read-only")));
+    state.creator.error = Some("real execution failure".into());
+    state.composer = "/ask".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(
+        state.creator.error.as_deref(),
+        Some("real execution failure")
+    );
     Ok(())
 }
 

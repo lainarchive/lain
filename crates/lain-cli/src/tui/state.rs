@@ -384,7 +384,16 @@ impl State {
                 if self.running {
                     self.notify("Mode changes apply after this turn", now);
                 } else {
+                    let disabled = self
+                        .creator
+                        .disabled(self.mode, super::creator::Operation::Publish);
+                    let stale = disabled.is_some() && self.creator.error == disabled;
                     self.mode = mode;
+                    if stale {
+                        self.creator.error = self
+                            .creator
+                            .disabled(mode, super::creator::Operation::Publish);
+                    }
                 }
             }
             Action::Help => {
