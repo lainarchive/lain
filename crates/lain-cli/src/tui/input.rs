@@ -139,7 +139,7 @@ fn finish_new_session(
 pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let cwd = std::env::current_dir()?;
     let mut state = if demo {
-        State::demo_turn()?
+        State::demo_launch()?
     } else {
         State::new(branch(&cwd), &cwd)?
     };
@@ -265,7 +265,8 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                                         else { Command::SendMessage { session_id: id.clone(), text } };
                                     active_request = Some(client.send(command).await?);
                                 }
-                            } else { state.not_sent(started.elapsed()); }
+                            } else if state.next_turn==1 {state.seed_demo_turn(started.elapsed());}
+                            else { state.not_sent(started.elapsed()); }
                         }
                         Effect::Steer(text) => {
                             if let (Some(client), Some(id)) = (&mut client, &session) {

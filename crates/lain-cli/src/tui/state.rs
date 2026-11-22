@@ -191,7 +191,7 @@ pub struct State {
     scope: WriteScope,
     last_prompt: String,
     escape: Option<Duration>,
-    next_turn: u64,
+    pub(super) next_turn: u64,
     samples: VecDeque<(Duration, u64)>,
     total_tokens: u64,
 }
