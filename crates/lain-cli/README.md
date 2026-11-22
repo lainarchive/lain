@@ -34,8 +34,24 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 
 ## Terminal frontier
 
-`lain tui` opens the Ratatui lane view. `lain tui demo` renders an **offline synthetic sample**
+`lain tui` opens the Ratatui app shell. `lain tui demo` renders an **offline synthetic sample**
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
+The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains the existing lane view;
+the other screens are named placeholders for later phases, not working plugin, memory or model managers.
+Outside overlays, 1–6 switches screens when the Session composer is empty or not focused (on another screen).
+Alt+Left/Right always switches screens, closing overlays while preserving the Session draft and active turn.
+
+Ctrl+K opens a command palette. Type a fuzzy subsequence to filter, use Up/Down or Tab to select, and Enter to run.
+On Session, a leading `/` opens inline completion from the same registry: Tab/Up/Down selects and Enter runs.
+Commands are `/session`, `/plugins`, `/creator`, `/memory`, `/sessions`, `/models`, `/architect`, `/code`, `/ask`,
+`/new`, `/help`, `/quit`, `/output`, `/rewind`. Unknown commands show a five-second toast and keep the text for editing;
+they are never sent to the model. New session and quit palette actions confirm before discarding a draft or active turn.
+New session clears the local view, cancels any old turn, and opens a fresh daemon session (offline in demo mode).
+`/output` toggles the selected Session tool block. Mode commands cannot change an active turn's policy.
+F1, or `?` with an empty composer, opens help generated from the registry and the current screen's key table.
+Escape closes the topmost palette/help/confirmation or slash list first; only Session without an overlay uses double Escape.
+The footer shows contextual keys and `Ctrl+K commands · ? help`; transient toasts expire in state, without timer threads.
+
 The status banner and right-hand scratchpad/rules drawer stay fixed while selection scrolls the lane tree.
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
 The minimum terminal size is 120 columns by 30 rows; smaller windows show a resize message instead of clipped panels.
