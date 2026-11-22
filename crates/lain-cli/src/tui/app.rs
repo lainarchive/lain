@@ -53,6 +53,7 @@ impl Screen {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    Theme,
     Go(Screen),
     Mode(Mode),
     NewSession,
@@ -69,7 +70,13 @@ pub struct Command {
     pub action: Action,
 }
 
-pub const COMMANDS: [Command; 14] = [
+pub const COMMANDS: [Command; 15] = [
+    Command {
+        id: "theme",
+        title: "Cycle theme",
+        hint: "/theme",
+        action: Action::Theme,
+    },
     Command {
         id: "session",
         title: "Go to Session",

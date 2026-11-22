@@ -36,7 +36,7 @@ pub(super) fn handle_key(
     now: Duration,
     area: ratatui::layout::Rect,
 ) -> Effect {
-    if view::has_room(area) {
+    if view::has_room(area, state) {
         state.key(key, now)
     } else if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
         || (key.code == KeyCode::Char('q')
@@ -154,6 +154,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut plugins_session = session.clone();
     let result = async {
         loop {
+            state.session_id = session.clone();
             if plugins_session != session {
                 ignored.extend(plugin_requests.clear());
                 ignored.extend(creator_requests.clear());
@@ -161,7 +162,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                 state.plugins.refresh();
                 plugins_session = session.clone();
             }
-            if state.screen == super::app::Screen::Plugins && !state.plugins.loaded {
+            if (state.screen == super::app::Screen::Plugins || state.launch()) && !state.plugins.loaded {
                 if let Some(client) = &mut client {
                     plugin_requests.refresh(client, session.as_deref(), &mut state.plugins).await?;
                 } else { state.plugins.load_demo()?; }
@@ -179,7 +180,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     let Some(input) = input else { break; };
                     let input = input?;
                     if let TerminalEvent::Paste(text) = &input {
-                        if view::has_room(terminal.get_frame().area()) {state.paste(text);}
+                        if view::has_room(terminal.get_frame().area(), &state) {state.paste(text);}
                         continue;
                     }
                     let TerminalEvent::Key(key) = input else { continue; };
