@@ -923,6 +923,18 @@ impl State {
         }
     }
 
+    pub fn reject_turn(&mut self, code: &str, now: Duration) {
+        self.running = false;
+        if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+            task.phase = if code == "SESSION_BUSY" {
+                Phase::NotSent
+            } else {
+                Phase::Failed
+            };
+            task.ended = Some(now);
+        }
+    }
+
     pub fn event(&mut self, event: &Event, now: Duration) {
         if !self.follow
             && matches!(
