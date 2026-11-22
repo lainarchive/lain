@@ -50,6 +50,18 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn actual_demo_plugins_include_an_explicit_denied_plugin_permission(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.screen = Screen::Plugins;
+    assert!(render(&state)?.contains("✗ network"));
+    assert!(state.plugins.tools.iter().any(
+        |tool| tool.name == "demo_echo" && tool.permissions.iter().any(|grant| !grant.granted)
+    ));
+    Ok(())
+}
+
+#[test]
 fn switching_to_code_recomputes_only_stale_creator_mode_refusals(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_launch()?;
