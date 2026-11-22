@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use lain_plugin::{Plugin, PluginError, PluginManager, manifest::ToolExport};
 use serde_json::Value;
 
-use super::{RegisteredTool, Tool, ToolError, ToolOutput, ToolRegistry};
+use super::{RegisteredTool, Tool, ToolError, ToolOutput, ToolRegistry, ToolSource};
 
 struct PluginTool {
     plugin: Arc<dyn Plugin>,
@@ -23,6 +23,16 @@ impl Tool for PluginTool {
 
     fn parameters_schema(&self) -> Value {
         self.export.parameters.clone()
+    }
+
+    fn source(&self) -> ToolSource {
+        ToolSource::Plugin {
+            manifest_name: self.plugin.manifest().name.clone(),
+            manifest_path: self
+                .plugin
+                .manifest_path()
+                .map(std::path::Path::to_path_buf),
+        }
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {

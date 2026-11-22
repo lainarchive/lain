@@ -49,6 +49,15 @@ async fn shared_creator_paths_match_agent_tools() -> Result<(), Box<dyn std::err
     assert_eq!(published.execution.result, Some(json!({"value":"hello"})));
     assert_eq!(published.written_paths.len(), 2);
     assert_eq!(
+        registry.source("echo_proposal"),
+        Some(lain_core::tools::ToolSource::Plugin {
+            manifest_name: "echo_proposal".into(),
+            manifest_path: Some(std::path::PathBuf::from(
+                ".lain/tools/tool-echo_proposal.json"
+            ))
+        })
+    );
+    assert_eq!(
         published.written_paths,
         [
             std::path::PathBuf::from(".lain/tools/tool-echo_proposal.py"),
