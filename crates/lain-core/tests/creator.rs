@@ -38,8 +38,11 @@ async fn shared_creator_paths_match_agent_tools() -> Result<(), Box<dyn std::err
     assert!(!registry.contains("echo_proposal"));
     let published = publish_tool_proposal(&manager, &registry, request.clone()).await?;
     let result: Value = serde_json::from_str(&published.content)?;
-    assert_eq!(result["name"], "echo_proposal");
-    assert_eq!(result["path"], ".lain/tools/tool-echo_proposal.py");
+    assert_eq!(result.get("name"), Some(&json!("echo_proposal")));
+    assert_eq!(
+        result.get("path"),
+        Some(&json!(".lain/tools/tool-echo_proposal.py"))
+    );
     assert!(
         directory
             .path()
