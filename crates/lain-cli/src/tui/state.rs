@@ -49,6 +49,7 @@ pub enum Phase {
     Evidence(Status),
     Running,
     Failed,
+    NotSent,
 }
 
 impl Phase {
@@ -58,13 +59,14 @@ impl Phase {
             Self::Failed => "×",
             Self::Evidence(Status::ObservedVerified) => "✓",
             Self::Evidence(Status::PreparedNotObserved) => "◇",
-            Self::Evidence(Status::Planned) => "○",
+            Self::Evidence(Status::Planned) | Self::NotSent => "○",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::Failed => "failed",
+            Self::NotSent => "not sent",
             Self::Evidence(Status::ObservedVerified) => "verified",
             Self::Evidence(Status::PreparedNotObserved) => "prepared",
             Self::Evidence(Status::Planned) => "waiting",
@@ -362,6 +364,15 @@ impl State {
                 Effect::None
             }
             _ => Effect::None,
+        }
+    }
+
+    pub fn not_sent(&mut self, now: Duration) {
+        self.running = false;
+        self.notice = "Offline demo: not sent · no provider contacted".into();
+        if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
+            task.phase = Phase::NotSent;
+            task.ended = Some(now);
         }
     }
 
