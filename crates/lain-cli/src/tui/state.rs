@@ -104,6 +104,14 @@ pub enum Selection {
     Tool(usize),
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct Scroll {
+    pub lane: usize,
+    pub drawer: u16,
+    pub plan: u16,
+    pub rules: u16,
+}
+
 pub struct State {
     pub dag: Dag,
     pub tasks: BTreeMap<String, Task>,
@@ -123,8 +131,7 @@ pub struct State {
     pub selected: Option<Selection>,
     pub collapsed_layers: BTreeSet<usize>,
     pub collapsed_nodes: BTreeSet<String>,
-    pub drawer_scroll: u16,
-    pub lane_scroll: usize,
+    pub scroll: Scroll,
     pub active: Option<String>,
     scope: WriteScope,
     last_prompt: String,
@@ -157,8 +164,7 @@ impl State {
             selected: None,
             collapsed_layers: BTreeSet::new(),
             collapsed_nodes: BTreeSet::new(),
-            drawer_scroll: 0,
-            lane_scroll: 0,
+            scroll: Scroll::default(),
             active: None,
             last_prompt: String::new(),
             escape: None,
@@ -268,27 +274,43 @@ impl State {
                     (index + 1).min(rows.len().saturating_sub(1))
                 };
                 self.selected = rows.get(next).cloned();
-                self.drawer_scroll = 0;
-                self.lane_scroll = 0;
+                self.scroll.drawer = 0;
+                self.scroll.lane = 0;
                 Effect::None
             }
             KeyCode::PageDown | KeyCode::PageUp => {
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
+                {
+                    let scroll = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        &mut self.scroll.plan
+                    } else {
+                        &mut self.scroll.rules
+                    };
+                    *scroll = if key.code == KeyCode::PageDown {
+                        scroll.saturating_add(5)
+                    } else {
+                        scroll.saturating_sub(5)
+                    };
+                    return Effect::None;
+                }
                 let expanded = match self.selected {
                     Some(Selection::Tool(i)) => self.tools.get(i).is_some_and(|t| t.expanded),
                     _ => false,
                 };
                 if !expanded {
-                    self.lane_scroll = if key.code == KeyCode::PageDown {
-                        self.lane_scroll.saturating_add(5)
+                    self.scroll.lane = if key.code == KeyCode::PageDown {
+                        self.scroll.lane.saturating_add(5)
                     } else {
-                        self.lane_scroll.saturating_sub(5)
+                        self.scroll.lane.saturating_sub(5)
                     };
                     return Effect::None;
                 }
                 if key.code == KeyCode::PageDown {
-                    self.drawer_scroll = self.drawer_scroll.saturating_add(5);
+                    self.scroll.drawer = self.scroll.drawer.saturating_add(5);
                 } else {
-                    self.drawer_scroll = self.drawer_scroll.saturating_sub(5);
+                    self.scroll.drawer = self.scroll.drawer.saturating_sub(5);
                 }
                 Effect::None
             }
