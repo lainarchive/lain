@@ -145,6 +145,7 @@ async fn cancelled_proposals_do_not_publish_or_poison_the_next_proposal() -> Tes
             let command=if publish {Command::PublishToolProposal {session_id:"s".into(),mode:SessionMode::Code,proposal:slow}} else {Command::TestToolProposal {session_id:"s".into(),proposal:slow}};
             let request=client.send(command).await?;
             while !directory.path().join("started").exists() {tokio::task::yield_now().await;}
+            assert!(matches!(client.request(Command::ListSessions).await?.as_slice(),[Event::Sessions {sessions}] if sessions.first().is_some_and(|s|s.status==Some(lain_ipc::SessionStatus::Busy))));
             let cancel=client.send(Command::CancelTurn {session_id:"s".into()}).await?;
             let mut cancelled=false;let mut acknowledged=false;
             while !cancelled || !acknowledged {
@@ -155,6 +156,7 @@ async fn cancelled_proposals_do_not_publish_or_poison_the_next_proposal() -> Tes
             assert!(!directory.path().join(".lain/tools/tool-generated.json").exists());
             std::fs::remove_file(directory.path().join("started"))?;
             assert!(matches!(client.request(Command::TestToolProposal {session_id:"s".into(),proposal:proposal()?}).await?.as_slice(),[Event::ToolProposalResult {..}]));
+            assert!(matches!(client.request(Command::ListSessions).await?.as_slice(),[Event::Sessions {sessions}] if sessions.first().is_some_and(|s|s.status==Some(lain_ipc::SessionStatus::Idle))));
         }
         client.close().await?;stop.send(true)?;task.await??;
         Ok::<(),Box<dyn std::error::Error>>(())

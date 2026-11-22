@@ -29,6 +29,9 @@ impl Drop for ProposalCancellation<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.session.canceller.reset();
+        self.session
+            .proposal_active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         drop(self.runner.take());
     }
 }
@@ -137,6 +140,21 @@ impl DaemonHandler {
                     mode: None,
                     model: Some(session.config.model.clone()),
                     turn_count,
+                    status: Some(
+                        if session
+                            .turn_active
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            lain_ipc::SessionStatus::Running
+                        } else if session
+                            .proposal_active
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            lain_ipc::SessionStatus::Busy
+                        } else {
+                            lain_ipc::SessionStatus::Idle
+                        },
+                    ),
                 }
             })
             .collect::<Vec<_>>();
@@ -162,10 +180,13 @@ impl DaemonHandler {
             .try_lock()
             .map_err(|_| Error::failure("SESSION_BUSY", &session_id))?;
         drop(sessions);
-        let _cancellation = ProposalCancellation {
+        let cancellation = ProposalCancellation {
             session: &session,
             runner: Some(runner),
         };
+        session
+            .proposal_active
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         if !session.config.allow_creator_mode {
             return Err(ToolError::Unknown(
                 if publish_mode.is_some() {
@@ -208,6 +229,7 @@ impl DaemonHandler {
             ()=events.closed()=>return Err(cancelled().into()),
             result=operation=>result?,
         };
+        drop(cancellation);
         reply(
             events,
             Event::ToolProposalResult {

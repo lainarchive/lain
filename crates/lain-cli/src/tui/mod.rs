@@ -1,8 +1,10 @@
 mod app;
+mod bots;
 mod creator;
 mod creator_ipc;
 mod creator_view;
 mod demo;
+mod formatting;
 mod input;
 mod inspect;
 mod launch_view;

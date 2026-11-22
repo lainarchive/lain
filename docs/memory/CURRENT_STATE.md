@@ -1,5 +1,20 @@
 # Current Project State
 
+## Bots inspection screen
+
+- Added screen 7 (`/bots`, palette, help) with a wired daemon status card, memory entries read and a paged agent table.
+  It polls every five seconds only while visible, retains selection by session id and avoids duplicate in-flight reads.
+- Additive IPC exposes real daemon name/pid/monotonic uptime in global `GetStatus` and activity in `ListSessions`.
+  Running means an active provider turn; busy means Creator Test/Publish. Missing legacy status displays unknown.
+  No last-active timestamp is tracked. Directional tokens, cost and age stay demo-only; no storage capacity is exposed,
+  so memory shows retrieved counts without invented capacity bars. Attachment remains unavailable and says so on Enter.
+- Bots and Sessions share compact numeric/currency/age formatting and right-aligned numeric columns. Demo has eight
+  agents with mixed states. Tests cover old protocol defaults, real handler status transitions, renders, empty/error
+  states, alignment, formatting and the refresh clock. No dependencies were added.
+- Linux gates: 245 workspace tests, Clippy with warnings denied and Rust formatting passed. Konsole Bots visual evidence:
+  `/home/ubuntu/screenshots/ss_817fdcd6.png`. Native Windows and live-provider desktop interaction remain untested.
+  Next action: review the pushed Bots change; handle any separately reported review findings.
+
 ## PR 15 review follow-up
 
 - Confirmed the reviewed head was `a2c425e`. Creator Test/Publish now observe cancellation and disconnects, kill the
@@ -11,7 +26,8 @@
   network permission on `demo_echo`; the CLI starts at launch and seeds a labelled canned turn after the first submit.
 - Linux verification: 240 workspace tests, Clippy with warnings denied and Rust formatting passed. Regression tests cover
   cancellation/refusal/cleanup, deferred session replacement, multiline submission, mode changes and demo behavior.
-  These UI changes are visually unverified; native Windows and live-provider interaction remain untested. PR CI is next.
+  These UI changes are visually unverified; native Windows and live-provider interaction remain untested.
+  PR CI at `dc6d50a`: six checks passed, none failed or pending.
 
 ## TUI shell review
 

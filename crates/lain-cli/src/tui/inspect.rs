@@ -31,7 +31,7 @@ pub enum ReadState {
 }
 
 impl ReadState {
-    fn label(&self, now: Duration) -> String {
+    pub fn label(&self, now: Duration) -> String {
         match self {
             Self::Idle => "not read yet · r refresh".into(),
             Self::Loading => "reading…".into(),
@@ -42,7 +42,7 @@ impl ReadState {
             }
         }
     }
-    fn ready(&self) -> bool {
+    pub fn ready(&self) -> bool {
         matches!(self, Self::Ready(_))
     }
 }
@@ -128,20 +128,44 @@ pub struct Inspect {
     pub filtering: bool,
     pub pid: Option<u32>,
     pub uptime: Option<u64>,
+    pub(super) next_bots_refresh: Option<Duration>,
 }
 
 impl Inspect {
+    pub fn tick(&mut self, screen: Screen, now: Duration) {
+        if screen != Screen::Bots {
+            self.next_bots_refresh = None;
+            return;
+        }
+        if self.next_bots_refresh.is_some_and(|at| now < at) {
+            return;
+        }
+        self.next_bots_refresh = Some(now + Duration::from_secs(5));
+        fn refresh<T>(resource: &mut Resource<T>) {
+            if !matches!(resource.state, ReadState::Loading) {
+                resource.state = ReadState::Idle;
+                resource.generation = resource.generation.wrapping_add(1);
+            }
+        }
+        refresh(&mut self.sessions);
+        refresh(&mut self.daemon);
+        refresh(&mut self.memory);
+    }
     pub fn reset_socket(&mut self) {
         self.sessions.reset();
         self.daemon.reset();
         self.memory.reset();
         self.session_selected = 0;
         self.memory_selected = 0;
+        self.pid = None;
+        self.uptime = None;
     }
 
     pub fn demo_refresh(&mut self, screen: Screen, now: Duration) {
         self.demo = true;
-        if screen == Screen::Sessions && matches!(self.sessions.state, ReadState::Idle) {
+        if matches!(screen, Screen::Sessions | Screen::Bots)
+            && matches!(self.sessions.state, ReadState::Idle)
+        {
             self.sessions.accept(
                 (0..8)
                     .map(|i| SessionRow {
@@ -161,11 +185,16 @@ impl Inspect {
                                 SessionMode::Code
                             }),
                             turn_count: i + 2,
+                            status: Some(match i % 3 {
+                                0 => lain_ipc::SessionStatus::Running,
+                                1 => lain_ipc::SessionStatus::Busy,
+                                _ => lain_ipc::SessionStatus::Idle,
+                            }),
                         },
-                        input: Some(u64::from((i + 1) * 1200)),
+                        input: Some(412300 + u64::from(i) * 1200),
                         output: Some(u64::from((i + 1) * 340)),
-                        cost: Some(f64::from(i + 1) * 0.0128),
-                        age: Some(u64::from(i + 1) * 180),
+                        cost: Some(0.4123 + f64::from(i) * 0.0128),
+                        age: Some(2280 + u64::from(i) * 180),
                     })
                     .collect(),
                 now,
@@ -177,7 +206,9 @@ impl Inspect {
             self.pid = Some(18432);
             self.uptime = Some(7980);
         }
-        if screen == Screen::Memory && matches!(self.memory.state, ReadState::Idle) {
+        if matches!(screen, Screen::Memory | Screen::Bots)
+            && matches!(self.memory.state, ReadState::Idle)
+        {
             self.memory.accept(vec![
                 MemoryEntry {kind:"rule",text:"Scripts run unsandboxed as the host user. Review source and capabilities before testing or publishing.".into()},
                 MemoryEntry {kind:"rule",text:"Require observed evidence before claiming verification. Prepared work is not verified execution.".into()},
@@ -284,6 +315,11 @@ impl Inspect {
             scroll.memory_detail = 0;
             return None;
         }
+        let screen = if screen == Screen::Bots {
+            Screen::Sessions
+        } else {
+            screen
+        };
         match (screen, key.code) {
             (Screen::Sessions, KeyCode::Down) => {
                 self.session_selected =
@@ -303,6 +339,8 @@ impl Inspect {
                 self.sessions.reset();
                 self.daemon.reset();
                 self.session_selected = 0;
+                self.memory.reset();
+                self.next_bots_refresh = None;
             }
             (Screen::Memory, KeyCode::Char('/')) => self.filtering = true,
             (Screen::Memory, KeyCode::Char('r')) => {
@@ -365,7 +403,7 @@ impl Requests {
         now: Duration,
     ) -> Result<(), Error> {
         let mut commands = vec![];
-        if screen == Screen::Sessions {
+        if matches!(screen, Screen::Sessions | Screen::Bots) {
             if matches!(view.sessions.state, ReadState::Idle) {
                 view.sessions.state = ReadState::Loading;
                 commands.push((
@@ -383,7 +421,9 @@ impl Requests {
                 ));
             }
         }
-        if screen == Screen::Memory && matches!(view.memory.state, ReadState::Idle) {
+        if matches!(screen, Screen::Memory | Screen::Bots)
+            && matches!(view.memory.state, ReadState::Idle)
+        {
             view.memory.state = ReadState::Loading;
             commands.push((
                 Kind::Memory,
@@ -418,11 +458,21 @@ impl Requests {
         match kind {
             Kind::Sessions if generation == view.sessions.generation => match event {
                 Event::Sessions { sessions } => {
+                    let selected = view
+                        .sessions
+                        .data
+                        .get(view.session_selected)
+                        .map(|row| row.info.id.clone());
+                    let index = selected
+                        .and_then(|id| sessions.iter().position(|row| row.id == id))
+                        .unwrap_or_else(|| {
+                            view.session_selected.min(sessions.len().saturating_sub(1))
+                        });
                     view.sessions.accept(
                         sessions.iter().cloned().map(SessionRow::from).collect(),
                         now,
                     );
-                    view.session_selected = 0;
+                    view.session_selected = index;
                 }
                 _ => view.sessions.unavailable(error),
             },
@@ -430,9 +480,18 @@ impl Requests {
                 Event::Status {
                     session_id: None,
                     status,
+                    daemon,
                     ..
-                } => view.daemon.accept(clean(status), now),
-                _ => view.daemon.unavailable(error),
+                } => {
+                    view.pid = daemon.as_ref().map(|info| info.pid);
+                    view.uptime = daemon.as_ref().map(|info| info.uptime_seconds);
+                    view.daemon.accept(clean(status), now);
+                }
+                _ => {
+                    view.pid = None;
+                    view.uptime = None;
+                    view.daemon.unavailable(error);
+                }
             },
             Kind::Memory if generation == view.memory.generation => match event {
                 Event::Memory {
@@ -563,21 +622,33 @@ pub fn sessions(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
                 r.info.id.clone(),
                 r.info.model.clone().unwrap_or_else(|| "—".into()),
                 r.info.mode.map_or_else(|| "—".into(), |m| format!("{m:?}")),
-                r.info.turn_count.to_string(),
+                super::formatting::number(u64::from(r.info.turn_count)),
             ];
             if optional.first() == Some(&true) {
-                cells.push(r.input.map_or_else(|| "—".into(), |n| n.to_string()));
+                cells.push(
+                    r.input
+                        .map_or_else(|| "—".into(), super::formatting::number),
+                );
             }
             if optional.get(1) == Some(&true) {
-                cells.push(r.output.map_or_else(|| "—".into(), |n| n.to_string()));
+                cells.push(
+                    r.output
+                        .map_or_else(|| "—".into(), super::formatting::number),
+                );
             }
             if optional.get(2) == Some(&true) {
-                cells.push(cost(r.cost).map_or_else(|| "—".into(), |n| format!("${n:.4}")));
+                cells.push(super::formatting::money(r.cost));
             }
             if optional.get(3) == Some(&true) {
-                cells.push(r.age.map_or_else(|| "—".into(), age));
+                cells.push(r.age.map_or_else(|| "—".into(), super::formatting::age));
             }
-            Row::new(cells.into_iter().map(|s| Cell::from(clean(&s))))
+            Row::new(cells.into_iter().enumerate().map(|(i, s)| {
+                if i >= 3 {
+                    super::formatting::numeric(s)
+                } else {
+                    Cell::from(clean(&s))
+                }
+            }))
         });
         let mut selection = TableState::default().with_selected(
             (!view.sessions.data.is_empty()).then_some(view.session_selected.saturating_sub(first)),
@@ -585,7 +656,14 @@ pub fn sessions(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
         frame.render_stateful_widget(
             Table::new(rows, widths)
                 .header(
-                    Row::new(names).style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+                    Row::new(names.into_iter().enumerate().map(|(i, s)| {
+                        if i >= 3 {
+                            super::formatting::numeric(s.to_owned())
+                        } else {
+                            Cell::from(s)
+                        }
+                    }))
+                    .style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
                 )
                 .block(panel(" Session catalog "))
                 .column_spacing(1)

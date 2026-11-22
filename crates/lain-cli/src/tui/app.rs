@@ -8,16 +8,18 @@ pub enum Screen {
     Memory,
     Sessions,
     Models,
+    Bots,
 }
 
 impl Screen {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Session,
         Self::Plugins,
         Self::Creator,
         Self::Memory,
         Self::Sessions,
         Self::Models,
+        Self::Bots,
     ];
 
     pub fn name(self) -> &'static str {
@@ -28,6 +30,7 @@ impl Screen {
             Self::Memory => "Memory",
             Self::Sessions => "Sessions",
             Self::Models => "Models",
+            Self::Bots => "Bots",
         }
     }
 
@@ -39,6 +42,7 @@ impl Screen {
             Self::Memory => "memory",
             Self::Sessions => "sessions",
             Self::Models => "models",
+            Self::Bots => "bots",
         }
     }
 
@@ -72,7 +76,7 @@ pub struct Command {
     pub action: Action,
 }
 
-pub const COMMANDS: [Command; 17] = [
+pub const COMMANDS: [Command; 18] = [
     Command {
         id: "dag",
         title: "Toggle DAG drawer",
@@ -126,6 +130,12 @@ pub const COMMANDS: [Command; 17] = [
         title: "Go to Models",
         hint: "6",
         action: Action::Go(Screen::Models),
+    },
+    Command {
+        id: "bots",
+        title: "Go to Bots",
+        hint: "7",
+        action: Action::Go(Screen::Bots),
     },
     Command {
         id: "architect",
@@ -187,7 +197,7 @@ pub enum Overlay {
 
 pub const GLOBAL_KEYS: &[(&str, &str)] = &[
     (
-        "1–6 / Alt+←→",
+        "1–7 / Alt+←→",
         "Screens (digits when not composing; Alt always)",
     ),
     (
@@ -245,6 +255,15 @@ pub fn screen_keys(screen: Screen) -> &'static [(&'static str, &'static str)] {
             (
                 "Enter / Esc",
                 "Apply filter or open manifest template in Creator / clear filter",
+            ),
+        ]
+    } else if screen == Screen::Bots {
+        &[
+            ("↑↓ / Enter", "Select row / attachment availability"),
+            ("r", "Refresh daemon status and live sessions"),
+            (
+                "Esc",
+                "Back to Session; Bots refreshes every 5s while visible",
             ),
         ]
     } else if screen == Screen::Sessions {
