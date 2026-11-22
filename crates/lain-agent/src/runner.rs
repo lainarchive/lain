@@ -371,12 +371,11 @@ impl AgentRunner {
         }
         let input_number = self.state.inputs + 1;
         let input_id = format!("{}/input/{input_number}", self.state.session_id);
-        self.commit(&input_id, "user input".into(), input.clone(), None)
+        let redacted = self
+            .commit(&input_id, "user input".into(), input.clone(), None)
             .await?;
         self.state.inputs = input_number;
-        self.emit(AgentEvent::IntentReceived {
-            text: input.clone(),
-        });
+        self.emit(AgentEvent::IntentReceived { text: redacted });
         self.state.messages.push(Message::text(Role::User, input));
         let mut initial_repo_map = None;
         if input_number == 1
@@ -953,7 +952,7 @@ impl AgentRunner {
         title: String,
         content: String,
         link: Option<(String, &'static str)>,
-    ) -> Result<(), AgentError> {
+    ) -> Result<String, AgentError> {
         let id = id.to_owned();
         let source = format!("lain-agent:{}", self.state.session_id);
         let content = if content.encode_utf16().count() > CONTENT_MAX_UTF16 {
@@ -970,14 +969,14 @@ impl AgentRunner {
                 trust: Some("untrusted".into()),
                 source: source.clone(),
             };
-            match store.remember(record(content)) {
+            let stored = match store.remember(record(content)) {
                 Err(StoreError::SecretRefused) => store.remember(record(WITHHELD.into()))?,
                 other => other?,
             };
             if let Some((to, relation)) = link {
                 store.link(&id, &to, relation, &source, Some("untrusted"))?;
             }
-            Ok(())
+            Ok(stored.content)
         })
         .await
     }
@@ -1216,6 +1215,30 @@ mod tests {
         let response = agent.complete(request, 1).await.unwrap();
         assert!(response.message.content.is_none());
         assert!(response.message.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn intent_events_use_the_stored_redacted_input() {
+        let provider = ScriptedProvider::new(vec![text("done")]);
+        let (mut agent, store) = runner(config(), provider);
+        let mut events = agent.subscribe();
+        let input = format!("Inspect sk-{}", "a".repeat(48));
+        agent.run(input.clone()).await.unwrap();
+        let stored = store
+            .lock()
+            .unwrap()
+            .get("s1/input/1")
+            .unwrap()
+            .unwrap()
+            .content;
+        assert_ne!(stored, input);
+        let intent = drain(&mut events)
+            .into_iter()
+            .find_map(|event| match event {
+                AgentEvent::IntentReceived { text } => Some(text),
+                _ => None,
+            });
+        assert_eq!(intent.as_deref(), Some(stored.as_str()));
     }
 
     #[derive(Debug)]
