@@ -21,7 +21,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use super::{
     creator_ipc, plugins,
-    state::{Effect, Phase, State},
+    state::{Effect, State},
     view,
 };
 use crate::{
@@ -98,6 +98,39 @@ async fn next(client: &mut Option<IpcClient>) -> Result<Option<(u64, Event)>, Er
     match client {
         Some(client) => Ok(client.recv().await?),
         None => std::future::pending().await,
+    }
+}
+
+fn abandon_turn(
+    session: &mut Option<String>,
+    active: &mut Option<u64>,
+    poll: &mut Option<u64>,
+    ignored: &mut BTreeSet<u64>,
+) -> Option<String> {
+    ignored.extend(active.take());
+    ignored.extend(poll.take());
+    session.take()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn abandoning_a_turn_quarantines_stream_and_poll_and_retires_its_session() {
+        let mut session = Some("cancelled".into());
+        let mut active = Some(10);
+        let mut poll = Some(11);
+        let mut ignored = BTreeSet::new();
+        assert_eq!(
+            abandon_turn(&mut session, &mut active, &mut poll, &mut ignored),
+            Some("cancelled".into())
+        );
+        assert!(session.is_none() && active.is_none() && poll.is_none());
+        assert_eq!(ignored, BTreeSet::from([10, 11]));
+        assert_eq!(
+            abandon_turn(&mut session, &mut active, &mut poll, &mut ignored),
+            None
+        );
     }
 }
 
@@ -235,18 +268,11 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                                 state.notice = "Steer sent · current daemon rejects mid-turn SendMessage as SESSION_BUSY".into();
                             }
                         }
-                        Effect::Interrupt => {
-                            if let Some(request) = active_request.take() { ignored.insert(request); }
-                            if let (Some(client), Some(id)) = (&mut client, &session) {
-                                client.send(Command::CancelTurn { session_id:id.clone() }).await?;
+                        Effect::Interrupt | Effect::Rewind => {
+                            let cancelled=abandon_turn(&mut session,&mut active_request,&mut poll_request,&mut ignored);
+                            if let (Some(client), Some(id)) = (&mut client, cancelled) {
+                                ignored.insert(client.send(Command::CancelTurn { session_id:id }).await?);
                             }
-                        }
-                        Effect::Rewind => {
-                            if let Some(request) = active_request.take() { ignored.insert(request); }
-                            if let (Some(client), Some(id)) = (&mut client, session.take()) {
-                                client.send(Command::CancelTurn { session_id: id }).await?;
-                            }
-                            if let Some(request) = poll_request.take() { ignored.insert(request); }
                         }
                     }
                 }
