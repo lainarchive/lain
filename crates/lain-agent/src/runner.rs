@@ -748,11 +748,7 @@ impl AgentRunner {
                     },
                 });
                 self.state.tool_calls += 1;
-                let guarded = !scratchpad
-                    && !matches!(
-                        call.name.as_str(),
-                        "memory_read" | "MemoryRead" | REPO_MAP_TOOL_NAME
-                    );
+                let guarded = !scratchpad && !self.tools.is_builtin_read_only(&call.name);
                 if guarded && self.control.require_approval(&call.id) {
                     self.emit(AgentEvent::ApprovalRequired {
                         turn,
@@ -1301,6 +1297,10 @@ mod tests {
         let mut registry = ToolRegistry::new();
         for tool in [
             StubTool {
+                name: "MemoryRead",
+                result: Ok(None),
+            },
+            StubTool {
                 name: "ok",
                 result: Ok(None),
             },
@@ -1373,8 +1373,13 @@ mod tests {
 
     #[tokio::test]
     async fn intercepted_tools_wait_for_matching_approval_and_denial_skips_dispatch() {
-        for approve in [true, false] {
-            let provider = ScriptedProvider::new(vec![calls(None, &["ok"]), text("done")]);
+        for (name, approve) in [
+            ("ok", true),
+            ("ok", false),
+            ("MemoryRead", true),
+            ("MemoryRead", false),
+        ] {
+            let provider = ScriptedProvider::new(vec![calls(None, &[name]), text("done")]);
             let (mut agent, _) = runner(config(), provider);
             let control = agent.control();
             control.intercept(true);
