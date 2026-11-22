@@ -65,6 +65,10 @@ async fn daemon(options: Options) -> Result<(), Error> {
 
 async fn run() -> Result<bool, Error> {
     let options = Options::parse(std::env::args().skip(1))?;
+    if let Action::Tui { demo } = options.action {
+        lain_cli::tui::run(&options, demo).await?;
+        return Ok(true);
+    }
     if options.action == Action::Help {
         write!(io::stdout().lock(), "{USAGE}")?;
         return Ok(true);
