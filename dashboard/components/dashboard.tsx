@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Switch from "@radix-ui/react-switch";
 import {
@@ -17,39 +16,8 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import {
-  Activity,
-  ArrowDownToLine,
-  ArrowRight,
-  Bot,
-  BrainCircuit,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Circle,
-  CircleHelp,
-  Command,
-  Cpu,
-  Database,
-  FileCode2,
-  GitBranch,
-  Layers3,
-  Maximize2,
-  MemoryStick,
-  Network,
-  Pause,
-  Play,
-  Plug,
-  Radio,
-  Search,
-  Send,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  Terminal,
-  Workflow,
-  X,
-  Zap,
+  ArrowDownToLine, Bot, BrainCircuit, Check, Command, Database, FileCode2,
+  Maximize2, Pause, Play, Plug, Search, Send, Sparkles, Square, Terminal, Workflow, X, Zap,
 } from "lucide-react";
 
 import {
@@ -86,49 +54,24 @@ const icons = {
   error: Zap,
 };
 const labels = {
-  intent: "INPUT",
-  reasoning: "INFERENCE",
-  tool: "TOOL CALL",
-  subagent: "SUB-AGENT",
-  reflection: "HERMES",
-  output: "OUTPUT",
-  error: "ERROR",
+  intent: "User intent", reasoning: "Reasoning", tool: "Tool call", subagent: "Sub-agent",
+  reflection: "Hermes commit", output: "Output", error: "Error",
 };
 type FlowNode = Node<TraceNode & Record<string, unknown>, "trace">;
-
 function TraceCard({ data, selected }: NodeProps<FlowNode>) {
   const tool = data.kind === "tool" ? toolKind(data.label) : null;
   const Icon = tool === "AST MAP" ? FileCode2 : tool === "CUSTOM PLUGIN" ? Plug : icons[data.kind];
+  const type = tool ? { BASH: "Bash", POWERSHELL: "PowerShell", "AST MAP": "AST map",
+    "CUSTOM PLUGIN": "Custom plugin" }[tool] : labels[data.kind];
   return (
-    <div
-      className={`trace-card ${data.status} ${selected ? "selected" : ""}`}
-      title={data.status === "failed" ? data.detail : undefined}
-    >
+    <div className={`trace-card ${data.status} ${selected ? "selected" : ""}`}
+      title={data.status === "failed" ? data.detail : undefined}>
       <Handle type="target" position={Position.Left} />
-      <div className="node-eyebrow">
-        <span>
-          <Icon size={12} />
-          {tool ?? labels[data.kind]}
-        </span>
-        <span className={`status-dot ${data.status}`} />
-      </div>
-      <strong>{data.label}</strong>
-      <p>{data.detail}</p>
-      <footer>
-        <span className={`node-state ${data.status}`}>
-          {data.status === "pending"
-            ? "PENDING · APPROVAL"
-            : data.status.toUpperCase()}
-        </span>
-        <span>
-          {data.duration !== undefined
-            ? `${data.duration.toLocaleString()} ms`
-            : data.status === "running"
-              ? "in progress"
-              : "—"}
-          <ChevronRight size={11} />
-        </span>
-      </footer>
+      <div className="node-title"><Icon size={14} /><strong>{data.label}</strong>
+        <span className={`status-dot ${data.status}`} aria-label={data.status} /></div>
+      <div className="node-meta"><span>{type}</span><span className="mono">
+        {data.duration !== undefined ? `${data.duration.toLocaleString()} ms` : data.status}
+      </span></div>
       <Handle type="source" position={Position.Right} />
     </div>
   );
@@ -150,8 +93,6 @@ const pretty = (value: Json | undefined) =>
     : typeof value === "string"
       ? value
       : JSON.stringify(value, null, 2);
-const compact = (value: number) =>
-  value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { cache: "no-store", ...init });
@@ -286,14 +227,6 @@ export function Dashboard() {
     [visible, selectedId, positions],
   );
   const edges = useMemo(() => graphEdges(visible), [visible]);
-  const percent = session
-    ? Math.min(
-        100,
-        Math.round(
-          (session.prompt_tokens / Math.max(1, session.context_window)) * 100,
-        ),
-      )
-    : 0;
   const selectedDiff =
     selected?.diff ??
     (selected?.input &&
@@ -364,835 +297,175 @@ export function Dashboard() {
     URL.revokeObjectURL(url);
   };
 
+  const parts = [
+    { label: "Memory", value: session?.memory_tokens ?? 0, className: "memory" },
+    { label: "AST repomap", value: session?.repo_map_tokens ?? 0, className: "ast" },
+    { label: "Tool output", value: session?.tool_tokens ?? 0, className: "tools" },
+    { label: "Other", value: Math.max(0, (session?.prompt_tokens ?? 0) - (session?.memory_tokens ?? 0)
+      - (session?.repo_map_tokens ?? 0) - (session?.tool_tokens ?? 0)), className: "other" },
+  ];
+  const contextTotal = Math.max(1, parts.reduce((sum, part) => sum + part.value, 0));
+  const pending = graph.nodes.findLast((node) => node.session === session?.session_id && node.status === "pending");
+  const pendingArgs = pending?.input && typeof pending.input === "object" && !Array.isArray(pending.input)
+    ? pending.input : undefined;
+  const pendingTarget = pendingArgs?.path ?? pendingArgs?.file_path ?? pendingArgs?.command
+    ?? (typeof pendingArgs?.diff === "string" ? pendingArgs.diff.match(/^\+\+\+ (?:b\/)?(.+)$/m)?.[1] : undefined);
+  const SelectedIcon = selected ? icons[selected.kind] : Terminal;
+
   return (
     <div className="app-shell">
-      <aside className="icon-rail">
-        <Link className="brand-mark" href="/" aria-label="Lain home">
-          l<span>·</span>
-        </Link>
-        <button
-          className={tab === "graph" ? "rail-active" : ""}
-          onClick={() => setTab("graph")}
-          title="Execution graph"
-        >
-          <Workflow size={20} />
-        </button>
-        <button
-          className={tab === "memory" ? "rail-active" : ""}
-          onClick={() => setTab("memory")}
-          title="Memory"
-        >
-          <Database size={20} />
-        </button>
-        <button
-          className={tab === "plugins" ? "rail-active" : ""}
-          onClick={() => setTab("plugins")}
-          title="Tools & plugins"
-        >
-          <Plug size={20} />
-        </button>
-        <div className="rail-bottom">
-          <button
-            title="Inspect bridge status"
-            onClick={() => {
-              setTab("bridge");
-            }}
-          >
-            <Settings2 size={19} />
-          </button>
-          <button title="Open setup help" onClick={() => setTab("help")}>
-            <CircleHelp size={19} />
-          </button>
-          <span className="avatar">L</span>
-        </div>
-      </aside>
-      <aside className="workspace-sidebar">
-        <div className="workspace-title">
-          <div className="workspace-icon">
-            <Network size={17} />
+      <header className="topbar">
+        <span className="wordmark">lain</span>
+        <nav className="view-switch" aria-label="Dashboard view">
+          {[["graph", "Graph", Workflow], ["memory", "Memory", Database], ["plugins", "Plugins", Plug]].map(([id, label, Icon]) => {
+            const ViewIcon = Icon as typeof Workflow;
+            return <button key={String(id)} aria-current={tab === id ? "page" : undefined}
+              onClick={() => setTab(String(id))}><ViewIcon size={14} />{String(label)}</button>;
+          })}
+        </nav>
+        <select className="session-picker" aria-label="Session" value={session?.session_id ?? ""}
+          onChange={(e) => { setSessionId(e.target.value); setFitKey((k) => k + 1); }}>
+          {!activeStatus.sessions.length && <option value="">No session</option>}
+          {activeStatus.sessions.map((item) => <option key={item.session_id} value={item.session_id}>{item.session_id}</option>)}
+        </select>
+        <div className="topbar-right">
+          <span className="connection"><i className={`status-dot ${!demo && connection === "connected" ? "success" : ""}`} />
+            {demo ? "Example · offline" : connection === "connected" ? "Connected" : connection}</span>
+          <label className="intercept">Intercept
+            <Switch.Root className="switch" checked={session?.control.intercept ?? false} disabled={controlsDisabled}
+              onCheckedChange={(enabled) => void intervene({ command: "intercept", enabled })} aria-label="Intercept mutating tools">
+              <Switch.Thumb className="switch-thumb" /></Switch.Root>
+          </label>
+          <div className="mode-switch" aria-label="Data source">
+            <button aria-pressed={!demo} onClick={() => { if (demo) toggleDemo(); }}>Live</button>
+            <button aria-pressed={demo} onClick={() => { if (!demo) toggleDemo(); }}>Example</button>
           </div>
-          <div>
-            <strong>Lain workspace</strong>
-            <small>LOCAL ENVIRONMENT</small>
-          </div>
-          <ChevronDown size={14} />
+          <button className="icon-button" onClick={exportTrace} title="Export trace" aria-label="Export trace"><ArrowDownToLine size={15} /></button>
         </div>
-        <div className="sidebar-section-label">
-          WORKSPACE <span>01</span>
-        </div>
-        <button
-          className={`sidebar-link ${tab === "graph" ? "active" : ""}`}
-          onClick={() => setTab("graph")}
-        >
-          <GitBranch size={16} /> Neural graph <span>{graph.nodes.length}</span>
-        </button>
-        <button
-          className={`sidebar-link ${tab === "memory" ? "active" : ""}`}
-          onClick={() => setTab("memory")}
-        >
-          <MemoryStick size={16} /> Memory bank
-        </button>
-        <button
-          className={`sidebar-link ${tab === "plugins" ? "active" : ""}`}
-          onClick={() => setTab("plugins")}
-        >
-          <Layers3 size={16} /> Tool registry{" "}
-          <span>{activePlugins.length}</span>
-        </button>
-        <div className="sidebar-section-label sessions-label">
-          SESSIONS <Radio size={12} />
-        </div>
+      </header>
+      <aside className="session-sidebar" aria-label="Sessions">
+        <h2>Sessions <span className="mono">{activeStatus.sessions.length}</span></h2>
         <div className="session-list">
-          {activeStatus.sessions.length ? (
-            activeStatus.sessions.map((item) => (
-              <button
-                key={item.session_id}
-                className={`session-item ${session?.session_id === item.session_id ? "current" : ""}`}
-                onClick={() => {
-                  setSessionId(item.session_id);
-                  setFitKey((k) => k + 1);
-                }}
-              >
-                <span
-                  className={`status-dot ${item.status === "running" ? "running" : item.status === "approval_required" ? "pending" : "success"}`}
-                />
-                <div>
-                  <strong>
-                    {item.session_id
-                      .replace(/^agent-/, "session-")
-                      .slice(0, 19)}
-                  </strong>
-                  <small>{item.status.replaceAll("_", " ")}</small>
-                </div>
-              </button>
-            ))
-          ) : (
-            <p className="sidebar-empty">
-              No sessions yet.
-              <br />
-              Start a turn with <code>lain query</code>.
-            </p>
-          )}
+          {activeStatus.sessions.map((item) => <button key={item.session_id}
+            className={`session-item ${session?.session_id === item.session_id ? "current" : ""}`}
+            aria-pressed={session?.session_id === item.session_id}
+            onClick={() => { setSessionId(item.session_id); setFitKey((k) => k + 1); }}>
+            <span className={`status-dot ${item.status === "running" ? "running" : item.status === "approval_required" ? "pending" : "success"}`} />
+            <span><span className="session-id mono">{item.session_id}</span><small>{item.status.replaceAll("_", " ")}</small></span>
+          </button>)}
+          {!activeStatus.sessions.length && <p className="muted sidebar-empty">No sessions yet.</p>}
         </div>
-        <div className="sidebar-spacer" />
-        <div className="local-card">
-          <div>
-            <span
-              className={`status-dot ${connection === "connected" && !demo ? "success" : "pending"}`}
-            />
-            <strong>
-              {demo ? "Example environment" : "Local-first. Always."}
-            </strong>
-          </div>
-          <p>
-            {demo
-              ? "Simulated trace. Controls are disabled."
-              : "Your models. Your machine.\nNothing leaves without permission."}
-          </p>
-          <span>
-            <ShieldCheck size={12} /> POLICY-GOVERNED EXECUTION
-          </span>
-        </div>
-        <div className="sidebar-version">
-          <span>LAIN CORE</span>
-          <span>
-            v0.1.0 <span className="tiny-dot" />
-          </span>
-        </div>
+        <details className="connection-details"><summary>Connection &amp; setup</summary>
+          <p>127.0.0.1:4040</p><p>Start the bridge:</p><code>cargo run -p lain-cli -- ui</code>
+          <p>Start a run:</p><code>lain query &quot;Your objective&quot;</code>
+          <p>Restart existing daemons with <code>--serve-ui</code>. Pause takes effect at the next safe boundary.</p>
+          <pre>{JSON.stringify(activeStatus, null, 2)}</pre>
+        </details>
       </aside>
-
       <main className="main-workspace">
-        <header className="topbar">
-          <div className="breadcrumb">
-            Workspace <ChevronRight size={13} />
-            <span>Neural dashboard</span>
-          </div>
-          <div className="topbar-actions">
-            <span
-              className={`connection-pill ${demo ? "example" : connection}`}
-            >
-              <span className="status-dot" />
-              {demo
-                ? "EXAMPLE TRACE"
-                : connection === "connected"
-                  ? "DAEMON CONNECTED"
-                  : connection.toUpperCase()}
-            </span>
-            <span className="local-label">
-              <Cpu size={13} /> 127.0.0.1:4040
-            </span>
-            <button
-              className="icon-button"
-              onClick={exportTrace}
-              title="Export trace"
-            >
-              <ArrowDownToLine size={16} />
-            </button>
-          </div>
-        </header>
-        <section className="page-heading">
-          <div>
-            <div className="eyebrow">
-              <span className="tiny-dot" /> OBSERVABILITY / LIVE EXECUTION
-            </div>
-            <h1>
-              Inside the machine<span>.</span>
-            </h1>
-            <p>A live window into thought, tools, and everything in between.</p>
-          </div>
-          <button
-            className={`secondary-button ${demo ? "demo-selected" : ""}`}
-            onClick={toggleDemo}
-          >
-            <Play size={13} />
-            {demo ? "Return to live" : "Explore example"}
-          </button>
-        </section>
-
-        <section className="metrics-grid">
-          <div className="metric">
-            <div className="metric-label">
-              <Cpu size={14} /> ACTIVE MODEL <span>LOCAL</span>
-            </div>
-            <strong className="model-value">
-              {session?.model ?? "Awaiting session"}
-            </strong>
-            <small>
-              <span
-                className={`status-dot ${session ? "success" : "pending"}`}
-              />{" "}
-              {session
-                ? `${session.turns} inference turns`
-                : "No model calls made"}
-            </small>
-          </div>
-          <div className="metric">
-            <div className="metric-label">
-              <Zap size={14} /> TOKEN BURN <span>SESSION</span>
-            </div>
-            <strong>
-              {compact(session?.tokens_used ?? 0)}
-              <em>
-                /{" "}
-                {session?.token_limit
-                  ? compact(session.token_limit)
-                  : "uncapped"}
-              </em>
-            </strong>
-            <div className="mini-progress">
-              <i
-                style={{
-                  width: `${session?.token_limit ? Math.min(100, (session.tokens_used / session.token_limit) * 100) : 0}%`,
-                }}
-              />
-            </div>
-            <small>Provider-reported total usage</small>
-          </div>
-          <div className="metric context-metric">
-            <div>
-              <div className="metric-label">
-                <Database size={14} /> CONTEXT WINDOW
-              </div>
-              <strong>
-                {compact(session?.prompt_tokens ?? 0)}
-                <em>/ {compact(session?.context_window ?? 0)}</em>
-              </strong>
-              <small>Estimated prompt occupancy</small>
-            </div>
-            <div
-              className="radial-gauge"
-              style={{
-                background: `conic-gradient(#6de0c5 ${percent}%, #222728 0)`,
-              }}
-            >
-              <span>
-                {percent}
-                <small>%</small>
-              </span>
+        {error && <div className="error-banner" role="alert">{error}<button className="icon-button" aria-label="Dismiss error"
+          onClick={() => setError(null)}><X size={14} /></button></div>}
+        {graph.gap && <p className="gap-warning" role="status">Some event history is unavailable.</p>}
+        {tab === "graph" ? <>
+          <div className="graph-toolbar">
+            <label className="search"><Search size={14} /><input aria-label="Search execution nodes" placeholder="Find a node"
+              value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+            <select aria-label="Filter node status" value={filter} onChange={(e) => setFilter(e.target.value)}>
+              <option value="all">All statuses</option><option value="running">Running</option><option value="pending">Pending</option>
+              <option value="success">Success</option><option value="failed">Failed</option></select>
+            <div className="graph-actions">
+              <button className="icon-button" aria-label={session?.control.paused ? "Resume agent" : "Pause agent"}
+                title={session?.control.paused ? "Resume agent" : "Pause agent at next safe boundary"} disabled={controlsDisabled}
+                onClick={() => void intervene({ command: session?.control.paused ? "resume" : "pause" })}>
+                {session?.control.paused ? <Play size={14} /> : <Pause size={14} />}</button>
+              <button className="icon-button" disabled={controlsDisabled} aria-label="Cancel active turn" title="Cancel active turn"
+                onClick={() => void intervene({ command: "cancel" })}><Square size={12} /></button>
+              <button className="icon-button" title="Fit graph" aria-label="Fit graph" onClick={() => setFitKey((k) => k + 1)}><Maximize2 size={15} /></button>
             </div>
           </div>
-          <div className="metric">
-            <div className="metric-label">
-              <Activity size={14} /> EXECUTION STATE
-            </div>
-            <strong className="state-value">
-              <span
-                className={`status-dot ${session?.control.pending_call ? "pending" : "running"}`}
-              />
-              {session?.status.replaceAll("_", " ") ?? "Standby"}
-            </strong>
-            <small>
-              {visible.filter((n) => n.status === "success").length} completed{" "}
-              <span className="metric-separator">/</span>{" "}
-              {visible.filter((n) => n.status === "failed").length} failed nodes
-            </small>
+          <div className="graph-canvas">
+            <ReactFlow key={`${fitKey}:${demo}:${nodes.length ? "data" : "empty"}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes}
+              fitView fitViewOptions={{ padding: 0.12, maxZoom: 0.95 }} onNodesChange={onNodesChange} minZoom={0.12} maxZoom={1.7}
+              nodesConnectable={false} nodesDraggable onNodeClick={(_, node) => { setSelectedId(node.id); setPayloadTab("output"); }}
+              onPaneClick={() => setSelectedId(null)} colorMode="dark" proOptions={{ hideAttribution: true }}>
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#27272a" />
+              <Controls showInteractive={false} />
+              <MiniMap nodeColor={(node) => ({ running: "#22d3ee", pending: "#f59e0b99", success: "#34d399", failed: "#f43f5e" })[String(node.data.status)] ?? "#71717a"}
+                maskColor="rgba(9,9,11,.8)" pannable zoomable />
+            </ReactFlow>
+            {!visible.length && <div className="canvas-empty"><p>{query || filter !== "all" ? "No matching nodes" : "No active run"}</p>
+              {query || filter !== "all" ? <span>Try another search or status filter.</span> : <>
+                <code>lain query &quot;…&quot;</code><button className="text-button" onClick={toggleDemo}>Load example</button></>}
+            </div>}
+            <div className="canvas-legend">{["pending", "running", "success", "failed"].map((state) =>
+              <span key={state}><i className={`status-dot ${state}`} />{state[0].toUpperCase() + state.slice(1)}</span>)}</div>
           </div>
-        </section>
-
-        {(error || graph.gap) && (
-          <div className="notice" role="alert">
-            {error ??
-              "Some events are outside the replay window. This graph may be incomplete."}
-            <button
-              onClick={() => {
-                setError(null);
-                setGraph((g) => ({ ...g, gap: false }));
-              }}
-              aria-label="Dismiss notice"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        )}
-
-        <section className="execution-panel">
-          <div className="panel-tabs">
-            <div className="tab-group">
-              {[
-                ["graph", "Execution graph", Workflow],
-                ["memory", "Memory", Database],
-                ["plugins", "Tools & plugins", Plug],
-              ].map(([id, label, Icon]) => {
-                const TabIcon = Icon as typeof Workflow;
-                return (
-                  <button
-                    key={String(id)}
-                    className={tab === id ? "tab-active" : ""}
-                    onClick={() => setTab(String(id))}
-                  >
-                    <TabIcon size={14} />
-                    {String(label)}
-                    {id === "graph" && <span>{visible.length}</span>}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="panel-session">
-              <span className="tiny-dot" />
-              {session?.session_id.slice(-14) ?? "NO ACTIVE SESSION"}
-            </div>
-          </div>
-
-          {tab === "graph" ? (
-            <>
-              <div className="graph-toolbar">
-                <div className="graph-toolbar-left">
-                  <label className="search">
-                    <Search size={14} />
-                    <input
-                      aria-label="Search execution nodes"
-                      placeholder="Find a node…"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                    />
-                    <kbd>/</kbd>
-                  </label>
-                  <select
-                    aria-label="Filter node status"
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                  >
-                    <option value="all">All statuses</option>
-                    <option value="running">Running</option>
-                    <option value="pending">Pending</option>
-                    <option value="success">Success</option>
-                    <option value="failed">Failed</option>
-                  </select>
-                </div>
-                <div className="graph-actions">
-                  <button
-                    title={
-                      session?.control.paused
-                        ? "Resume agent"
-                        : "Pause agent at next safe boundary"
-                    }
-                    disabled={controlsDisabled}
-                    onClick={() =>
-                      void intervene({
-                        command: session?.control.paused ? "resume" : "pause",
-                      })
-                    }
-                  >
-                    {session?.control.paused ? (
-                      <Play size={14} />
-                    ) : (
-                      <Pause size={14} />
-                    )}
-                  </button>
-                  <button
-                    disabled={controlsDisabled}
-                    title="Cancel active turn"
-                    onClick={() => void intervene({ command: "cancel" })}
-                  >
-                    <Square size={12} />
-                  </button>
-                  <span className="toolbar-divider" />
-                  <button
-                    title="Fit graph"
-                    onClick={() => setFitKey((k) => k + 1)}
-                  >
-                    <Maximize2 size={15} />
-                  </button>
-                </div>
-              </div>
-              <div className="graph-and-hud">
-                <div className="graph-canvas">
-                  <div className="canvas-label">
-                    <span
-                      className={`status-dot ${demo ? "pending" : "running"}`}
-                    />
-                    {demo ? "EXAMPLE / SIMULATED" : "LIVE DIRECTED GRAPH"}
-                    <span>LEFT → RIGHT</span>
-                  </div>
-                  <ReactFlow
-                    key={`${fitKey}:${demo}:${nodes.length ? "data" : "empty"}`}
-                    nodes={nodes}
-                    edges={edges}
-                    nodeTypes={nodeTypes}
-                    fitView
-                    fitViewOptions={{ padding: 0.22, maxZoom: 0.95 }}
-                    onNodesChange={onNodesChange}
-                    minZoom={0.12}
-                    maxZoom={1.7}
-                    nodesConnectable={false}
-                    nodesDraggable
-                    onNodeClick={(_, node) => {
-                      setSelectedId(node.id);
-                      setPayloadTab("output");
-                    }}
-                    onPaneClick={() => setSelectedId(null)}
-                    colorMode="dark"
-                    proOptions={{ hideAttribution: true }}
-                  >
-                    <Background
-                      variant={BackgroundVariant.Dots}
-                      gap={20}
-                      size={1}
-                      color="#263031"
-                    />
-                    <Controls showInteractive={false} />
-                    <MiniMap
-                      nodeColor={(node) =>
-                        ({
-                          running: "#57cdbb",
-                          pending: "#bb9b55",
-                          success: "#385e57",
-                          failed: "#a04f60",
-                        })[String(node.data.status)] ?? "#333"
-                      }
-                      maskColor="rgba(9,13,14,.72)"
-                      pannable
-                      zoomable
-                    />
-                  </ReactFlow>
-                  {!visible.length && (
-                    <div className="canvas-empty">
-                      <div className="empty-orbit">
-                        <BrainCircuit size={29} />
-                      </div>
-                      <h2>
-                        {query || filter !== "all"
-                          ? "No matching nodes"
-                          : "Waiting for a signal"}
-                      </h2>
-                      <p>
-                        {query || filter !== "all"
-                          ? "Try another search or status filter."
-                          : "Start a local agent turn. Its execution unfolds here, in real time."}
-                      </p>
-                      {!query && filter === "all" && (
-                        <>
-                          <code>lain query &quot;Map this repository&quot;</code>
-                          <button onClick={toggleDemo}>
-                            Or explore an example <ArrowRight size={13} />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  <div className="canvas-legend">
-                    <span>
-                      <i className="status-dot pending" />
-                      Pending
-                    </span>
-                    <span>
-                      <i className="status-dot running" />
-                      Running
-                    </span>
-                    <span>
-                      <i className="status-dot success" />
-                      Success
-                    </span>
-                    <span>
-                      <i className="status-dot failed" />
-                      Failed
-                    </span>
-                  </div>
-                </div>
-                <aside className="hud">
-                  <div className="hud-heading">
-                    <Terminal size={14} />
-                    <strong>Hermes scratchpad</strong>
-                    <span>{demo ? "SIMULATED" : "LIVE"}</span>
-                  </div>
-                  <div className="terminal-tabs">
-                    <span className="terminal-active">working_memory</span>
-                    <span>.md</span>
-                    <span className="tiny-dot" />
-                  </div>
-                  <pre className="scratchpad">
-                    {session?.scratchpad ||
-                      "# No working notes yet\n\nHermes will write the active plan\nand compact observations here.\n\nWaiting for UpdateScratchpad…"}
-                    <span className="terminal-cursor">▊</span>
-                  </pre>
-                  <div className="context-breakdown">
-                    <div className="hud-subheading">
-                      CONTEXT COMPOSITION <span>EST.</span>
-                    </div>
-                    {[
-                      [
-                        "Memory + system",
-                        session?.memory_tokens ?? 0,
-                        "memory",
-                      ],
-                      ["AST repomap", session?.repo_map_tokens ?? 0, "ast"],
-                      ["Tool output", session?.tool_tokens ?? 0, "tools"],
-                    ].map(([label, value, color]) => (
-                      <div className="breakdown-row" key={label}>
-                        <span>
-                          <i className={String(color)} />
-                          {label}
-                        </span>
-                        <strong>{compact(Number(value))}</strong>
-                      </div>
-                    ))}
-                    <div className="stacked-bar">
-                      {[
-                        [session?.memory_tokens ?? 0, "memory"],
-                        [session?.repo_map_tokens ?? 0, "ast"],
-                        [session?.tool_tokens ?? 0, "tools"],
-                      ].map(([value, color]) => (
-                        <i
-                          key={color}
-                          className={String(color)}
-                          style={{
-                            width: `${Math.min(100, (Number(value) / Math.max(1, session?.prompt_tokens ?? 1)) * 100)}%`,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  <div className="intercept-card">
-                    <div className="intercept-title">
-                      <ShieldCheck size={15} />
-                      <strong>Intercept mode</strong>
-                      <Switch.Root
-                        className="switch"
-                        checked={session?.control.intercept ?? false}
-                        disabled={controlsDisabled}
-                        onCheckedChange={(enabled) =>
-                          void intervene({ command: "intercept", enabled })
-                        }
-                        aria-label="Intercept mutating tools"
-                      >
-                        <Switch.Thumb className="switch-thumb" />
-                      </Switch.Root>
-                    </div>
-                    <p>
-                      Review mutating tools before they run. Read-only context
-                      stays uninterrupted.
-                    </p>
-                    {session?.control.pending_call && (
-                      <div className="approval-box">
-                        <span className="approval-label">
-                          <span className="status-dot pending" /> APPROVAL
-                          REQUIRED
-                        </span>
-                        <strong>
-                          {graph.nodes.findLast((n) => n.status === "pending")
-                            ?.label ?? session.control.pending_call}
-                        </strong>
-                        <div>
-                          <button
-                            disabled={controlsDisabled}
-                            onClick={() =>
-                              void intervene({
-                                command: "deny",
-                                call_id: session.control.pending_call!,
-                              })
-                            }
-                          >
-                            <X size={13} /> Deny
-                          </button>
-                          <button
-                            className="approve-button"
-                            disabled={controlsDisabled}
-                            onClick={() =>
-                              void intervene({
-                                command: "approve",
-                                call_id: session.control.pending_call!,
-                              })
-                            }
-                          >
-                            <Check size={13} /> Approve
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </aside>
-              </div>
-              <form
-                className="steer-bar"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (steering.trim())
-                    void intervene({ command: "steer", text: steering });
-                }}
-              >
-                <span>
-                  <Command size={15} />
-                </span>
-                <input
-                  aria-label="Steer the agent"
-                  placeholder={
-                    demo
-                      ? "Example trace · return to live to steer your agent"
-                      : "Steer the agent without breaking its flow…"
-                  }
-                  value={steering}
-                  onChange={(e) => setSteering(e.target.value)}
-                  disabled={controlsDisabled}
-                  maxLength={8000}
-                />
-                <span className="steer-hint">NEXT SAFE TURN</span>
-                <button
-                  type="submit"
-                  disabled={controlsDisabled || !steering.trim()}
-                  aria-label="Send steering instruction"
-                >
-                  <Send size={15} />
-                </button>
-              </form>
-            </>
-          ) : tab === "memory" ? (
-            <div className="data-view">
-              <div className="data-view-heading">
-                <Database size={22} />
-                <div>
-                  <h2>Memory bank</h2>
-                  <p>
-                    Persistent episodes and learned procedural rules from the
-                    daemon.
-                  </p>
-                </div>
-                <span className="tag">
-                  {activeMemory.semantic.backend} ·{" "}
-                  {activeMemory.semantic.embeddings_available
-                    ? "embeddings ready"
-                    : "no vector index"}
-                </span>
-              </div>
-              <div className="memory-columns">
-                <DataList
-                  title="Episodic turns"
-                  items={activeMemory.episodic}
-                />
-                <DataList
-                  title="Procedural rules"
-                  items={activeMemory.procedural}
-                />
-              </div>
-            </div>
-          ) : tab === "plugins" ? (
-            <div className="data-view">
-              <div className="data-view-heading">
-                <Plug size={22} />
-                <div>
-                  <h2>Tool registry</h2>
-                  <p>
-                    Loaded session tools, including creator-mode scripts and
-                    dynamic plugins.
-                  </p>
-                </div>
-              </div>
-              <div className="plugin-grid">
-                {activePlugins.map((tool) => (
-                  <article
-                    className="plugin-card"
-                    key={`${tool.session_id}:${tool.name}`}
-                  >
-                    <FileCode2 size={19} />
-                    <h3>{tool.name}</h3>
-                    <p>{tool.description}</p>
-                    <small>{tool.session_id}</small>
-                    <details>
-                      <summary>Input schema</summary>
-                      <pre>{pretty(tool.parameters)}</pre>
-                    </details>
-                  </article>
-                ))}
-              </div>
-              {!activePlugins.length && (
-                <p className="data-empty">
-                  No loaded tools. Start a configured session to inspect its
-                  registry.
-                </p>
-              )}
-            </div>
-          ) : (
-            <div className="data-view setup-view">
-              <Network size={30} />
-              <h2>
-                {tab === "bridge"
-                  ? "Your local connection"
-                  : "Bring your agent online"}
-              </h2>
-              <p>
-                The dashboard is served by the same Rust daemon that runs your
-                agent. No cloud account or API key is needed for the UI.
-              </p>
-              <ol>
-                <li>
-                  Build the UI:{" "}
-                  <code>cd dashboard && npm ci && npm run build</code>
-                </li>
-                <li>
-                  Start the bridge: <code>cargo run -p lain-cli -- ui</code>
-                </li>
-                <li>
-                  In another terminal: <code>lain query &quot;Your objective&quot;</code>
-                </li>
-              </ol>
-              <p>
-                Use http://127.0.0.1:4040. Existing daemons must be restarted
-                with <code>--serve-ui</code>. Pause takes effect at the next
-                turn/tool boundary; cancel interrupts an in-flight call.
-              </p>
-              <button className="secondary-button" onClick={toggleDemo}>
-                {demo ? "Return to live" : "Explore the example"}
-                <ArrowRight size={14} />
-              </button>
-            </div>
-          )}
-        </section>
-        <section className="event-strip">
-          <span>
-            <Terminal size={13} /> EVENT STREAM
-          </span>
-          <p>
-            {demo
-              ? "Example trace loaded · no commands are executed"
-              : events.length
-                ? `${events.at(-1)?.event.type.replaceAll("_", ".")}  /  sequence ${events.at(-1)?.sequence}`
-                : "Listening for daemon events…"}
-          </p>
-          <span className="event-count">
-            {graph.cursor ? `#${String(graph.cursor).padStart(5, "0")}` : "—"}
-          </span>
-        </section>
-        <footer className="page-footer">
-          <span>
-            <ShieldCheck size={12} /> LOCAL-FIRST <i /> ZERO CLOUD DEPENDENCIES
-          </span>
-          <span>Built to see. Designed to stay in control.</span>
-          <span>
-            <Circle size={8} /> ALL SYSTEMS{" "}
-            {demo
-              ? "SIMULATED"
-              : connection === "connected"
-                ? "LOCAL"
-                : "STANDBY"}
-          </span>
-        </footer>
+          <form className="steer-bar" onSubmit={(e) => { e.preventDefault();
+            if (steering.trim()) void intervene({ command: "steer", text: steering }); }}>
+            <Command size={14} /><input aria-label="Steer the agent" placeholder={demo ? "Example trace · controls disabled" : "Send an instruction for the next safe turn"}
+              value={steering} onChange={(e) => setSteering(e.target.value)} disabled={controlsDisabled} />
+            <button className="icon-button" type="submit" disabled={controlsDisabled || !steering.trim()} aria-label="Send steering instruction"><Send size={14} /></button>
+          </form>
+        </> : tab === "memory" ? <div className="data-view">
+          <header className="data-heading"><h1>Memory</h1><span className="muted">Stored context and learned rules</span></header>
+          <dl className="semantic-status"><div><dt>Backend</dt><dd>{activeMemory.semantic.backend}</dd></div>
+            <div><dt>Embeddings</dt><dd>{activeMemory.semantic.embeddings_available ? "Available" : "Not available"}</dd></div></dl>
+          <DataList title="Episodic turns" items={activeMemory.episodic} /><DataList title="Procedural rules" items={activeMemory.procedural} />
+        </div> : <div className="data-view">
+          <header className="data-heading"><h1>Plugins</h1><span className="muted">Loaded tools and input schemas</span></header>
+          {activePlugins.map((tool) => <article className="plugin-row" key={`${tool.session_id}:${tool.name}`}>
+            <h2><Plug size={16} />{tool.name}</h2><p>{tool.description}</p><small className="mono muted">{tool.session_id}</small>
+            <details><summary>Input schema</summary><pre>{pretty(tool.parameters)}</pre></details>
+          </article>)}
+          {!activePlugins.length && <p className="muted">No loaded tools.</p>}
+        </div>}
+        <footer className="event-strip"><span>{demo ? "Example trace · no commands executed" : events.length
+          ? events.at(-1)?.event.type.replaceAll("_", " ") : "Listening for events"}</span>
+          <span className="mono">{graph.cursor ? `#${String(graph.cursor).padStart(5, "0")}` : "—"}</span></footer>
       </main>
-
-      <Dialog.Root
-        open={!!selected}
-        onOpenChange={(open) => {
-          if (!open) setSelectedId(null);
-        }}
-      >
+      <aside className="run-sidebar" aria-label="Run details">
+        <section className="context-section"><h2>Context</h2><p className="model-name mono">{session?.model ?? "No model selected"}</p>
+          <dl className="context-numbers">
+            <div><dt>Tokens used</dt><dd>{(session?.tokens_used ?? 0).toLocaleString()} <span>/ {session?.token_limit?.toLocaleString() ?? "Uncapped"}</span></dd></div>
+            <div><dt>Prompt</dt><dd>{(session?.prompt_tokens ?? 0).toLocaleString()} <span>/ {(session?.context_window ?? 0).toLocaleString()}</span></dd></div>
+          </dl>
+          <div className="segmented-bar" aria-label="Prompt context composition">{parts.map((part) =>
+            <i key={part.className} className={part.className} style={{ width: `${(part.value / contextTotal) * 100}%` }} />)}</div>
+          <div className="context-legend">{parts.map((part) => <div key={part.className}>
+            <span><i className={part.className} />{part.label}</span><span className="mono">{part.value.toLocaleString()}</span></div>)}</div>
+        </section>
+        <section className="approvals-section"><h2>Pending approvals</h2>
+          {session?.control.pending_call ? <div className="approval">
+            <div className="approval-name"><span className="status-dot pending" /><strong>{pending?.label ?? session.control.pending_call}</strong></div>
+            <p className="approval-target-label">Target</p>
+            <pre className="approval-target">{typeof pendingTarget === "string" ? pendingTarget : pretty(pending?.input)}</pre>
+            <div className="approval-actions">
+              <button disabled={controlsDisabled} onClick={() => void intervene({ command: "approve", call_id: session.control.pending_call! })}><Check size={14} />Approve</button>
+              <button disabled={controlsDisabled} onClick={() => void intervene({ command: "deny", call_id: session.control.pending_call! })}><X size={14} />Deny</button>
+            </div>{demo && <small className="muted">Example only · controls disabled</small>}
+          </div> : <p className="muted">No pending approvals.</p>}
+        </section>
+        <section className="scratchpad-section"><h2><Terminal size={15} />Scratchpad</h2><pre>{session?.scratchpad || "No working notes yet."}</pre></section>
+      </aside>
+      <Dialog.Root modal={false} open={!!selected} onOpenChange={(open) => { if (!open) setSelectedId(null); }}>
         <Dialog.Portal>
-          <Dialog.Overlay className="drawer-overlay" />
-          <Dialog.Content className="node-drawer">
-            <div className="drawer-header">
-              <span className="eyebrow">NODE INSPECTOR</span>
-              <Dialog.Close
-                className="icon-button"
-                aria-label="Close node inspector"
-              >
-                <X size={18} />
-              </Dialog.Close>
-            </div>
-            <Dialog.Title>{selected?.label}</Dialog.Title>
-            <Dialog.Description>
-              {selected?.detail}
-            </Dialog.Description>
-            <div className="drawer-facts">
-              <span className={`node-state ${selected?.status}`}>
-                {selected?.status}
-              </span>
-              <span>
-                {selected?.duration !== undefined
-                  ? `${selected.duration.toLocaleString()} ms`
-                  : selected?.status === "running" || selected?.status === "pending" ? "In progress" : "Not recorded"}
-              </span>
-              <span>{selected?.kind}</span>
-            </div>
-            <div className="drawer-tabs">
-              {["input", "output", "diff"].map((item) => (
-                <button
-                  className={payloadTab === item ? "active" : ""}
-                  key={item}
-                  onClick={() => setPayloadTab(item)}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            {payloadTab === "diff" ? (
-              selectedDiff ? (
-                <pre className="payload diff">
-                  {selectedDiff.split("\n").map((line, i) => (
-                    <span
-                      className={
-                        line.startsWith("+")
-                          ? "addition"
-                          : line.startsWith("-")
-                            ? "deletion"
-                            : ""
-                      }
-                      key={i}
-                    >
-                      {line}
-                      {"\n"}
-                    </span>
-                  ))}
-                </pre>
-              ) : (
-                <p className="data-empty">
-                  This node did not produce a diff payload.
-                </p>
-              )
-            ) : (
-              <pre className="payload">
-                {pretty(
-                  payloadTab === "input" ? selected?.input : selected?.output,
-                )}
-              </pre>
-            )}
-            {payloadTab === "output" && selected?.result !== undefined && (
-              <>
-                <h3>Execution result</h3>
-                <pre className="payload">{pretty(selected.result)}</pre>
-              </>
-            )}
-            <div className="drawer-bottom">
-              <span>SESSION</span>
-              <code>{selected?.session}</code>
-              <span>NODE ID</span>
-              <code>{selected?.id}</code>
+          <Dialog.Content className="node-drawer" onInteractOutside={(event) => event.preventDefault()}>
+            <header className="drawer-heading"><SelectedIcon size={18} /><Dialog.Title>{selected?.label}</Dialog.Title>
+              <Dialog.Close className="icon-button" aria-label="Close node inspector"><X size={18} /></Dialog.Close></header>
+            <div className="drawer-facts"><span>{selected ? labels[selected.kind] : ""}</span>
+              <span className={`node-state ${selected?.status}`}><i className={`status-dot ${selected?.status}`} />{selected?.status}</span>
+              <span className="mono">{selected?.duration !== undefined ? `${selected.duration.toLocaleString()} ms`
+                : selected?.status === "running" || selected?.status === "pending" ? "In progress" : "Not recorded"}</span></div>
+            <Dialog.Description>{selected?.detail}</Dialog.Description>
+            <div className="drawer-tabs" role="group" aria-label="Node payload">
+              {["input", "output", "diff"].map((item) => <button aria-pressed={payloadTab === item} key={item}
+                onClick={() => setPayloadTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}</div>
+            <div className="drawer-scroll">
+              {payloadTab === "diff" ? selectedDiff ? <pre className="payload diff">{selectedDiff.split("\n").map((line, i) =>
+                <span key={i} className={line.startsWith("+") ? "addition" : line.startsWith("-") ? "deletion" : ""}>{line}{"\n"}</span>)}</pre>
+                : <p className="muted">No diff recorded.</p> : <pre className="payload">{pretty(payloadTab === "input" ? selected?.input : selected?.output)}</pre>}
+              {payloadTab === "output" && selected?.result !== undefined && <><h3>Execution result</h3><pre className="payload">{pretty(selected.result)}</pre></>}
+              <dl className="drawer-ids"><dt>Session</dt><dd>{selected?.session}</dd><dt>Node</dt><dd>{selected?.id}</dd></dl>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -1202,22 +475,7 @@ export function Dashboard() {
 }
 
 function DataList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <section className="memory-list">
-      <h3>
-        {title}
-        <span>{items.length}</span>
-      </h3>
-      {items.length ? (
-        items.map((item, i) => (
-          <article key={`${i}:${item}`}>
-            <span>{String(i + 1).padStart(2, "0")}</span>
-            <p>{item}</p>
-          </article>
-        ))
-      ) : (
-        <p className="data-empty">Nothing stored yet.</p>
-      )}
-    </section>
-  );
+  return <section className="memory-list"><h2>{title}<span className="mono muted">{items.length}</span></h2>
+    {items.length ? items.map((item, i) => <article key={`${i}:${item}`}><span className="mono muted">{String(i + 1).padStart(2, "0")}</span>
+      <p>{item}</p></article>) : <p className="muted">Nothing stored yet.</p>}</section>;
 }

@@ -7,8 +7,8 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Lain / Neural Dashboard",
-  description: "A live window into your local agent.",
+  title: "lain — Agent console",
+  description: "Agent runs, tool approvals, and working context.",
 };
 
 export default function RootLayout({
