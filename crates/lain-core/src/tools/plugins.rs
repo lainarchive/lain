@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
-use lain_plugin::{Plugin, PluginError, PluginManager, manifest::ToolExport};
+use lain_plugin::{
+    Plugin, PluginError, PluginManager,
+    manifest::{Capability, ToolExport},
+};
 use serde_json::Value;
 
 use super::{RegisteredTool, Tool, ToolError, ToolOutput, ToolRegistry, ToolSource};
@@ -33,6 +36,10 @@ impl Tool for PluginTool {
                 .manifest_path()
                 .map(std::path::Path::to_path_buf),
         }
+    }
+
+    fn manifest_permissions(&self) -> Option<BTreeSet<Capability>> {
+        Some(self.plugin.manifest().permissions.clone())
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
