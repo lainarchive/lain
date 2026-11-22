@@ -5,9 +5,284 @@ use lain_ipc::Event;
 use ratatui::{backend::TestBackend, Terminal};
 
 use super::{
+    app::{self, Overlay, Screen},
     state::{Effect, Mode, State},
     view,
 };
+
+#[test]
+fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    for (index, screen) in Screen::ALL.iter().enumerate() {
+        state.key(
+            key(KeyCode::Char(char::from(b'1' + index as u8))),
+            Duration::ZERO,
+        );
+        assert_eq!(state.screen, *screen);
+        let text = render(&state)?;
+        assert!(text.contains(screen.name()));
+        if *screen != Screen::Session {
+            assert!(text.contains(&format!("/{}", screen.id())));
+            assert!(!text.contains("layer 1"));
+        }
+    }
+    state.key(key(KeyCode::Char('1')), Duration::ZERO);
+    state.composer = "draft".into();
+    state.key(key(KeyCode::Char('3')), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Session);
+    assert_eq!(state.composer, "draft3");
+    state.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    assert_eq!(state.screen, Screen::Plugins);
+    state.key(key(KeyCode::Char('6')), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Models);
+    state.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    assert_eq!(state.screen, Screen::Session);
+    assert_eq!(state.composer, "draft3");
+    Ok(())
+}
+
+#[test]
+fn palette_scores_filters_and_dispatches() -> Result<(), Box<dyn std::error::Error>> {
+    assert!(app::score("plugins", "plugins") > app::score("pg", "plugins"));
+    assert!(app::score("PLG", "Plugins").is_some());
+    assert!(app::score("zq", "Plugins").is_none());
+    assert!(app::score("", "Plugins").is_some());
+    let mut state = State::sample()?;
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    for c in "plg".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    let text = render(&state)?;
+    assert!(text.contains("Commands"));
+    assert!(text.contains("Go to Plugins"));
+    assert!(!text.contains("Go to Models"));
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    assert_eq!(state.screen, Screen::Plugins);
+    assert!(state.overlay.is_none());
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    for c in "zzzz".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    assert!(render(&state)?.contains("No matching commands"));
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    assert!(state.overlay.is_some());
+    Ok(())
+}
+
+#[test]
+fn slash_uses_registry_and_unknown_commands_expire() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    for c in "/plug".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    assert!(render(&state)?.contains("/plugins"));
+    state.key(key(KeyCode::Tab), Duration::ZERO);
+    state.key(key(KeyCode::Up), Duration::ZERO);
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    assert_eq!(state.screen, Screen::Plugins);
+    assert!(state.composer.is_empty());
+    state.key(key(KeyCode::Char('1')), Duration::ZERO);
+    state.composer = "/not-a-command".into();
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    assert!(render(&state)?.contains("Unknown command"));
+    state.tick(Duration::from_secs(10));
+    assert!(state.toast.is_none());
+    assert!(!render(&state)?.contains("Unknown command"));
+    assert_eq!(state.composer, "/not-a-command");
+    Ok(())
+}
+
+#[test]
+fn help_and_overlay_escape_take_precedence_over_rewind() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.key(key(KeyCode::Char('x')), Duration::ZERO);
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    let tasks = state.tasks.len();
+    state.key(key(KeyCode::F(1)), Duration::ZERO);
+    let text = render(&state)?;
+    for expected in [
+        "Global keys",
+        "Session keys",
+        "Ctrl+K",
+        "Go to Creator",
+        "Rewind turn",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    assert!(matches!(state.overlay, Some(Overlay::Palette { .. })));
+    assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
+    assert!(state.overlay.is_some());
+    assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.tasks.len(), tasks);
+    assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
+    assert_eq!(
+        state.key(key(KeyCode::Esc), Duration::from_millis(100)),
+        Effect::Rewind
+    );
+    state.key(
+        KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
+    assert_eq!(state.key(key(KeyCode::Esc), Duration::ZERO), Effect::None);
+    Ok(())
+}
+
+#[test]
+fn registry_actions_preserve_policy_and_confirm_discard() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut state = State::sample()?;
+    state.composer = "/code".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.mode, Mode::Code);
+    state.composer = "keep me".into();
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    for c in "new".chars() {
+        state.key(key(KeyCode::Char(c)), Duration::ZERO);
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(matches!(state.overlay, Some(Overlay::Confirm(_))));
+    assert!(render(&state)?.contains("Discard"));
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert_eq!(state.composer, "keep me");
+    assert_eq!(
+        state.key(key(KeyCode::Char('q')), Duration::ZERO),
+        Effect::None
+    );
+    Ok(())
+}
+
+#[test]
+fn palette_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.notice =
+        "OFFLINE DEMO · synthetic verified evidence and advisor notes · no provider contacted"
+            .into();
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    let text = render(&state)?;
+    assert!(text.contains("Go to Session"));
+    assert!(text.contains("OFFLINE DEMO"));
+    if let Ok(path) = std::env::var("LAIN_TUI_PALETTE_DUMP") {
+        std::fs::write(path, format!("{text}\n"))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn long_palette_query_keeps_empty_results_visible() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.key(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    for _ in 0..512 {
+        state.key(key(KeyCode::Char('z')), Duration::ZERO);
+    }
+    assert!(render(&state)?.contains("No matching commands"));
+    Ok(())
+}
+
+#[test]
+fn shell_commands_and_small_screen_guards() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    for command in &app::COMMANDS {
+        assert_eq!(
+            app::matching(command.id).first().map(|c| c.id),
+            Some(command.id)
+        );
+    }
+    assert_eq!(app::matching("").len(), app::COMMANDS.len());
+    assert!(app::score("x", "").is_none());
+    assert!(app::score("Ä", "ä").is_some());
+    state.select_tool(0);
+    state.composer = "/output".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(state.tools.first().is_some_and(|t| t.expanded));
+    state.composer = "/ask".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.mode, Mode::Ask);
+    state.composer = "work".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.composer = "/code".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.mode, Mode::Ask);
+    state.composer = "/new".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(matches!(state.overlay, Some(Overlay::Confirm(_))));
+    assert_eq!(
+        state.key(key(KeyCode::Enter), Duration::ZERO),
+        Effect::NewSession
+    );
+    assert!(!state.running);
+    assert!(state.tasks.is_empty());
+    assert!(state.composer.is_empty());
+    state.composer = "draft".into();
+    state.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    assert_eq!(state.composer, "draft");
+    let tiny = ratatui::layout::Rect::new(0, 0, 119, 29);
+    super::input::handle_key(&mut state, key(KeyCode::F(1)), Duration::ZERO, tiny);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.screen, Screen::Plugins);
+    Ok(())
+}
+
+#[test]
+fn shell_help_and_tab_highlight_fit_minimum_size() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    let mut terminal = Terminal::new(TestBackend::new(120, 30))?;
+    state.key(key(KeyCode::Char('3')), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    let text = contents(&terminal);
+    let x = text
+        .lines()
+        .nth(4)
+        .and_then(|line| line.find("3 Creator"))
+        .ok_or("missing tab")?;
+    let cell = terminal
+        .backend()
+        .buffer()
+        .cell((x as u16, 4))
+        .ok_or("missing cell")?;
+    assert_eq!(cell.fg, super::theme::CYAN);
+    assert_eq!(cell.bg, super::theme::PANEL);
+    state.key(key(KeyCode::Char('1')), Duration::ZERO);
+    state.key(key(KeyCode::Char('?')), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    let text = contents(&terminal);
+    for command in &app::COMMANDS {
+        assert!(text.contains(command.title), "missing {}", command.title);
+    }
+    assert!(text.contains("Global keys"));
+    assert!(text.contains("Session keys"));
+    Ok(())
+}
 
 fn render(state: &State) -> Result<String, Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(TestBackend::new(140, 45))?;

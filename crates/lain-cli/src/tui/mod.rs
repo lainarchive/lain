@@ -1,4 +1,6 @@
+mod app;
 mod input;
+mod shell_view;
 mod state;
 mod theme;
 mod view;

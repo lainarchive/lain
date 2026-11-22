@@ -145,6 +145,22 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     match handle_key(&mut state, key, started.elapsed(), terminal.get_frame().area()) {
                         Effect::Quit => break,
                         Effect::None => {}
+                        Effect::NewSession => {
+                            if let Some(request) = active_request.take() { ignored.insert(request); }
+                            if let Some(request) = poll_request.take() { ignored.insert(request); }
+                            if let Some(client) = &mut client {
+                                if let Some(id) = session.take() {
+                                    ignored.insert(client.send(Command::CancelTurn { session_id: id }).await?);
+                                }
+                                match ui::start_session(client, &mut renderer).await {
+                                    Ok(id) => {
+                                        session = Some(id);
+                                        client.send(Command::InspectRules { session_id: None, limit: Some(20) }).await?;
+                                    }
+                                    Err(error) => state.notify(error.to_string(), started.elapsed()),
+                                }
+                            }
+                        }
                         Effect::Submit { text, read_only } => {
                             if let Some(client) = &mut client {
                                 if session.is_none() {
@@ -198,6 +214,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     }
                 }
                 _ = tick.tick() => {
+                    state.tick(started.elapsed());
                     if started.elapsed().saturating_sub(last_poll) >= Duration::from_secs(1) && poll_request.is_none() {
                         if let (Some(client), Some(id)) = (&mut client, &session) {
                             poll_request = Some(client.send(Command::GetTelemetry { session_id: id.clone() }).await?);
