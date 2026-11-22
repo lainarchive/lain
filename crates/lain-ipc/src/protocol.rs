@@ -105,6 +105,7 @@ pub enum Command {
         mode: SessionMode,
     },
     ListSessions,
+    GetDashboardUrl,
     Ping,
     StartSession {
         session_id: Option<String>,
@@ -144,6 +145,9 @@ pub enum Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Event {
+    DashboardUrl {
+        url: Option<String>,
+    },
     Tools {
         session_id: String,
         allow_creator_mode: bool,
@@ -230,6 +234,7 @@ impl Event {
         matches!(
             self,
             Self::Tools { .. }
+                | Self::DashboardUrl { .. }
                 | Self::Plugins { .. }
                 | Self::ToolProposalResult { .. }
                 | Self::Sessions { .. }

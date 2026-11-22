@@ -130,8 +130,12 @@ into session/tool events and opt-in token deltas. The WebSocket carries raw `Age
 The daemon starts Axum by default; `--no-ui` disables it. An occupied port warns without stopping IPC.
 
 Build static assets using the [dashboard guide](dashboard/README.md); Axum serves `dashboard/out/`.
-Its printed local URL contains an authentication token. Keep it private. `/api/` and `/ws/events`
-require that token with host/origin validation; `/healthz` exposes service/protocol identification with
+Its printed local URL contains an authentication token. Keep it private.
+In the TUI, `/dashboard` (also in the command palette) opens the Bots status card,
+which shows the login URL when the bridge is up. Autospawn saves daemon stderr in a fresh user-state
+log: `$XDG_STATE_HOME/lain/`, then `$XDG_RUNTIME_DIR/lain/`, then `~/.local/state/lain/` on Unix;
+`%LOCALAPPDATA%/lain/` on Windows. Unix log files are created with mode 0600. Logs contain credentials.
+`/api/` and `/ws/events` require that token with host/origin validation; `/healthz` exposes service/protocol identification with
 host/origin checks.
 
 Memory retrieval uses SQLite FTS5; there is no embedding backend. Context parsing covers Rust,

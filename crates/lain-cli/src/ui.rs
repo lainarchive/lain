@@ -188,10 +188,64 @@ async fn ping(options: &Options) -> Result<IpcClient, Error> {
     Ok(client)
 }
 
+fn daemon_log_directory() -> Result<std::path::PathBuf, Error> {
+    #[cfg(unix)]
+    let root = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .filter(|path| path.is_absolute())
+        })
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(".local/state"))
+                .filter(|path| path.is_absolute())
+        });
+    #[cfg(windows)]
+    let root = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute());
+    root.map(|path| path.join("lain")).ok_or_else(|| {
+        Error::failure(
+            "DAEMON_LOG",
+            "A user state or runtime directory is required for daemon logs",
+        )
+    })
+}
+
+fn open_daemon_log(
+    directory: &std::path::Path,
+) -> Result<(std::path::PathBuf, std::fs::File), Error> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(directory)?;
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|error| Error::failure("DAEMON_LOG", error))?;
+    let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let path = directory.join(format!("daemon-{name}.log"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path)?;
+    Ok((path, file))
+}
+
 pub async fn connect_or_spawn(options: &Options) -> Result<IpcClient, Error> {
     if let Ok(Ok(client)) = timeout(Duration::from_millis(300), ping(options)).await {
         return Ok(client);
     }
+    let (log_path, log) = open_daemon_log(&daemon_log_directory()?)?;
     #[cfg(unix)]
     let mut child = {
         let mut command = std::process::Command::new(std::env::current_exe()?);
@@ -210,13 +264,16 @@ pub async fn connect_or_spawn(options: &Options) -> Result<IpcClient, Error> {
         &std::env::current_exe()?,
         &options.endpoint.0,
         &options.config,
+        &log_path,
     )?;
-    child
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    child.stdin(Stdio::null()).stdout(Stdio::null());
+    #[cfg(unix)]
+    child.stderr(Stdio::from(log));
     #[cfg(windows)]
-    child.creation_flags(0x08000200);
+    {
+        drop(log);
+        child.stderr(Stdio::null()).creation_flags(0x08000200);
+    }
     let mut child = child.spawn()?;
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut delay = Duration::from_millis(25);
@@ -242,7 +299,8 @@ pub async fn connect_or_spawn(options: &Options) -> Result<IpcClient, Error> {
                 return Err(Error::failure(
                     "DAEMON_START_FAILED",
                     format!(
-                        "Daemon exited: {status}; run lain daemon in the foreground for details"
+                        "Daemon exited: {status}; see {} or run lain daemon in the foreground",
+                        log_path.display()
                     ),
                 ));
             }
@@ -426,6 +484,35 @@ mod tests {
     use lain_ipc::{CommandHandler, Endpoint, EventSink, IpcServer};
     use std::{future::Future, pin::Pin, sync::Arc};
     use tokio::sync::{mpsc, watch, Notify};
+
+    #[test]
+    fn dashboard_access_logs_are_private_unique_and_fail_closed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let directory = root.path().join("private-state");
+        let (first, mut file) = open_daemon_log(&directory)?;
+        writeln!(file, "fixture dashboard credential")?;
+        let (second, _) = open_daemon_log(&directory)?;
+        assert_ne!(first, second);
+        assert_eq!(
+            std::fs::read_to_string(&first)?,
+            "fixture dashboard credential\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&first)?.permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(&directory)?.permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert!(open_daemon_log(&first).is_err());
+        Ok(())
+    }
 
     struct TurnHandler {
         started: Arc<Notify>,
