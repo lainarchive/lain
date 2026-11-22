@@ -215,7 +215,7 @@ impl State {
         }
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Effect::Quit,
-            KeyCode::Char('q') => Effect::Quit,
+            KeyCode::Char('q') if self.composer.is_empty() => Effect::Quit,
             KeyCode::Esc => {
                 if self
                     .escape

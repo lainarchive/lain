@@ -57,8 +57,8 @@ cancelling the active turn or clearing the composer draft. The dashboard's separ
 Two Escape presses within 500ms send `CancelTurn`, remove the last turn's displayed blocks and restore
 its submitted prompt. A lone Escape does not rewind. Late replies from that turn are ignored and the
 next submission starts a fresh session. Rewind **does not undo tool side effects or persisted memory**.
-`q` or Ctrl-C quits and cancels a running turn; the terminal guard restores raw mode, cursor and screen
-on normal and error exits. `q` is reserved, not a composer character.
+`q` with an empty composer or Ctrl-C quits and cancels a running turn; otherwise `q` inserts text.
+The terminal guard restores raw mode, cursor and screen on normal and error exits.
 
 Live IPC currently describes serial agent turns, not a parallel harness DAG. Each submitted turn becomes
 a dependent node rendered through `Dag::layers()`; the demo exercises parallel lanes, repair nodes and
