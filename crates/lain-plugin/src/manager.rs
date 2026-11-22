@@ -247,6 +247,22 @@ pub struct DynamicPlugin {
     creator_workspace: Option<PathBuf>,
 }
 
+impl DynamicPlugin {
+    pub async fn script_report(
+        &self,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<crate::ScriptExecution, PluginError> {
+        let runtime = self
+            .runtimes
+            .get(tool)
+            .ok_or_else(|| PluginError::Invalid(format!("unknown tool export: {tool}")))?;
+        runtime
+            .script_report(&self.workspace, tool, arguments)
+            .await
+    }
+}
+
 #[async_trait]
 impl Plugin for DynamicPlugin {
     fn manifest(&self) -> &PluginManifest {

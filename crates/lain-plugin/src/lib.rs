@@ -31,3 +31,4 @@ pub trait Plugin: Send + Sync {
 }
 
 pub use manager::DynamicPlugin;
+pub use runtime::ScriptExecution;
