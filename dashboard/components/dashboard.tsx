@@ -8,7 +8,6 @@ import {
   BackgroundVariant,
   Controls,
   Handle,
-  MiniMap,
   Position,
   ReactFlow,
   type Node,
@@ -77,6 +76,7 @@ function TraceCard({ data, selected }: NodeProps<FlowNode>) {
   );
 }
 const nodeTypes = { trace: TraceCard };
+const fitViewOptions = { padding: 0.12, minZoom: 0.85, maxZoom: 1 };
 const initialStatus: StatusResponse = {
   protocol_version: 1,
   sessions: [],
@@ -385,13 +385,11 @@ export function Dashboard() {
           </div>
           <div className="graph-canvas">
             <ReactFlow key={`${fitKey}:${demo}:${nodes.length ? "data" : "empty"}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes}
-              fitView fitViewOptions={{ padding: 0.12, maxZoom: 0.95 }} onNodesChange={onNodesChange} minZoom={0.12} maxZoom={1.7}
+              fitView fitViewOptions={fitViewOptions} onNodesChange={onNodesChange} minZoom={0.12} maxZoom={1.7}
               nodesConnectable={false} nodesDraggable onNodeClick={(_, node) => { setSelectedId(node.id); setPayloadTab("output"); }}
               onPaneClick={() => setSelectedId(null)} colorMode="dark" proOptions={{ hideAttribution: true }}>
               <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#27272a" />
-              <Controls showInteractive={false} />
-              <MiniMap nodeColor={(node) => ({ running: "#22d3ee", pending: "#f59e0b99", success: "#34d399", failed: "#f43f5e" })[String(node.data.status)] ?? "#71717a"}
-                maskColor="rgba(9,9,11,.8)" pannable zoomable />
+              <Controls showInteractive={false} fitViewOptions={fitViewOptions} />
             </ReactFlow>
             {!visible.length && <div className="canvas-empty"><p>{query || filter !== "all" ? "No matching nodes" : "No active run"}</p>
               {query || filter !== "all" ? <span>Try another search or status filter.</span> : <>
