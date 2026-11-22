@@ -523,7 +523,7 @@ fn launch_layout_is_responsive_and_footer_uses_known_telemetry(
         "/creator",
         "/plugins",
         "/theme",
-        "type / to find one",
+        "/plugins to find tools",
         "plugin echo",
         "demo_echo",
         "branch:feat/wired",
@@ -540,7 +540,7 @@ fn launch_layout_is_responsive_and_footer_uses_known_telemetry(
     let compact = contents(&terminal);
     assert!(!compact.contains("terminal too small"));
     assert!(!compact.contains("get started"));
-    assert!(!compact.contains("type / to find one"));
+    assert!(!compact.contains("/plugins to find tools"));
     assert!(compact.contains("Ask Lain anything"));
     assert!(compact.contains("/creator"));
     assert!(matches!(
@@ -578,7 +578,7 @@ fn launch_grid_overflow_and_small_screen_guards() -> Result<(), Box<dyn std::err
         draw_scrolled(&mut terminal, &mut state)?;
         let text = contents(&terminal);
         assert_eq!(text.contains("get started"), cards);
-        assert!(!text.contains("type / to find one"));
+        assert!(!text.contains("/plugins to find tools"));
     }
     assert!(!view::has_room(
         ratatui::layout::Rect::new(0, 0, 79, 24),
