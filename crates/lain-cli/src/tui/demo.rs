@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use lain_core::plugin::manifest::Capability;
 use lain_harness::advisor::{AdvisorKind, AdvisorNote};
-use lain_ipc::{ActiveTool, ManifestEntry, ToolSource};
+use lain_ipc::{ActiveTool, ManifestEntry, PermissionGrant, ToolSource};
 use serde_json::json;
 
 use super::state::{State, ToolBlock};
@@ -41,6 +42,13 @@ impl State {
         self.notice = "OFFLINE DEMO · all activity and telemetry are synthetic · no provider or scripts called".into();
         self.creator = super::creator::Creator::sample();
         self.plugins = super::plugins::Plugins::sample()?;
+        for tool in &mut self.plugins.tools {
+            if tool.name == "demo_echo" {
+                for permission in &mut tool.permissions {
+                    permission.granted = false;
+                }
+            }
+        }
         for (name, description) in [
             (
                 if cfg!(windows) { "powershell" } else { "bash" },
@@ -75,7 +83,10 @@ impl State {
                 manifest_name: "notes".into(),
                 manifest_path: Some(".lain/plugins/notes.json".into()),
             },
-            permissions: vec![],
+            permissions: vec![PermissionGrant {
+                capability: Capability::Network,
+                granted: true,
+            }],
         });
         Ok(())
     }
