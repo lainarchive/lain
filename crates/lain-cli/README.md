@@ -1,8 +1,15 @@
 # `lain` Rust CLI
 
-Build with `cargo build -p lain-cli`, then run `target/debug/lain --help`.
+Install from the repository root with `cargo install --path .`, or build with
+`cargo build -p lain` and run `target/debug/lain --help`. The root package owns
+the sole `lain` binary; `lain-cli` is its library. The Node entry point is unchanged.
 
 ```text
+lain tui
+lain daemon
+lain run "Run the checks" --json
+lain doctor
+lain doctor --json
 lain start
 lain query "Summarize the current task"
 lain memory inspect --limit 10 --session SESSION_ID
@@ -12,16 +19,32 @@ lain tui demo
 lain daemon --endpoint /path/to/lain.sock --config /path/to/lain.json
 ```
 
-`lain ui` runs the daemon with the browser dashboard enabled. Build the
-[dashboard assets](../../dashboard/README.md#run-locally) before starting it.
+`lain daemon` and `lain ui` start IPC and the browser dashboard on `127.0.0.1:4040`.
+`daemon --no-ui` opts out; `--serve-ui` remains an accepted no-op alias.
+If the port is occupied, the daemon warns and continues with IPC only.
+Build the [dashboard assets](../../dashboard/README.md#run-locally) before browsing.
+The provider always streams, with or without the dashboard. TUI requests opt into
+token deltas and replace them with the completed message; line clients and older
+IPC requests retain whole-message output.
 
-`start`, `query`, `tui`, and `memory inspect` ping the daemon and spawn the same binary's
+`run`, `start`, `query`, `tui`, and `memory inspect` ping the daemon and spawn the same binary's
 internal `daemon` command if needed. Startup retries for about five seconds.
 An already-running daemon retains its original working directory and config path;
 client-side `--config` only applies when spawning a daemon. Run `daemon` in the
 foreground to see startup errors. Ctrl-C stops a foreground daemon gracefully.
 
+The TUI stays open when IPC disconnects, keeps the current draft, and marks active
+work interrupted. A persistent reconnect indicator and toast accompany retries
+(250 ms doubling to a 5 s maximum; each connection attempt has a 6 s deadline).
+It uses the same daemon autospawner, pings and opens a fresh session, then refreshes
+rules, telemetry and visible catalogs. The previous session is not resumed, even
+if the daemon survived. Enter keeps the draft while offline; Ctrl-C or `q` quits.
+Dropped in-flight turns are cooperatively cancelled; their terminated sessions
+are removed rather than reused with an incomplete tool transcript. Uncooperative
+socket handlers have a two-second disconnect cleanup deadline.
+
 Global options are `--endpoint`, `--config`, `--plain`, and `--help`.
+`--json` is accepted only by `run` and `doctor`.
 Endpoint/config defaults come from `LAIN_IPC_ENDPOINT` / `LAIN_CONFIG`, otherwise
 the IPC platform default / `lain.json` in the daemon's working directory.
 `LAIN_MEMORY_DB` overrides the default `.lain/memory.db` in that directory.
@@ -31,6 +54,37 @@ then `UID` or `USER`; without any identity information, a process-scoped fallbac
 requires an explicit shared `--endpoint` to connect separate processes).
 Do not expose the endpoint to untrusted local users: connected clients can ask
 the configured agent to execute host-permission tools. Lain is not a sandbox.
+
+## One-shot evidence and diagnostics
+
+`run` streams provider deltas to stdout and then prints a harness evidence report.
+`run --json` instead prints one JSON object containing the reply, completion/failure
+and per-step status, `claim_boundary` and observed evidence. `query` is unchanged.
+Steps stay `planned` until a tool completion is observed; unknown exit codes and
+reply-only runs remain `prepared_not_observed`. Only daemon-reported `bash` or
+`powershell` commands with observed zero exit codes and builtin provenance from
+the live session's tool inventory become `observed_verified`. A plugin cannot
+gain command evidence just by calling itself `bash`.
+That verifies execution of those commands, not arbitrary claims in the reply.
+Other tools do not acquire invented command evidence. Exit codes are:
+
+| Code | `run` outcome |
+| --- | --- |
+| 0 | Turn completed and every bounded execution claim is verified |
+| 2 | Turn completed, but one or more steps lack verification |
+| 1 | Failure, including tool failure, cancellation or disconnect |
+
+`doctor` never autospawns or runs a model completion. It checks `rustc`/`cargo`
+(numeric `rust-toolchain.toml` channel or Cargo `rust-version` when declared), Ping
+and protocol compatibility or endpoint creation, dashboard port ownership via
+`/healthz`, and the actual configured provider's `/models` route. Each HTTP check
+has a one-second timeout, Ping 500 ms, and each toolchain command two seconds.
+Remote 401/403 proves reachability but warns that authentication was not tested;
+key values are never transmitted by these probes or printed. A configured missing
+key is a failure, named only by environment variable. No redirects are followed.
+Existing sockets are left untouched, including unresponsive/stale ones. `!` means
+warning (for example an absent but creatable daemon); any `✗` makes exit status 1.
+`doctor --json` includes the same checks and summary counts.
 
 ## Terminal frontier
 

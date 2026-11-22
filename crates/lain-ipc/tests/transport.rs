@@ -45,7 +45,9 @@ impl CommandHandler for Mock {
                         })
                         .await;
                 }
-                Command::SendMessage { session_id, text } => {
+                Command::SendMessage {
+                    session_id, text, ..
+                } => {
                     if text == "wait" {
                         let _settled = Settled(self.settled.clone());
                         self.started.notify_one();
@@ -106,14 +108,14 @@ async fn roundtrip_stream_cancel_and_shutdown() -> TestResult {
         let task = tokio::spawn(server.serve(handler.clone(), receiver));
         let mut client = IpcClient::connect(&endpoint).await?;
         assert_eq!(client.request(Command::Ping).await?, vec![Event::Pong { server_version: PROTOCOL_VERSION }]);
-        let events = client.request(Command::SendMessage { session_id: "s".into(), text: "one two three".into() }).await?;
+        let events = client.request(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: "one two three".into() }).await?;
         assert_eq!(events.len(), 4);
         for (event, text) in events.iter().zip(["one", "two", "three"]) {
             assert_eq!(event, &Event::StreamToken { session_id: "s".into(), text: text.into() });
         }
         assert!(matches!(events.last(), Some(Event::SessionCompleted { scratchpad: Some(notes), .. }) if notes == "notes"));
-        assert!(matches!(client.request(Command::SendMessage { session_id: "s".into(), text: String::new() }).await?.as_slice(), [Event::SessionCompleted { .. }]));
-        let running = client.send(Command::SendMessage { session_id: "s".into(), text: "wait".into() }).await?;
+        assert!(matches!(client.request(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: String::new() }).await?.as_slice(), [Event::SessionCompleted { .. }]));
+        let running = client.send(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: "wait".into() }).await?;
         handler.started.notified().await;
         client.send(Command::CancelTurn { session_id: "s".into() }).await?;
         assert!(matches!(client.recv().await?, Some((id, Event::SessionCompleted { .. })) if id == running));
@@ -191,7 +193,7 @@ async fn shutdown_drains_inflight_handler() -> TestResult {
         let (shutdown, receiver) = watch::channel(false);
         let task = tokio::spawn(server.serve(handler.clone(), receiver));
         let mut client = IpcClient::connect(&endpoint).await?;
-        let id = client.send(Command::SendMessage { session_id: "s".into(), text: "wait".into() }).await?;
+        let id = client.send(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: "wait".into() }).await?;
         handler.started.notified().await;
         shutdown.send(true)?;
         handler.cancel.notify_one();
@@ -211,9 +213,9 @@ async fn oversized_output_and_client_send_are_errors() -> TestResult {
         let (shutdown, receiver) = watch::channel(false);
         let task = tokio::spawn(server.serve(Arc::new(Mock::default()), receiver));
         let mut client = IpcClient::connect(&endpoint).await?;
-        assert!(matches!(client.send(Command::SendMessage { session_id: "s".into(), text: "x".repeat(MAX_FRAME_SIZE) }).await,
+        assert!(matches!(client.send(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: "x".repeat(MAX_FRAME_SIZE) }).await,
             Err(lain_ipc::Error::FrameTooLarge)));
-        let id = client.send(Command::SendMessage { session_id: "s".into(), text: "large".into() }).await?;
+        let id = client.send(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: "large".into() }).await?;
         assert!(matches!(client.recv().await?, Some((reply_id, Event::Error { code, .. })) if reply_id == id && code == "IPC_FRAME_TOO_LARGE"));
         assert!(matches!(client.recv().await?, Some((reply_id, Event::SessionCompleted { .. })) if reply_id == id));
         client.close().await?;
@@ -255,6 +257,7 @@ async fn dropping_client_cancels_its_inflight_handlers() -> TestResult {
         let mut client = IpcClient::connect(&endpoint).await?;
         client
             .send(Command::SendMessage {
+                stream_deltas: false,
                 session_id: "s".into(),
                 text: "wait".into(),
             })

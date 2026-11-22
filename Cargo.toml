@@ -1,3 +1,28 @@
+[package]
+name = "lain"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lain-cli = { path = "crates/lain-cli" }
+
+[dev-dependencies]
+async-trait = "0.1"
+futures = "0.3"
+lain-agent = { path = "crates/lain-agent" }
+lain-context = { path = "crates/lain-context" }
+lain-core = { path = "crates/lain-core" }
+lain-harness = { path = "crates/lain-harness" }
+lain-memory = { path = "crates/lain-memory" }
+lain-ipc = { path = "crates/lain-ipc" }
+tempfile = "3"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time"] }
+
+[lints]
+workspace = true
+
 [workspace]
 members = ["crates/*"]
 resolver = "3"

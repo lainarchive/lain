@@ -55,6 +55,168 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn dashboard_access_command_renders_and_disconnect_clears_credentials(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    assert!(app::matching("dashboard")
+        .iter()
+        .any(|command| command.id == "dashboard"));
+    state.composer = "/dashboard".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert_eq!(state.screen, Screen::Bots);
+    state.inspect.dashboard.accept(None, Duration::ZERO);
+    assert!(render(&state)?.contains("Dashboard disabled or unavailable"));
+    let url = format!("http://127.0.0.1:4040/#token={}", "a".repeat(64));
+    state
+        .inspect
+        .dashboard
+        .accept(Some(url.clone()), Duration::ZERO);
+    assert!(render(&state)?.contains(&url));
+    state.inspect.reset_socket();
+    assert!(!render(&state)?.contains("#token="));
+    Ok(())
+}
+
+#[test]
+fn token_deltas_join_and_whole_messages_replace_only_the_pending_block(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 1,
+            text: "no active block".into(),
+        },
+        Duration::ZERO,
+    );
+    assert!(state.tasks.is_empty());
+    state.composer = "hello".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    for chunk in ["", "Hello", " ", "世", "界"] {
+        state.event(
+            &Event::TokenDelta {
+                session_id: "s".into(),
+                turn: 1,
+                text: chunk.into(),
+            },
+            Duration::ZERO,
+        );
+    }
+    let text = |s: &State| {
+        s.active
+            .as_ref()
+            .and_then(|id| s.tasks.get(id))
+            .map(|t| t.text.clone())
+            .ok_or("missing task")
+    };
+    assert_eq!(text(&state)?, "Hello 世界");
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: "Hello 世界!".into(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(text(&state)?, "Hello 世界!");
+    state.follow = false;
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 2,
+            text: "Next".into(),
+        },
+        Duration::ZERO,
+    );
+    assert!(state.unseen);
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: "Final".into(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(text(&state)?, "Hello 世界!\n\nFinal");
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 3,
+            text: "discard".into(),
+        },
+        Duration::ZERO,
+    );
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: String::new(),
+        },
+        Duration::ZERO,
+    );
+    assert_eq!(text(&state)?, "Hello 世界!\n\nFinal");
+    state.reject_turn("PROVIDER_ERROR", Duration::from_secs(1));
+    state.composer = "another turn".into();
+    state.key(key(KeyCode::Enter), Duration::from_secs(2));
+    state.event(
+        &Event::TokenDelta {
+            session_id: "s".into(),
+            turn: 1,
+            text: "new".into(),
+        },
+        Duration::from_secs(2),
+    );
+    state.event(
+        &Event::StreamToken {
+            session_id: "s".into(),
+            text: "new answer".into(),
+        },
+        Duration::from_secs(2),
+    );
+    assert_eq!(text(&state)?, "new answer");
+    Ok(())
+}
+
+#[test]
+fn disconnect_preserves_the_draft_and_interrupts_the_working_turn(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.composer = "run".into();
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.composer = "unfinished\ndraft".into();
+    state.disconnected(Duration::from_secs(1));
+    assert!(state.reconnecting);
+    assert!(!state.running);
+    assert_eq!(state.composer, "unfinished\ndraft");
+    assert!(state
+        .tasks
+        .values()
+        .all(|task| task.phase == super::state::Phase::Interrupted));
+    assert!(render(&state)?.contains("reconnecting"));
+    state.reconnected(Duration::from_secs(2));
+    assert!(!state.reconnecting);
+    assert_eq!(state.composer, "unfinished\ndraft");
+    assert!(state
+        .toast_text(Duration::from_secs(2))
+        .is_some_and(|text| text.contains("not resumed")));
+    Ok(())
+}
+
+#[test]
+fn disconnect_invalidates_publish_consent_without_discarding_the_draft(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    state.composer = "keep".into();
+    state.overlay = Some(Overlay::Publish { typed: "y".into() });
+    state.disconnected(Duration::ZERO);
+    assert!(state.overlay.is_none());
+    state.overlay = Some(Overlay::Publish { typed: "y".into() });
+    state.key(key(KeyCode::F(1)), Duration::ZERO);
+    state.disconnected(Duration::ZERO);
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.composer, "keep");
+    Ok(())
+}
+
+#[test]
 fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_launch()?;
@@ -2176,6 +2338,7 @@ fn telemetry_events_completion_and_folding() -> Result<(), Box<dyn std::error::E
             name: "repo_map".into(),
             ok: true,
             summary: "symbols".into(),
+            exit_code: None,
         },
         Duration::ZERO,
     );

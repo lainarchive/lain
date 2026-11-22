@@ -166,6 +166,36 @@ impl ModelProvider for ScriptedProvider {
 struct ScriptedFactory(Arc<Notify>);
 
 #[tokio::test]
+async fn a_dropped_turn_settles_before_the_next_client_runs() -> TestResult {
+    timeout(Duration::from_secs(10),async {
+        let directory=tempfile::tempdir()?;let endpoint=endpoint(&directory);
+        let started=Arc::new(Notify::new());
+        let handler=Arc::new(DaemonHandler::new(memory(&directory)?,Arc::new(ScriptedFactory(started.clone()))));
+        let (stop,receiver)=watch::channel(false);
+        let server=tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler.clone(),receiver));
+        let mut first=IpcClient::connect(&endpoint).await?;
+        first.request(Command::StartSession {session_id:Some("pending-drop".into())}).await?;
+        first.send(Command::SendMessage {session_id:"pending-drop".into(),text:"wait".into(),stream_deltas:true}).await?;
+        started.notified().await;drop(first);
+        let mut next=IpcClient::connect(&endpoint).await?;
+        loop {
+            let replies=next.request(Command::ListSessions).await?;
+            if matches!(replies.as_slice(),[Event::Sessions {sessions}] if sessions.iter().all(|s|s.id!="pending-drop")) {break;}
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let status=handler.dashboard_status().await;
+        assert!(status.sessions.iter().all(|s|s.session_id!="pending-drop" || s.status!="running"));
+        next.request(Command::StartSession {session_id:Some("next".into())}).await?;
+        let replies=next.request(Command::SendMessage {session_id:"next".into(),text:"hi".into(),stream_deltas:false}).await?;
+        assert!(replies.iter().any(|event|matches!(event,Event::SessionCompleted {reason,..} if reason=="completed")));
+        assert!(matches!(next.request(Command::ListSessions).await?.as_slice(),[Event::Sessions {sessions}]
+            if sessions.len()==1 && sessions.iter().all(|s|s.status==Some(lain_ipc::SessionStatus::Idle))));
+        next.close().await?;stop.send(true)?;server.await??;
+        Ok::<(),Box<dyn std::error::Error>>(())
+    }).await?
+}
+
+#[tokio::test]
 async fn read_only_ipc_and_telemetry() -> TestResult {
     timeout(Duration::from_secs(10), async {
         let directory = tempfile::tempdir()?;
@@ -177,7 +207,7 @@ async fn read_only_ipc_and_telemetry() -> TestResult {
         client.request(Command::StartSession { session_id: Some("readonly".into()) }).await?;
         assert!(matches!(client.request(Command::GetTelemetry { session_id: "readonly".into() }).await?.as_slice(),
             [Event::Telemetry { model, tokens_used: 0, .. }] if model == "scripted"));
-        let events = client.request(Command::SendReadOnlyMessage { session_id: "readonly".into(), text: "Plan using memory".into() }).await?;
+        let events = client.request(Command::SendReadOnlyMessage { stream_deltas: false, session_id: "readonly".into(), text: "Plan using memory".into() }).await?;
         assert!(events.iter().any(|event| matches!(event, Event::ToolFinished { name, ok: true, .. } if name == "memory_read")));
         assert!(events.iter().any(|event| matches!(event, Event::SessionCompleted { reason, .. } if reason == "completed")));
         assert!(matches!(client.request(Command::GetTelemetry { session_id: "missing".into() }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_NOT_FOUND"));
@@ -275,6 +305,7 @@ async fn dashboard_interventions_validate_steering_and_idle_cancel_preserves_ses
             .await?;
         let events = client
             .request(Command::SendMessage {
+                stream_deltas: false,
                 session_id: "s".into(),
                 text: "hello".into(),
             })
@@ -309,7 +340,7 @@ async fn sessions_are_bounded_and_terminated_sessions_are_removed() -> TestResul
         assert!(matches!(client.request(Command::GetStatus { session_id: Some("pending-0".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_NOT_FOUND"));
         assert!(matches!(client.request(Command::GetStatus { session_id: None }).await?.as_slice(), [Event::Status { status, .. }] if status == "ready (32 sessions)"));
         for index in 1..=32 {
-            client.send(Command::SendMessage { session_id: format!("pending-{index}"), text: "wait".into() }).await?;
+            client.send(Command::SendMessage { stream_deltas: false, session_id: format!("pending-{index}"), text: "wait".into() }).await?;
             started.notified().await;
         }
         assert!(matches!(client.request(Command::StartSession { session_id: Some("overflow".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_LIMIT"));
@@ -376,7 +407,7 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
         assert!(matches!(client.request(Command::StartSession { session_id: Some("s".into()) }).await?.as_slice(), [Event::SessionStarted { .. }]));
         assert!(matches!(client.request(Command::CancelTurn { session_id: "s".into() }).await?.as_slice(),
             [Event::Status { status, .. }] if status == "idle: nothing to cancel"));
-        let events = client.request(Command::SendMessage { session_id: "s".into(), text: "hi".into() }).await?;
+        let events = client.request(Command::SendMessage { stream_deltas: false, session_id: "s".into(), text: "hi".into() }).await?;
         let labels: Vec<_> = events.iter().map(|event| match event {
             Event::StreamToken { .. } => "text", Event::ToolStarted { .. } => "tool_start", Event::ToolFinished { ok: true, .. } => "tool_end",
             Event::ReflectionGenerated { .. } => "reflection", Event::SessionCompleted { reason, scratchpad: Some(_), .. } if reason == "completed" => "completed", _ => "unexpected",
@@ -388,10 +419,11 @@ async fn scripted_run_event_order_status_and_cancel() -> TestResult {
         assert!(matches!(client.request(Command::StartSession { session_id: Some("s".into()) }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_EXISTS"));
         client.request(Command::StartSession { session_id: Some("pending".into()) }).await?;
         let _ = started.notified().await;
-        let pending = client.send(Command::SendMessage { session_id: "pending".into(), text: "hi".into() }).await?;
+        let pending = client.send(Command::SendMessage { stream_deltas: false, session_id: "pending".into(), text: "hi".into() }).await?;
         started.notified().await;
         assert!(matches!(client.request(Command::GetStatus { session_id: Some("pending".into()) }).await?.as_slice(), [Event::Status { status, .. }] if status == "running"));
-        assert!(matches!(client.request(Command::SendMessage { session_id: "pending".into(), text: "again".into() }).await?.as_slice(), [Event::Error { code, .. }] if code == "SESSION_BUSY"));
+        let rejected=client.request(Command::SendMessage {stream_deltas:false,session_id:"pending".into(),text:"again".into()}).await?;
+        assert!(matches!(rejected.as_slice(), [Event::Error { code, .. }] if code == "SESSION_BUSY"));
         assert!(matches!(client.request(Command::ListSessions).await?.as_slice(), [Event::Sessions {sessions}]
             if sessions.iter().any(|s| s.id == "pending" && s.turn_count == 1 && s.status==Some(lain_ipc::SessionStatus::Running))));
         assert!(matches!(client.request(Command::ListTools {session_id:"pending".into()}).await?.as_slice(), [Event::Tools {..}]));

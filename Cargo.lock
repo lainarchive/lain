@@ -1116,6 +1116,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lain"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "lain-agent",
+ "lain-cli",
+ "lain-context",
+ "lain-core",
+ "lain-harness",
+ "lain-ipc",
+ "lain-memory",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "lain-agent"
 version = "0.1.0"
 dependencies = [
@@ -1151,6 +1169,7 @@ dependencies = [
  "lain-memory",
  "ratatui",
  "ratatui-textarea",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

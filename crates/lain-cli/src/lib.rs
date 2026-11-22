@@ -1,7 +1,11 @@
 pub mod args;
+mod cli;
+pub use cli::run;
 pub mod daemon;
 pub mod dashboard;
+pub mod doctor;
 pub mod render;
+pub mod run_report;
 pub mod tui;
 pub mod ui;
 #[cfg(any(windows, test))]

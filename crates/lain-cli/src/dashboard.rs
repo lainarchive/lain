@@ -395,6 +395,7 @@ pub fn router(
     token: String,
 ) -> Router {
     Router::new()
+        .route("/healthz",get(||async {Json(serde_json::json!({"service":"lain","protocol_version":lain_ipc::PROTOCOL_VERSION}))}))
         .route("/api/v1/status", get(status))
         .route("/api/v1/memory", get(memory))
         .route("/api/v1/plugins", get(plugins))
@@ -409,11 +410,46 @@ pub fn router(
         .with_state(handler)
 }
 
+struct DashboardAccess(Arc<DaemonHandler>);
+
+impl Drop for DashboardAccess {
+    fn drop(&mut self) {
+        if let Ok(mut url) = self.0.dashboard_url.lock() {
+            *url = None;
+        }
+    }
+}
+
 pub async fn serve(
     handler: Arc<DaemonHandler>,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<(), Error> {
-    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 4040)).await?;
+    serve_at(
+        handler,
+        shutdown,
+        (std::net::Ipv4Addr::LOCALHOST, 4040).into(),
+    )
+    .await
+}
+
+async fn serve_at(
+    handler: Arc<DaemonHandler>,
+    mut shutdown: watch::Receiver<bool>,
+    address: std::net::SocketAddr,
+) -> Result<(), Error> {
+    let listener = match tokio::net::TcpListener::bind(address).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!("Warning: dashboard address {address} is in use; continuing with IPC only");
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
     let assets = std::env::var_os("LAIN_UI_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
@@ -425,19 +461,24 @@ pub async fn serve(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    eprintln!("http://127.0.0.1:4040/#token={token}");
-    axum::serve(
-        listener,
-        router(handler, "127.0.0.1:4040".into(), assets, token),
-    )
-    .with_graceful_shutdown(async move {
-        while !*shutdown.borrow() {
-            if shutdown.changed().await.is_err() {
-                break;
+    let authority = listener.local_addr()?.to_string();
+    let url = format!("http://{authority}/#token={token}");
+    *handler
+        .dashboard_url
+        .lock()
+        .map_err(|_| Error::failure("DASHBOARD_ACCESS", "Dashboard access unavailable"))? =
+        Some(url.clone());
+    let _access = DashboardAccess(handler.clone());
+    eprintln!("{url}");
+    axum::serve(listener, router(handler, authority, assets, token))
+        .with_graceful_shutdown(async move {
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
             }
-        }
-    })
-    .await?;
+        })
+        .await?;
     Ok(())
 }
 
@@ -445,6 +486,206 @@ pub async fn serve(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn dashboard_access_tracks_bridge_and_not_status(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Arc::new(DaemonHandler::new(
+            Arc::new(Mutex::new(lain_memory::MemoryStore::open(":memory:")?)),
+            Arc::new(crate::daemon::ConfigFactory::new("missing.json", ".")),
+        ));
+        let _directory = tempfile::tempdir()?;
+        #[cfg(unix)]
+        let endpoint = lain_ipc::Endpoint(_directory.path().join("ipc.sock"));
+        #[cfg(windows)]
+        let endpoint = lain_ipc::Endpoint(
+            format!(
+                "{}-access-{}",
+                lain_ipc::DEFAULT_PIPE_NAME,
+                std::process::id()
+            )
+            .into(),
+        );
+        let (ipc_stop, ipc_rx) = watch::channel(false);
+        let ipc =
+            tokio::spawn(lain_ipc::IpcServer::bind(&endpoint)?.serve(handler.clone(), ipc_rx));
+        let mut client = lain_ipc::IpcClient::connect(&endpoint).await?;
+        assert_eq!(
+            client.request(lain_ipc::Command::GetDashboardUrl).await?,
+            vec![lain_ipc::Event::DashboardUrl { url: None }]
+        );
+        let (stop, receiver) = watch::channel(false);
+        let http = tokio::spawn(serve_at(handler, receiver, "127.0.0.1:0".parse()?));
+        let url = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let [lain_ipc::Event::DashboardUrl { url: Some(url) }] = client
+                    .request(lain_ipc::Command::GetDashboardUrl)
+                    .await?
+                    .as_slice()
+                {
+                    break Ok::<_, crate::Error>(url.clone());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        let (base, token) = url
+            .split_once("/#token=")
+            .ok_or("missing dashboard credential")?;
+        assert_eq!(
+            reqwest::Client::new()
+                .get(format!("{base}/api/v1/status"))
+                .bearer_auth(token)
+                .send()
+                .await?
+                .status(),
+            200
+        );
+        let status = client
+            .request(lain_ipc::Command::GetStatus { session_id: None })
+            .await?;
+        assert!(!serde_json::to_string(&status)?.contains(token));
+        stop.send(true)?;
+        http.await??;
+        assert_eq!(
+            client.request(lain_ipc::Command::GetDashboardUrl).await?,
+            vec![lain_ipc::Event::DashboardUrl { url: None }]
+        );
+        client.close().await?;
+        ipc_stop.send(true)?;
+        ipc.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn occupied_dashboard_port_does_not_stop_ipc() -> Result<(), Box<dyn std::error::Error>> {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = occupied.local_addr()?;
+        let handler = Arc::new(DaemonHandler::new(
+            Arc::new(Mutex::new(lain_memory::MemoryStore::open(":memory:")?)),
+            Arc::new(crate::daemon::ConfigFactory::new("missing.json", ".")),
+        ));
+        let (stop, receiver) = watch::channel(false);
+        let _directory = tempfile::tempdir()?;
+        #[cfg(unix)]
+        let endpoint = lain_ipc::Endpoint(_directory.path().join("ipc.sock"));
+        #[cfg(windows)]
+        let endpoint = lain_ipc::Endpoint(
+            format!(
+                "{}-port-test-{}",
+                lain_ipc::DEFAULT_PIPE_NAME,
+                std::process::id()
+            )
+            .into(),
+        );
+        let ipc = tokio::spawn(
+            lain_ipc::IpcServer::bind(&endpoint)?.serve(handler.clone(), receiver.clone()),
+        );
+        let http = tokio::spawn(serve_at(handler, receiver, address));
+        let mut client = lain_ipc::IpcClient::connect(&endpoint).await?;
+        assert!(matches!(
+            client.request(lain_ipc::Command::Ping).await?.as_slice(),
+            [lain_ipc::Event::Pong { .. }]
+        ));
+        assert_eq!(
+            client.request(lain_ipc::Command::GetDashboardUrl).await?,
+            vec![lain_ipc::Event::DashboardUrl { url: None }]
+        );
+        tokio::task::yield_now().await;
+        assert!(!http.is_finished());
+        stop.send(true)?;
+        client.close().await?;
+        tokio::time::timeout(std::time::Duration::from_secs(2), ipc).await???;
+        tokio::time::timeout(std::time::Duration::from_secs(2), http).await???;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn provider_deltas_reach_ipc_and_dashboard_before_the_final_message(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use axum::response::{sse::Event as SseEvent, Sse};
+        use futures_util::stream;
+        use lain_ipc::{Command, Endpoint, Event, IpcClient, IpcServer};
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let release=Arc::new(tokio::sync::Notify::new());
+            let gate=release.clone();
+            let app=Router::new().route("/v1/chat/completions",post(move |Json(request):Json<serde_json::Value>| {
+                let gate=gate.clone();
+                async move {
+                    assert_eq!(request.get("stream"),Some(&json!(true)));
+                    let first=stream::once(async {Ok::<_,std::convert::Infallible>(SseEvent::default().data(
+                        json!({"choices":[{"index":0,"delta":{"content":"Hello "},"finish_reason":null}]}).to_string()))});
+                    let rest=stream::once(async move {
+                        gate.notified().await;
+                        Ok(SseEvent::default().data(json!({"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":null}]}).to_string()))
+                    }).chain(stream::iter([
+                        Ok(SseEvent::default().data(json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}).to_string())),
+                        Ok(SseEvent::default().data("[DONE]"))]));
+                    Sse::new(first.chain(rest))
+                }
+            }));
+            let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address=listener.local_addr()?;
+            let (stop,receiver)=watch::channel(false);
+            let mut provider_shutdown=receiver.clone();
+            let provider=tokio::spawn(async move {axum::serve(listener,app).with_graceful_shutdown(async move {
+                let _=provider_shutdown.changed().await;
+            }).await});
+            let directory=tempfile::tempdir()?;
+            let config=lain_agent::AgentConfig::new(lain_agent::ProviderSelection::OpenAiCompatible {
+                base_url:format!("http://{address}/v1"),api_key_env:None,
+            },"test");
+            let config_path=directory.path().join("agent.json");
+            std::fs::write(&config_path,serde_json::to_vec(&config)?)?;
+            let handler=Arc::new(DaemonHandler::new(Arc::new(Mutex::new(lain_memory::MemoryStore::open(":memory:")?)),
+                Arc::new(crate::daemon::ConfigFactory::new(config_path,directory.path()))));
+            let (_,mut dashboard)=handler.dashboard.subscribe();
+            #[cfg(unix)]
+            let endpoint=Endpoint(directory.path().join("ipc.sock"));
+            #[cfg(windows)]
+            let endpoint=Endpoint(format!("{}-delta-test-{}",lain_ipc::DEFAULT_PIPE_NAME,std::process::id()).into());
+            let ipc=tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler,receiver));
+            let mut client=IpcClient::connect(&endpoint).await?;
+            client.request(Command::StartSession {session_id:Some("s".into())}).await?;
+            let request=client.send(Command::SendMessage { stream_deltas: true,session_id:"s".into(),text:"hello".into()}).await?;
+            let mut chunks=Vec::new();
+            let mut finals=Vec::new();
+            loop {
+                let (id,event)=client.recv().await?.ok_or("IPC closed")?;
+                assert_eq!(id,request);
+                match event {
+                    Event::TokenDelta {session_id,turn,text}=> {
+                        assert_eq!(session_id,"s");assert_eq!(turn,1);
+                        chunks.push(text);
+                        if chunks.len()==1 {assert_eq!(chunks,["Hello "]);release.notify_one();}
+                    }
+                    Event::StreamToken {text,..}=>finals.push(text),
+                    Event::SessionCompleted {reason,..}=>{assert_eq!(reason,"completed");break;},
+                    Event::Error {code,message}=>return Err(format!("{code}: {message}").into()),
+                    _=>{}
+                }
+            }
+            let mut ws_chunks=Vec::new();
+            let mut ws_finals=Vec::new();
+            while let Ok(envelope)=dashboard.try_recv() {
+                assert_eq!(envelope.session_id,"s");
+                match envelope.event {
+                    AgentEvent::ThinkingToken {turn,text}=>{assert_eq!(turn,1);ws_chunks.push(text);},
+                    AgentEvent::OutputGenerated {text,..}=>ws_finals.push(text),
+                    _=>{}
+                }
+            }
+            assert_eq!(chunks,["Hello ","world"]);assert_eq!(ws_chunks,chunks);
+            assert_eq!(finals,["Hello world"]);assert_eq!(ws_finals,finals);
+            release.notify_one();
+            let legacy:Command=serde_json::from_value(json!({"type":"send_message","session_id":"s","text":"again"}))?;
+            let replies=client.request(legacy).await?;
+            assert!(!replies.iter().any(|event|matches!(event,Event::TokenDelta {..})));
+            assert!(replies.iter().any(|event|matches!(event,Event::StreamToken {text,..} if text=="Hello world")));
+            client.close().await?;stop.send(true)?;ipc.await??;provider.await??;
+            Ok::<(),Box<dyn std::error::Error>>(())
+        }).await?
+    }
 
     #[test]
     fn contracts_match_serde_tags_and_checked_in_typescript() {
@@ -796,6 +1037,8 @@ mod tests {
             );
         }
         for (path, host, auth, expected) in [
+            ("/healthz", address.to_string(), "", 200),
+            ("/healthz", "evil.example".into(), "", 403),
             (
                 "/api/v1/status",
                 address.to_string(),
@@ -852,6 +1095,10 @@ mod tests {
                 let body: serde_json::Value =
                     serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
                 match path {
+                    "/healthz" => assert_eq!(
+                        body,
+                        json!({"service":"lain","protocol_version":lain_ipc::PROTOCOL_VERSION})
+                    ),
                     "/api/v1/status" => assert_eq!(
                         body,
                         json!({"protocol_version":1,"sessions":[],"latest_sequence":0})
