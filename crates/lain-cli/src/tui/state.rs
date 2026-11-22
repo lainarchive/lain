@@ -119,6 +119,9 @@ pub enum Selection {
 
 #[derive(Clone, Copy, Default)]
 pub struct Scroll {
+    pub help: u16,
+    pub help_page: u16,
+    pub help_max: u16,
     pub memory_detail: u16,
     pub memory_page: u16,
     pub memory_max: u16,
@@ -342,6 +345,9 @@ impl State {
     }
 
     fn open(&mut self, overlay: Overlay) {
+        if matches!(overlay, Overlay::Help) {
+            self.scroll.help = 0;
+        }
         self.escape = None;
         if let Some(previous) = self.overlay.replace(overlay) {
             self.underlays.push(previous);
@@ -546,6 +552,25 @@ impl State {
                         }
                         _ => None,
                     }
+                }
+                Overlay::Help => {
+                    match key.code {
+                        KeyCode::PageDown => {
+                            self.scroll.help = self
+                                .scroll
+                                .help
+                                .saturating_add(self.scroll.help_page.max(1))
+                                .min(self.scroll.help_max)
+                        }
+                        KeyCode::PageUp => {
+                            self.scroll.help = self
+                                .scroll
+                                .help
+                                .saturating_sub(self.scroll.help_page.max(1))
+                        }
+                        _ => {}
+                    }
+                    None
                 }
                 Overlay::Publish { typed } => {
                     match key.code {

@@ -557,7 +557,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             );
         }
     }
-    shell_view::overlay(frame, state);
+    shell_view::overlay(frame, state, &mut scroll);
     state.theme.apply(frame.buffer_mut());
     scroll
 }

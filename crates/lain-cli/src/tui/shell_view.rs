@@ -2,13 +2,13 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
 use super::{
     app::{self, Overlay, Screen},
-    state::State,
+    state::{Scroll, State},
     theme::*,
 };
 
@@ -73,7 +73,7 @@ pub fn completion(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-pub fn overlay(frame: &mut Frame, state: &State) {
+pub fn overlay(frame: &mut Frame, state: &State, scroll: &mut Scroll) {
     let Some(overlay) = &state.overlay else {
         return;
     };
@@ -141,7 +141,7 @@ pub fn overlay(frame: &mut Frame, state: &State) {
                 lines.push(Line::from(spans));
             }
             let height = lines.len() as u16 + 2;
-            (" Help · Esc close ", lines, height)
+            (" Help · PgUp/PgDn scroll · Esc close ", lines, height)
         }
         Overlay::Publish { .. } => return,
         Overlay::Confirm(_) => (
@@ -167,14 +167,24 @@ pub fn overlay(frame: &mut Frame, state: &State) {
         height,
     );
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().fg(TEXT).bg(BACKGROUND))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Span::styled(title, Style::default().fg(CYAN))),
-            ),
-        area,
-    );
+    let paragraph = Paragraph::new(lines)
+        .style(Style::default().fg(TEXT).bg(BACKGROUND))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(title, Style::default().fg(CYAN))),
+        );
+    if matches!(state.overlay, Some(Overlay::Help)) {
+        let paragraph = paragraph.wrap(Wrap { trim: false });
+        let visible = area.height.saturating_sub(2);
+        scroll.help_max = paragraph
+            .line_count(area.width.saturating_sub(2).max(1))
+            .saturating_sub(usize::from(visible))
+            .min(usize::from(u16::MAX)) as u16;
+        scroll.help_page = visible.saturating_sub(1).max(1);
+        scroll.help = scroll.help.min(scroll.help_max);
+        frame.render_widget(paragraph.scroll((scroll.help, 0)), area);
+    } else {
+        frame.render_widget(paragraph, area);
+    }
 }

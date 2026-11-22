@@ -50,6 +50,26 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn help_pages_to_all_commands_at_the_supported_minimum() -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.key(key(KeyCode::F(1)), Duration::ZERO);
+    let mut terminal = Terminal::new(TestBackend::new(120, 30))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    let first = contents(&terminal);
+    state.key(key(KeyCode::PageDown), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    let last = contents(&terminal);
+    assert_ne!(first, last);
+    assert!(last.contains("/rewind"));
+    state.key(key(KeyCode::PageUp), Duration::ZERO);
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert_eq!(contents(&terminal), first);
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    assert!(state.overlay.is_none());
+    Ok(())
+}
+
+#[test]
 fn primary_busy_rejection_stops_working_but_steer_errors_do_not(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::demo_turn()?;
