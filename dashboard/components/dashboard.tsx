@@ -216,6 +216,8 @@ export function Dashboard() {
       layoutNodes(visible).map((n) => ({
         id: n.id,
         type: "trace",
+        width: 200,
+        height: 56,
         position: positions[n.id] ?? { x: n.x, y: n.y },
         data: { ...n },
         selected: n.id === selectedId,
