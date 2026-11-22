@@ -10,6 +10,8 @@ use ratatui::{
 };
 
 use super::{
+    app::Screen,
+    shell_view,
     state::{Mode, Phase, Scroll, Selection, State},
     theme::*,
 };
@@ -401,6 +403,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     }
     let vertical = Layout::vertical([
         Constraint::Length(4),
+        Constraint::Length(1),
         Constraint::Min(3),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -412,16 +415,36 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     let mut scroll = state.scroll;
     banner(frame, *banner_area, state, now);
     if let Some(area) = vertical.get(1) {
-        let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
-            .split(*area);
-        if let Some(area) = main.get(1) {
-            scroll = drawer(frame, *area, state);
-        }
-        if let Some(area) = main.first() {
-            (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
-        }
+        shell_view::tabs(frame, *area, state);
     }
     if let Some(area) = vertical.get(2) {
+        if state.screen == Screen::Session {
+            let completion_height = state
+                .slash()
+                .map(|(commands, _)| (commands.len().clamp(1, 4) + 2) as u16)
+                .unwrap_or(0);
+            let parts =
+                Layout::vertical([Constraint::Min(3), Constraint::Length(completion_height)])
+                    .split(*area);
+            let area = parts.first().unwrap_or(area);
+            if completion_height > 0 {
+                if let Some(completion) = parts.get(1) {
+                    shell_view::completion(frame, *completion, state);
+                }
+            }
+            let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
+                .split(*area);
+            if let Some(area) = main.get(1) {
+                scroll = drawer(frame, *area, state);
+            }
+            if let Some(area) = main.first() {
+                (scroll.lane, scroll.lane_page) = lanes(frame, *area, state, now);
+            }
+        } else {
+            shell_view::placeholder(frame, *area, state.screen);
+        }
+    }
+    if let Some(area) = vertical.get(3).filter(|_| state.screen == Screen::Session) {
         let input = format!("› {}", state.composer);
         let width = Line::from(input.clone()).width();
         let scroll = width
@@ -437,14 +460,14 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                 })),
             *area,
         );
-        if area.width > 3 && area.height > 2 {
+        if area.width > 3 && area.height > 2 && state.overlay.is_none() {
             frame.set_cursor_position((
                 area.x + 1 + (width.saturating_sub(usize::from(scroll)) as u16).min(area.width - 3),
                 area.y + 1,
             ));
         }
     }
-    if let Some(area) = vertical.get(3) {
+    if let Some(area) = vertical.get(4) {
         let mut modes = vec![];
         for (i, mode) in [Mode::Architect, Mode::Code, Mode::Ask].iter().enumerate() {
             if i > 0 {
@@ -463,20 +486,27 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             ));
         }
         modes.push(Span::styled(
-            " · Tab mode · Enter send · ↑↓ select · Space fold · Esc Esc rewind · q/Ctrl-C quit",
+            if state.screen == Screen::Session {
+                " · Tab mode · Enter send · ↑↓ select · Space fold · Ctrl+K commands · ? help"
+            } else {
+                " · 1–6 screens · Alt+←/→ tabs · Ctrl+K commands · ? help"
+            },
             Style::default().fg(MUTED),
         ));
         frame.render_widget(
             Paragraph::new(Text::from(vec![
                 Line::from(modes),
                 Line::styled(
-                    "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules",
+                    if state.screen == Screen::Session {
+                        "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules · Esc Esc rewind · q/Ctrl-C quit"
+                    } else { "Placeholder · F1 help · q/Ctrl-C quit" },
                     Style::default().fg(MUTED),
                 ),
-                Line::styled(state.notice.as_str(), Style::default().fg(AMBER)),
+                Line::styled(state.toast_text(now).unwrap_or(&state.notice), Style::default().fg(AMBER)),
             ])),
             *area,
         );
     }
+    shell_view::overlay(frame, state);
     scroll
 }

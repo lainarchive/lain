@@ -15,6 +15,8 @@ use lain_ipc::Event;
 
 use crate::{render::clean, Error};
 
+use super::app::{self, Action, Overlay, Screen};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Architect,
@@ -41,6 +43,7 @@ pub enum Effect {
     Submit { text: String, read_only: bool },
     Steer(String),
     Rewind,
+    NewSession,
     Quit,
 }
 
@@ -117,6 +120,12 @@ pub struct Scroll {
 }
 
 pub struct State {
+    pub screen: Screen,
+    pub overlay: Option<Overlay>,
+    pub toast: Option<(String, Duration)>,
+    underlays: Vec<Overlay>,
+    slash_selected: usize,
+    slash_dismissed: bool,
     pub dag: Dag,
     pub tasks: BTreeMap<String, Task>,
     pub tools: Vec<ToolBlock>,
@@ -148,6 +157,12 @@ pub struct State {
 impl State {
     pub fn new(branch: String, workspace: &Path) -> Result<Self, Error> {
         Ok(Self {
+            screen: Screen::Session,
+            overlay: None,
+            toast: None,
+            underlays: vec![],
+            slash_selected: 0,
+            slash_dismissed: false,
             dag: Dag::new(vec![]).map_err(|e| Error::failure("TUI_DAG", e))?,
             scope: WriteScope::new(workspace, std::iter::empty::<&Path>())
                 .map_err(|e| Error::failure("TUI_SCOPE", e))?,
@@ -221,10 +236,251 @@ impl State {
             / 5.0
     }
 
+    pub fn notify(&mut self, text: impl Into<String>, now: Duration) {
+        self.toast = Some((text.into(), now.saturating_add(Duration::from_secs(5))));
+    }
+
+    pub fn tick(&mut self, now: Duration) {
+        if self.toast.as_ref().is_some_and(|(_, until)| now >= *until) {
+            self.toast = None;
+        }
+    }
+
+    pub fn toast_text(&self, now: Duration) -> Option<&str> {
+        self.toast
+            .as_ref()
+            .filter(|(_, until)| now < *until)
+            .map(|(text, _)| text.as_str())
+    }
+
+    pub fn slash(&self) -> Option<(Vec<&'static app::Command>, usize)> {
+        if self.screen != Screen::Session || self.slash_dismissed {
+            return None;
+        }
+        let query = self.composer.strip_prefix('/')?;
+        let commands = app::matching(query);
+        let selected = self.slash_selected.min(commands.len().saturating_sub(1));
+        Some((commands, selected))
+    }
+
+    fn open(&mut self, overlay: Overlay) {
+        self.escape = None;
+        if let Some(previous) = self.overlay.replace(overlay) {
+            self.underlays.push(previous);
+        }
+    }
+
+    fn close(&mut self) {
+        self.overlay = self.underlays.pop();
+        self.escape = None;
+    }
+
+    fn navigate(&mut self, screen: Screen) {
+        self.screen = screen;
+        self.overlay = None;
+        self.underlays.clear();
+        self.escape = None;
+    }
+
+    fn execute(&mut self, action: Action, now: Duration, confirmed: bool) -> Effect {
+        match action {
+            Action::Go(screen) => self.navigate(screen),
+            Action::Mode(mode) => {
+                if self.running {
+                    self.notify("Mode changes apply after this turn", now);
+                } else {
+                    self.mode = mode;
+                }
+            }
+            Action::Help => {
+                if !matches!(self.overlay, Some(Overlay::Help)) {
+                    self.open(Overlay::Help);
+                }
+            }
+            Action::Quit | Action::NewSession => {
+                if !confirmed && (self.running || !self.composer.is_empty()) {
+                    self.open(Overlay::Confirm(action));
+                } else if action == Action::Quit {
+                    return Effect::Quit;
+                } else {
+                    match Self::new(self.branch.clone(), self.scope.root()) {
+                        Ok(mut state) => {
+                            state.mode = self.mode;
+                            *self = state;
+                            self.notify("New session", now);
+                            return Effect::NewSession;
+                        }
+                        Err(error) => self.notify(error.to_string(), now),
+                    }
+                }
+            }
+            Action::ToggleOutput => {
+                if self.screen == Screen::Session {
+                    if let Some(Selection::Tool(i)) = self.selected {
+                        if let Some(tool) = self.tools.get_mut(i) {
+                            tool.expanded = !tool.expanded;
+                            return Effect::None;
+                        }
+                    }
+                }
+                self.notify("Select a Session tool block first", now);
+            }
+            Action::Rewind => {
+                if self.screen == Screen::Session {
+                    return self.rewind();
+                }
+                self.notify("Rewind is available on Session", now);
+            }
+        }
+        Effect::None
+    }
+
     pub fn key(&mut self, key: KeyEvent, now: Duration) -> Effect {
+        self.tick(now);
         if key.code != KeyCode::Esc {
             self.escape = None;
         }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return Effect::Quit;
+        }
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+        {
+            self.navigate(self.screen.adjacent(key.code == KeyCode::Right));
+            return Effect::None;
+        }
+        if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(self.overlay, Some(Overlay::Palette { .. })) {
+                self.close();
+            } else {
+                self.open(Overlay::Palette {
+                    query: String::new(),
+                    selected: 0,
+                });
+            }
+            return Effect::None;
+        }
+        if key.code == KeyCode::F(1)
+            || (key.code == KeyCode::Char('?')
+                && self.composer.is_empty()
+                && self.overlay.is_none())
+        {
+            if !matches!(self.overlay, Some(Overlay::Help)) {
+                self.open(Overlay::Help);
+            }
+            return Effect::None;
+        }
+        if let Some(mut overlay) = self.overlay.take() {
+            if key.code == KeyCode::Esc {
+                self.close();
+                return Effect::None;
+            }
+            let action = match &mut overlay {
+                Overlay::Palette { query, selected } => {
+                    let commands = app::matching(query);
+                    match key.code {
+                        KeyCode::Enter => commands.get(*selected).map(|command| command.action),
+                        KeyCode::Down | KeyCode::Tab => {
+                            *selected = (*selected + 1) % commands.len().max(1);
+                            None
+                        }
+                        KeyCode::Up => {
+                            *selected = selected.saturating_sub(1);
+                            None
+                        }
+                        KeyCode::Backspace => {
+                            query.pop();
+                            *selected = 0;
+                            None
+                        }
+                        KeyCode::Char(c)
+                            if !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                        {
+                            query.push(c);
+                            *selected = 0;
+                            None
+                        }
+                        _ => None,
+                    }
+                }
+                Overlay::Confirm(action) if key.code == KeyCode::Enter => {
+                    return self.execute(*action, now, true);
+                }
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.close();
+                return self.execute(action, now, false);
+            }
+            self.overlay = Some(overlay);
+            return Effect::None;
+        }
+        if let Some((commands, selected)) = self.slash() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.slash_dismissed = true;
+                    self.escape = None;
+                    return Effect::None;
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    self.slash_selected = (selected + 1) % commands.len().max(1);
+                    return Effect::None;
+                }
+                KeyCode::Up => {
+                    self.slash_selected = selected.saturating_sub(1);
+                    return Effect::None;
+                }
+                _ => {}
+            }
+        }
+        if self.screen == Screen::Session
+            && self.composer.starts_with('/')
+            && key.code == KeyCode::Enter
+        {
+            let query = self.composer.strip_prefix('/').unwrap_or("").trim();
+            let command = if self.slash_dismissed {
+                app::COMMANDS.iter().find(|c| c.id == query)
+            } else {
+                let commands = app::matching(query);
+                commands
+                    .get(self.slash_selected.min(commands.len().saturating_sub(1)))
+                    .copied()
+            };
+            if let Some(command) = command {
+                let action = command.action;
+                self.composer.clear();
+                self.slash_selected = 0;
+                return self.execute(action, now, false);
+            }
+            self.notify(format!("Unknown command: {}", self.composer), now);
+            return Effect::None;
+        }
+        if (self.composer.is_empty() || self.screen != Screen::Session) && key.modifiers.is_empty()
+        {
+            if let KeyCode::Char(c @ '1'..='6') = key.code {
+                if let Some(screen) = Screen::ALL.get(c as usize - '1' as usize) {
+                    self.navigate(*screen);
+                }
+                return Effect::None;
+            }
+        }
+        if self.screen != Screen::Session {
+            return if key.code == KeyCode::Char('q') && self.composer.is_empty() {
+                Effect::Quit
+            } else {
+                Effect::None
+            };
+        }
+        if matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace) {
+            self.slash_dismissed = false;
+            self.slash_selected = 0;
+        }
+        self.session_key(key, now)
+    }
+
+    fn session_key(&mut self, key: KeyEvent, now: Duration) -> Effect {
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Effect::Quit,
             KeyCode::Char('q') if self.composer.is_empty() => Effect::Quit,
@@ -234,36 +490,19 @@ impl State {
                     .take()
                     .is_some_and(|at| now.saturating_sub(at) <= Duration::from_millis(500))
                 {
-                    if let Some(id) = self.active.take() {
-                        self.tasks.remove(&id);
-                        self.tools.retain(|t| t.node != id);
-                        self.notes.retain(|n| n.turn != self.next_turn);
-                        if let Err(error) = self.rebuild() {
-                            self.notice = error.to_string();
-                        }
-                        self.composer.clone_from(&self.last_prompt);
-                        self.running = false;
-                        self.selected = None;
-                        self.notice =
-                            "Rewound view · cancellation does not undo filesystem writes".into();
-                        return Effect::Rewind;
-                    }
+                    return self.rewind();
                 } else {
                     self.escape = Some(now);
                 }
                 Effect::None
             }
             KeyCode::Tab => {
-                if self.running {
-                    self.notice = "Mode changes apply after this turn".into();
-                } else {
-                    self.mode = match self.mode {
-                        Mode::Architect => Mode::Code,
-                        Mode::Code => Mode::Ask,
-                        Mode::Ask => Mode::Architect,
-                    };
-                }
-                Effect::None
+                let mode = match self.mode {
+                    Mode::Architect => Mode::Code,
+                    Mode::Code => Mode::Ask,
+                    Mode::Ask => Mode::Architect,
+                };
+                self.execute(Action::Mode(mode), now, false)
             }
             KeyCode::Up | KeyCode::Down => {
                 let rows = self.selections();
@@ -398,9 +637,27 @@ impl State {
         }
     }
 
+    fn rewind(&mut self) -> Effect {
+        let Some(id) = self.active.take() else {
+            return Effect::None;
+        };
+        self.tasks.remove(&id);
+        self.tools.retain(|t| t.node != id);
+        self.notes.retain(|n| n.turn != self.next_turn);
+        if let Err(error) = self.rebuild() {
+            self.notice = error.to_string();
+        }
+        self.composer.clone_from(&self.last_prompt);
+        self.running = false;
+        self.selected = None;
+        self.notice = "Rewound view · cancellation does not undo filesystem writes".into();
+        Effect::Rewind
+    }
+
     pub fn not_sent(&mut self, now: Duration) {
         self.running = false;
-        self.notice = "Offline demo: not sent · no provider contacted".into();
+        self.notice.clear();
+        self.notify("Offline demo: not sent · no provider contacted", now);
         if let Some(task) = self.active.as_ref().and_then(|id| self.tasks.get_mut(id)) {
             task.phase = Phase::NotSent;
             task.ended = Some(now);
