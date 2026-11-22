@@ -65,12 +65,23 @@ impl Backend {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptInterpreter {
     Python,
     Powershell,
     Node,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptProposal {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+    pub interpreter: ScriptInterpreter,
+    pub source: String,
+    pub test_args: Value,
 }
 
 impl ScriptInterpreter {
