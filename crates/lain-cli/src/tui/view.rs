@@ -378,6 +378,26 @@ pub fn has_room(area: Rect, state: &State) -> bool {
     area.width >= width && area.height >= height
 }
 
+fn composer_rows(text: &str, width: u16) -> Vec<String> {
+    let input = format!("› {}", text.replace('\t', "    ").replace('\n', "\n  "));
+    let mut rows = Vec::new();
+    for line in input.split('\n') {
+        let mut row = String::new();
+        let mut used = 0;
+        for glyph in Span::raw(line).styled_graphemes(Style::default()) {
+            let n = Line::raw(glyph.symbol).width();
+            if used + n > usize::from(width.max(1)) && !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+                used = 0;
+            }
+            row.push_str(glyph.symbol);
+            used += n;
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
     frame.render_widget(
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
@@ -395,12 +415,13 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         state.theme.apply(frame.buffer_mut());
         return Scroll::default();
     }
+    let draft = composer_rows(&state.composer, frame.area().width.saturating_sub(1));
     let vertical = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(u16::from(has_banner(state, now))),
         Constraint::Min(3),
         Constraint::Length(if state.screen == Screen::Session {
-            3
+            draft.len().clamp(1, 6) as u16 + 2
         } else {
             1
         }),
@@ -499,14 +520,19 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         }
     }
     if let Some(area) = vertical.get(3).filter(|_| state.screen == Screen::Session) {
-        let input = format!("› {}", state.composer);
-        let width = Line::from(input.clone()).width();
-        let scroll = width
-            .saturating_sub(usize::from(area.width.saturating_sub(3)))
-            .min(usize::from(u16::MAX)) as u16;
+        let visible = usize::from(area.height.saturating_sub(2));
+        scroll.composer_max = draft.len().saturating_sub(visible);
+        scroll.composer = scroll.composer.min(scroll.composer_max);
+        let start = scroll.composer_max.saturating_sub(scroll.composer);
+        let input = draft
+            .iter()
+            .skip(start)
+            .take(visible)
+            .cloned()
+            .map(Line::from)
+            .collect::<Vec<_>>();
         frame.render_widget(
             Paragraph::new(input)
-                .scroll((0, scroll))
                 .style(Style::default().fg(if state.composer.is_empty() {
                     MUTED
                 } else {
@@ -517,7 +543,8 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                         .borders(Borders::TOP | Borders::BOTTOM)
                         .border_style(Style::default().fg(MUTED))
                         .title_bottom(
-                            Line::from(if state.launch() {" Tab mode · Ctrl+K commands · F1 help "}
+                            Line::from(if draft.len()>1 {" ↑/↓ scroll draft · Enter submit · Ctrl+K commands · F1 help "}
+                            else if state.launch() {" Tab mode · Ctrl+K commands · F1 help "}
                             else if state.plan_drawer.unwrap_or(state.scroll.plan_visible) {
                                 " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Ctrl+G DAG · Ctrl+P close · Ctrl+K commands · F1 help "
                             } else {" Tab mode · Ctrl+O output · Ctrl+G DAG · Ctrl+P plan/rules · Ctrl+K commands · F1 help "})
@@ -533,10 +560,19 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             );
         }
         super::launch_view::rule(frame, Rect::new(area.x, area.y, area.width, 1), state.theme);
-        if area.width > 3 && area.height > 2 && state.overlay.is_none() {
+        if area.width > 3 && area.height > 2 && state.overlay.is_none() && scroll.composer == 0 {
             frame.set_cursor_position((
-                area.x + (width.saturating_sub(usize::from(scroll)) as u16).min(area.width - 3),
-                area.y + 1,
+                area.x
+                    + draft
+                        .last()
+                        .map_or(0, |line| Line::raw(line).width())
+                        .min(usize::from(area.width - 1)) as u16,
+                area.y
+                    + 1
+                    + draft
+                        .len()
+                        .saturating_sub(start + 1)
+                        .min(visible.saturating_sub(1)) as u16,
             ));
         }
     }
