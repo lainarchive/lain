@@ -1,4 +1,7 @@
 mod app;
+mod creator;
+mod creator_ipc;
+mod creator_view;
 mod input;
 mod plugins;
 mod shell_view;

@@ -446,16 +446,8 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
             }
         } else if state.screen == Screen::Plugins {
             plugins::draw(frame, *area, &state.plugins, &mut scroll);
-        } else if state.screen == Screen::Creator && state.creator_template.is_some() {
-            if let Some(template) = &state.creator_template {
-                if let Ok(manifest) = &template.manifest {
-                    frame.render_widget(Paragraph::new(format!(
-                        "Template: {}\nPath: {}\nVersion: {} · Author: {}\nExports: {}\n\nManifest metadata received. Source has not been fetched.\nCreator editing arrives next.\n/creator",
-                        crate::render::clean(&manifest.name), crate::render::clean(&template.path.display().to_string()), crate::render::clean(&manifest.version),
-                        crate::render::clean(&manifest.author), manifest.tools.iter().map(|tool| crate::render::clean(&tool.name)).collect::<Vec<_>>().join(", ")
-                    )).wrap(Wrap {trim:false}).block(panel(" Creator · manifest template ")), *area);
-                }
-            }
+        } else if state.screen == Screen::Creator {
+            super::creator_view::draw(frame, *area, state, &mut scroll);
         } else {
             shell_view::placeholder(frame, *area, state.screen);
         }
@@ -504,6 +496,8 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         modes.push(Span::styled(
             if state.screen == Screen::Session {
                 " · Tab mode · Enter send · ↑↓ select · Space fold · Ctrl+K commands · ? help"
+            } else if state.screen == Screen::Creator {
+                " · Tab/Shift+Tab steps · Ctrl+←/→ steps · Alt+←/→ screens · Ctrl+K commands · F1 help"
             } else if state.screen == Screen::Plugins {
                 " · ↑↓ select · r refresh · / filter · Enter template · Ctrl+K commands · ? help"
             } else {
@@ -517,7 +511,8 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                 Line::styled(
                     if state.screen == Screen::Session {
                         "PgUp/PgDn lanes/tool · Alt-PgUp/PgDn plan (Shift alias) · Ctrl-PgUp/PgDn rules · Esc Esc rewind · q/Ctrl-C quit"
-                    } else if state.screen == Screen::Plugins { "PgUp/PgDn details · Enter applies filter · Esc clears filter · Alt+←/→ tabs" }
+                    } else if state.screen == Screen::Creator { "Enter: name field / test / review publish · Shift+Enter: sample newline · PgUp/PgDn report · Ctrl-C quit" }
+                    else if state.screen == Screen::Plugins { "PgUp/PgDn details · Enter applies filter · Esc clears filter · Alt+←/→ tabs" }
                     else { "Placeholder · F1 help · q/Ctrl-C quit" },
                     Style::default().fg(MUTED),
                 ),

@@ -37,9 +37,9 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 `lain tui` opens the Ratatui app shell. `lain tui demo` renders an **offline synthetic sample**
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
 The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains the existing lane view;
-Plugins browses disk manifests and active session tools. Creator receives a selected manifest template; editing is not implemented yet.
+Plugins browses disk manifests and active session tools. Creator edits, tests and publishes script proposals through the daemon.
 Memory, Sessions and Models remain named placeholders for later phases.
-Outside overlays, 1–6 switches screens when the Session composer is empty or not focused (on another screen).
+Outside overlays, 1–6 switches screens when not editing a Creator field or Plugins filter and the Session composer is empty or unfocused.
 Alt+Left/Right always switches screens, closing overlays while preserving the Session draft and active turn.
 
 On **Plugins (2)**, Up/Down selects manifests or active tools; PgUp/PgDn scrolls the detail pane.
@@ -51,6 +51,21 @@ green ✓ granted, red ✗ missing. A manifest without matching active tools has
 For active plugin tools, backend labels come from disk inventory, which can differ from the already-loaded runtime after a disk edit.
 Live mode fetches on first entry and refresh, with explicit unsupported/error messages for older daemons.
 Demo mode uses canned inventory including one malformed manifest. Plugin refresh errors do not terminate an active chat turn.
+
+On **Creator (3)**, the breadcrumb steps are Name/description → Input schema → Interpreter → Source → Test → Publish.
+Tab/Shift+Tab or Ctrl+Left/Right changes steps. Alt+Left/Right changes screens without discarding the draft.
+Enter switches between name and description. Schema JSON is checked live against JSON Schema; sample input is validated before requests.
+Up/Down chooses Python, PowerShell or Node, the interpreters supported by `ScriptProposal` (installation is checked by execution, not the picker).
+The multi-line editor supports arrows, Home/End, editing, undo and bracketed paste. Tab is reserved for steps; use spaces to indent.
+On Test, Enter runs `TestToolProposal`; Shift+Enter inserts a newline in the sample input. PgUp/PgDn scrolls execution reports without overshooting.
+Reports show exit status, stdout, stderr, decoded result, duration and daemon-reported written paths. Errors stay on Creator, not the active chat turn.
+Publish requires Code mode and confirmed daemon creator-mode access. Enter opens a dialog naming the exact two workspace-relative files and all four permissions.
+Type lowercase `y`, then Enter, to submit; Enter alone or pasting `y` cannot confirm. Esc cancels, and permission/mode checks run again on confirmation.
+**Test and Publish both execute unsandboxed as the host user.** Publish tests again before writing; rewinding cannot undo these writes.
+While a request runs the draft is locked, but other screens remain usable. Creator capability checks fail closed on unsupported/older daemons.
+Selecting a Plugins template replaces the draft using the first export's name, description, schema and script interpreter if present.
+Source is never read from disk by the TUI or supplied by inventory: template source starts empty. Choose a unique name and supply new source before testing.
+In demo mode both operations are explicitly **SIMULATED**: no script executes and no file is written. Simulated publication does not mark edits as saved.
 
 Ctrl+K opens a command palette. Type a fuzzy subsequence to filter, use Up/Down or Tab to select, and Enter to run.
 On Session, a leading `/` opens inline completion from the same registry: Tab/Up/Down selects and Enter runs.
