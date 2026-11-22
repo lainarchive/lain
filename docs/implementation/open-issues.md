@@ -1,5 +1,14 @@
 # Open issues
 
+## Node verification after the neural dashboard merge
+
+On Linux with Node 26.13.1 and gitleaks 8.30.1, the post-dashboard cleanup and
+unchanged `main` (`9fa3e6e`) both report `checks=8 pass=5 fail=3` under
+`npm run verify`. The same twelve Node tests fail in both worktrees. The
+format gate flags an existing 236-character line in the Rust dashboard tests
+(`crates/lain-cli/src/dashboard.rs:783`, limit 200). The history scan reports
+one finding in both worktrees; that finding needs separate triage.
+
 ## Rust memory port verification on Linux
 
 The owner-approved `lain-memory` port encountered existing Node gate failures on

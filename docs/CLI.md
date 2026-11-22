@@ -1,4 +1,7 @@
-# Lain CLI
+# Node CLI
+
+This guide covers `node src/cli/index.mjs`. For the Rust `lain` binary, see the
+[Rust CLI guide](../crates/lain-cli/README.md).
 
 Every command prints exactly one JSON document on success. Exit codes:
 `0` success, `2` usage, `3` refused (policy or explicit refusal), `4` failed.
