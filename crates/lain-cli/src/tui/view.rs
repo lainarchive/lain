@@ -267,7 +267,7 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn drawer(frame: &mut Frame, area: Rect, state: &State) {
+fn drawer(frame: &mut Frame, area: Rect, state: &State) -> u16 {
     let tool = match state.selected {
         Some(Selection::Tool(i)) => state.tools.get(i).filter(|t| t.expanded),
         _ => None,
@@ -353,10 +353,12 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) {
                 .block(panel(" Full output · PgUp/PgDn ")),
             *rect,
         );
+        return scroll;
     }
+    0
 }
 
-pub fn draw(frame: &mut Frame, state: &State, now: Duration) {
+pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
     frame.render_widget(
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
         frame.area(),
@@ -369,8 +371,9 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) {
     ])
     .split(frame.area());
     let Some(banner_area) = vertical.first() else {
-        return;
+        return 0;
     };
+    let mut drawer_scroll = 0;
     banner(frame, *banner_area, state, now);
     if let Some(area) = vertical.get(1) {
         let main = Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
@@ -379,7 +382,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) {
             lanes(frame, *area, state, now);
         }
         if let Some(area) = main.get(1) {
-            drawer(frame, *area, state);
+            drawer_scroll = drawer(frame, *area, state);
         }
     }
     if let Some(area) = vertical.get(2) {
@@ -435,4 +438,5 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) {
             *area,
         );
     }
+    drawer_scroll
 }

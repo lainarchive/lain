@@ -117,7 +117,9 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut ignored = BTreeSet::new();
     let result = async {
         loop {
-            terminal.draw(|frame| view::draw(frame, &state, started.elapsed()))?;
+            terminal.draw(|frame| {
+                state.drawer_scroll = view::draw(frame, &state, started.elapsed());
+            })?;
             tokio::select! {
                 input = keys.next() => {
                     let Some(input) = input else { break; };

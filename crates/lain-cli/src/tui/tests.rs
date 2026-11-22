@@ -11,16 +11,22 @@ use super::{
 
 fn render(state: &State) -> Result<String, Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
-    terminal.draw(|frame| view::draw(frame, state, Duration::from_secs(2)))?;
+    terminal.draw(|frame| {
+        view::draw(frame, state, Duration::from_secs(2));
+    })?;
+    Ok(contents(&terminal))
+}
+
+fn contents(terminal: &Terminal<TestBackend>) -> String {
     let buffer = terminal.backend().buffer();
-    Ok((0..45)
+    (0..buffer.area.height)
         .map(|y| {
-            (0..140)
+            (0..buffer.area.width)
                 .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n")
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -169,6 +175,42 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = std::env::var_os("LAIN_TUI_DUMP") {
         std::fs::write(path, format!("{text}\n"))?;
     }
+    Ok(())
+}
+
+#[test]
+fn paging_up_moves_immediately_after_the_drawer_reaches_bottom(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.select_tool(0);
+    state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+    state.tools.first_mut().ok_or("missing tool")?.output = (0..100)
+        .map(|i| format!("line {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    for _ in 0..20 {
+        state.key(key(KeyCode::PageDown), Duration::ZERO);
+        terminal.draw(|frame| {
+            state.drawer_scroll = view::draw(frame, &state, Duration::ZERO);
+        })?;
+    }
+    assert!(contents(&terminal).contains("line 99"));
+    state.key(key(KeyCode::PageUp), Duration::ZERO);
+    terminal.draw(|frame| {
+        state.drawer_scroll = view::draw(frame, &state, Duration::ZERO);
+    })?;
+    assert!(!contents(&terminal).contains("line 99"));
+    state
+        .tools
+        .first_mut()
+        .ok_or("missing tool")?
+        .output
+        .clear();
+    terminal.draw(|frame| {
+        state.drawer_scroll = view::draw(frame, &state, Duration::ZERO);
+    })?;
+    assert_eq!(state.drawer_scroll, 0);
     Ok(())
 }
 
