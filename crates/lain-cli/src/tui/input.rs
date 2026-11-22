@@ -232,7 +232,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                             }
                         }
                         Effect::NewSession => {
-                            if demo {state.demo_metadata()?;}
+                            if demo {state.demo_metadata(started.elapsed())?;}
                             if let Some(request) = active_request.take() { ignored.insert(request); }
                             if let Some(request) = poll_request.take() { ignored.insert(request); }
                             if let Some(client) = &mut client {
