@@ -173,6 +173,27 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn sticky_panels_mark_hidden_lines_including_wrapped_rules(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    assert!(!render(&state)?.contains("more below"));
+    state.plan = "[ ] long plan\n".repeat(60);
+    state.rules = vec!["wrapped rule ".repeat(120)];
+    let text = render(&state)?;
+    assert!(text.contains("Scratchpad … more below"));
+    assert!(text.contains("Procedural rules … more below"));
+    state.select_tool(0);
+    state.key(key(KeyCode::Char(' ')), Duration::ZERO);
+    let text = render(&state)?;
+    assert!(text.contains("Scratchpad … more below"));
+    assert!(text.contains("Procedural rules … more below"));
+    state.plan.clear();
+    state.rules.clear();
+    assert!(!render(&state)?.contains("more below"));
+    Ok(())
+}
+
+#[test]
 fn whole_assistant_messages_are_separated() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
     state.composer = "answer me".into();
