@@ -353,8 +353,12 @@ pub async fn execute(options: &Options) -> Result<u8, Error> {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<AgentConfig>(&bytes).ok())
     {
-        Some(config) => checks
-            .extend(model_checks(&client, &config.provider, &|name| std::env::var_os(name)).await),
+        Some(config) => match config.validate() {
+            Ok(()) => checks.extend(
+                model_checks(&client, &config.provider, &|name| std::env::var_os(name)).await,
+            ),
+            Err(error) => checks.push(Check::new("model config", Level::Fail, error.to_string())),
+        },
         None => checks.push(Check::new(
             "model config",
             Level::Fail,
