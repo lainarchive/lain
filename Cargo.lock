@@ -1008,6 +1008,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lain-harness"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "lain-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "lain-ipc"
 version = "0.1.0"
 dependencies = [
