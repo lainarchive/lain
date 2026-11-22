@@ -179,6 +179,46 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn small_terminals_show_a_resize_message_and_recover_at_minimum_size(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = State::sample()?;
+    for (width, height) in [(119, 45), (140, 29), (60, 12)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+        terminal.draw(|frame| {
+            view::draw(frame, &state, Duration::ZERO);
+        })?;
+        let text = contents(&terminal);
+        assert!(
+            text.contains("terminal too small (need 120x30)"),
+            "{width}x{height}: {text}"
+        );
+        assert!(!text.contains("Execution DAG"));
+    }
+    let mut terminal = Terminal::new(TestBackend::new(120, 30))?;
+    terminal.draw(|frame| {
+        view::draw(frame, &state, Duration::ZERO);
+    })?;
+    let text = contents(&terminal);
+    assert!(!text.contains("terminal too small"));
+    for expected in [
+        "cost unknown",
+        "ctx",
+        "Execution DAG",
+        "Scratchpad",
+        "Procedural rules",
+        "Compose",
+        "Tab mode",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    let mut tiny = Terminal::new(TestBackend::new(1, 1))?;
+    tiny.draw(|frame| {
+        view::draw(frame, &state, Duration::ZERO);
+    })?;
+    Ok(())
+}
+
+#[test]
 fn offline_submissions_finish_as_not_sent_and_can_be_rewound(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;

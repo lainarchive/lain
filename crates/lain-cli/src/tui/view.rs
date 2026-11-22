@@ -363,6 +363,14 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> u16 {
         Block::default().style(Style::default().bg(BACKGROUND).fg(TEXT)),
         frame.area(),
     );
+    if frame.area().width < 120 || frame.area().height < 30 {
+        frame.render_widget(
+            Paragraph::new("terminal too small (need 120x30)\nResize to continue · Ctrl-C quits")
+                .wrap(Wrap { trim: false }),
+            frame.area(),
+        );
+        return 0;
+    }
     let vertical = Layout::vertical([
         Constraint::Length(4),
         Constraint::Min(3),
