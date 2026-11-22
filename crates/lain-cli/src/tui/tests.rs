@@ -226,6 +226,7 @@ fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
         for (kind, modifiers) in [
             ("tool", KeyModifiers::NONE),
             ("plan", KeyModifiers::SHIFT),
+            ("plan", KeyModifiers::ALT),
             ("rule", KeyModifiers::CONTROL),
             ("lane", KeyModifiers::NONE),
         ] {
@@ -365,7 +366,8 @@ fn sticky_panels_scroll_independently_and_do_not_overshoot(
     draw_scrolled(&mut terminal, &mut state)?;
     assert!(contents(&terminal).contains("No scratchpad yet"));
     assert!(contents(&terminal).contains("No procedural rules recalled"));
-    assert!(contents(&terminal).contains("Shift-PgUp/PgDn plan"));
+    assert!(contents(&terminal).contains("Alt-PgUp/PgDn plan"));
+    assert!(contents(&terminal).contains("Shift alias"));
     assert!(contents(&terminal).contains("Ctrl-PgUp/PgDn rules"));
     Ok(())
 }

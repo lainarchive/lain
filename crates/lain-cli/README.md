@@ -40,7 +40,8 @@ The status banner and right-hand scratchpad/rules drawer stay fixed while select
 Up/Down select layers, nodes and tools; Space folds the selection when the composer is empty.
 The minimum terminal size is 120 columns by 30 rows; smaller windows show a resize message instead of clipped panels.
 PgUp/PgDn scroll the lanes, including long answers; changing selection returns to the selected heading.
-Shift+PgUp/PgDn scrolls the scratchpad; Ctrl+PgUp/PgDn scrolls procedural rules, independently of selection.
+Alt+PgUp/PgDn is the portable scratchpad binding, including in stock Konsole. Shift+PgUp/PgDn remains an alias,
+but Konsole captures it for scrollback. Ctrl+PgUp/PgDn scrolls procedural rules, independently of selection.
 All drawer offsets clamp to the visible content, including after a resize or shorter content replaces it.
 Paging uses the target pane's visible height minus one line for overlap, with a minimum step of one.
 An expanded selected tool opens its full output in the right drawer; PgUp/PgDn then scroll that output. The lane preview

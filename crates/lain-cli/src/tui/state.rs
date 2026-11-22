@@ -285,9 +285,12 @@ impl State {
             KeyCode::PageDown | KeyCode::PageUp => {
                 if key
                     .modifiers
-                    .intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
                 {
-                    let (scroll, page) = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    let (scroll, page) = if key
+                        .modifiers
+                        .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    {
                         (&mut self.scroll.plan, self.scroll.plan_page.max(1))
                     } else {
                         (&mut self.scroll.rules, self.scroll.rules_page.max(1))
