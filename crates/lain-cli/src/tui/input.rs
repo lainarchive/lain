@@ -138,7 +138,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                                         else { Command::SendMessage { session_id: id.clone(), text } };
                                     active_request = Some(client.send(command).await?);
                                 }
-                            } else { state.notice = "Offline demo: no message sent".into(); state.running = false; }
+                            } else { state.not_sent(started.elapsed()); }
                         }
                         Effect::Steer(text) => {
                             if let (Some(client), Some(id)) = (&mut client, &session) {

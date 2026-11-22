@@ -179,6 +179,36 @@ fn sample_dump() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn offline_submissions_finish_as_not_sent_and_can_be_rewound(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::sample()?;
+    state.composer = "offline prompt".into();
+    assert!(matches!(
+        state.key(key(KeyCode::Enter), Duration::ZERO),
+        Effect::Submit { .. }
+    ));
+    state.not_sent(Duration::from_secs(1));
+    assert!(!state.running);
+    let task = state
+        .active
+        .as_ref()
+        .and_then(|id| state.tasks.get(id))
+        .ok_or("missing turn")?;
+    assert_eq!(task.phase.label(), "not sent");
+    assert_eq!(task.ended, Some(Duration::from_secs(1)));
+    assert!(render(&state)?.contains("not sent"));
+    state.key(key(KeyCode::Esc), Duration::from_millis(1010));
+    assert!(matches!(
+        state.key(key(KeyCode::Esc), Duration::from_millis(1020)),
+        Effect::Rewind
+    ));
+    assert_eq!(state.composer, "offline prompt");
+    state.not_sent(Duration::from_secs(2));
+    assert!(!state.running);
+    Ok(())
+}
+
+#[test]
 fn paging_up_moves_immediately_after_the_drawer_reaches_bottom(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
