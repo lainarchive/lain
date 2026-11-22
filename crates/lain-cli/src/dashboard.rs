@@ -410,6 +410,16 @@ pub fn router(
         .with_state(handler)
 }
 
+struct DashboardAccess(Arc<DaemonHandler>);
+
+impl Drop for DashboardAccess {
+    fn drop(&mut self) {
+        if let Ok(mut url) = self.0.dashboard_url.lock() {
+            *url = None;
+        }
+    }
+}
+
 pub async fn serve(
     handler: Arc<DaemonHandler>,
     shutdown: watch::Receiver<bool>,
@@ -451,19 +461,24 @@ async fn serve_at(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    eprintln!("http://127.0.0.1:4040/#token={token}");
-    axum::serve(
-        listener,
-        router(handler, "127.0.0.1:4040".into(), assets, token),
-    )
-    .with_graceful_shutdown(async move {
-        while !*shutdown.borrow() {
-            if shutdown.changed().await.is_err() {
-                break;
+    let authority = listener.local_addr()?.to_string();
+    let url = format!("http://{authority}/#token={token}");
+    *handler
+        .dashboard_url
+        .lock()
+        .map_err(|_| Error::failure("DASHBOARD_ACCESS", "Dashboard access unavailable"))? =
+        Some(url.clone());
+    let _access = DashboardAccess(handler.clone());
+    eprintln!("{url}");
+    axum::serve(listener, router(handler, authority, assets, token))
+        .with_graceful_shutdown(async move {
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
             }
-        }
-    })
-    .await?;
+        })
+        .await?;
     Ok(())
 }
 
@@ -471,6 +486,76 @@ async fn serve_at(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn dashboard_access_tracks_bridge_and_not_status(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let handler = Arc::new(DaemonHandler::new(
+            Arc::new(Mutex::new(lain_memory::MemoryStore::open(":memory:")?)),
+            Arc::new(crate::daemon::ConfigFactory::new("missing.json", ".")),
+        ));
+        let _directory = tempfile::tempdir()?;
+        #[cfg(unix)]
+        let endpoint = lain_ipc::Endpoint(_directory.path().join("ipc.sock"));
+        #[cfg(windows)]
+        let endpoint = lain_ipc::Endpoint(
+            format!(
+                "{}-access-{}",
+                lain_ipc::DEFAULT_PIPE_NAME,
+                std::process::id()
+            )
+            .into(),
+        );
+        let (ipc_stop, ipc_rx) = watch::channel(false);
+        let ipc =
+            tokio::spawn(lain_ipc::IpcServer::bind(&endpoint)?.serve(handler.clone(), ipc_rx));
+        let mut client = lain_ipc::IpcClient::connect(&endpoint).await?;
+        assert_eq!(
+            client.request(lain_ipc::Command::GetDashboardUrl).await?,
+            vec![lain_ipc::Event::DashboardUrl { url: None }]
+        );
+        let (stop, receiver) = watch::channel(false);
+        let http = tokio::spawn(serve_at(handler, receiver, "127.0.0.1:0".parse()?));
+        let url = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let [lain_ipc::Event::DashboardUrl { url: Some(url) }] = client
+                    .request(lain_ipc::Command::GetDashboardUrl)
+                    .await?
+                    .as_slice()
+                {
+                    break Ok::<_, crate::Error>(url.clone());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        let (base, token) = url
+            .split_once("/#token=")
+            .ok_or("missing dashboard credential")?;
+        assert_eq!(
+            reqwest::Client::new()
+                .get(format!("{base}/api/v1/status"))
+                .bearer_auth(token)
+                .send()
+                .await?
+                .status(),
+            200
+        );
+        let status = client
+            .request(lain_ipc::Command::GetStatus { session_id: None })
+            .await?;
+        assert!(!serde_json::to_string(&status)?.contains(token));
+        stop.send(true)?;
+        http.await??;
+        assert_eq!(
+            client.request(lain_ipc::Command::GetDashboardUrl).await?,
+            vec![lain_ipc::Event::DashboardUrl { url: None }]
+        );
+        client.close().await?;
+        ipc_stop.send(true)?;
+        ipc.await??;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn occupied_dashboard_port_does_not_stop_ipc() -> Result<(), Box<dyn std::error::Error>> {
@@ -502,6 +587,10 @@ mod tests {
             client.request(lain_ipc::Command::Ping).await?.as_slice(),
             [lain_ipc::Event::Pong { .. }]
         ));
+        assert_eq!(
+            client.request(lain_ipc::Command::GetDashboardUrl).await?,
+            vec![lain_ipc::Event::DashboardUrl { url: None }]
+        );
         tokio::task::yield_now().await;
         assert!(!http.is_finished());
         stop.send(true)?;
