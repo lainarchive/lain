@@ -14,10 +14,12 @@ use super::{
 fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::sample()?;
     for (index, screen) in Screen::ALL.iter().enumerate() {
-        state.key(
-            key(KeyCode::Char(char::from(b'1' + index as u8))),
-            Duration::ZERO,
-        );
+        let event = if state.screen == Screen::Creator {
+            KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)
+        } else {
+            key(KeyCode::Char(char::from(b'1' + index as u8)))
+        };
+        state.key(event, Duration::ZERO);
         assert_eq!(state.screen, *screen);
         let text = render(&state)?;
         assert!(text.contains(screen.name()));
@@ -272,7 +274,14 @@ fn shell_help_and_tab_highlight_fit_minimum_size() -> Result<(), Box<dyn std::er
         .ok_or("missing cell")?;
     assert_eq!(cell.fg, super::theme::CYAN);
     assert_eq!(cell.bg, super::theme::PANEL);
-    state.key(key(KeyCode::Char('1')), Duration::ZERO);
+    state.key(
+        KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    state.key(
+        KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
     state.key(key(KeyCode::Char('?')), Duration::ZERO);
     draw_scrolled(&mut terminal, &mut state)?;
     let text = contents(&terminal);
@@ -357,8 +366,201 @@ fn plugins_permission_colors_and_detail_paging() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[test]
+fn creator_reports_page_by_the_viewport_without_overshooting(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use super::creator::{Operation, Step};
+    let mut state = State::sample()?;
+    state.screen = Screen::Creator;
+    state.creator.step = Step::Test;
+    state.creator.simulate(Operation::Test)?;
+    if let Some(report) = &mut state.creator.report {
+        report.execution.stdout = (0..100)
+            .map(|n| format!("stdout-line-{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    for height in [30, 33, 45] {
+        let mut terminal = Terminal::new(TestBackend::new(140, height))?;
+        state.scroll.creator_output = 0;
+        draw_scrolled(&mut terminal, &mut state)?;
+        for _ in 0..20 {
+            state.key(key(KeyCode::PageDown), Duration::ZERO);
+            draw_scrolled(&mut terminal, &mut state)?;
+        }
+        assert!(contents(&terminal).contains("stdout-line-99"));
+        assert_eq!(state.scroll.creator_output, state.scroll.creator_max);
+        let bottom = state.scroll.creator_output;
+        state.key(key(KeyCode::PageUp), Duration::ZERO);
+        assert_eq!(
+            state.scroll.creator_output,
+            bottom.saturating_sub(state.scroll.creator_page)
+        );
+    }
+    Ok(())
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+#[test]
+fn creator_steps_validate_schema_and_keep_editor_drafts() -> Result<(), Box<dyn std::error::Error>>
+{
+    use super::creator::{editor, Step};
+    let mut state = State::sample()?;
+    state.screen = Screen::Creator;
+    state.key(key(KeyCode::Tab), Duration::ZERO);
+    assert_eq!(state.creator.step, Step::Schema);
+    state.creator.schema = editor("{", "Input schema");
+    assert!(render(&state)?.contains("Invalid schema"));
+    state.creator.schema = editor(r#"{"type":7}"#, "Input schema");
+    assert!(state.creator.schema_value().is_err());
+    state.creator.schema = editor(r#"{"type":"object"}"#, "Input schema");
+    assert!(render(&state)?.contains("Valid schema"));
+    state.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
+        Duration::ZERO,
+    );
+    assert_eq!(state.creator.step, Step::Interpreter);
+    state.key(key(KeyCode::Down), Duration::ZERO);
+    assert_eq!(
+        state.creator.interpreter,
+        lain_core::plugin::manifest::ScriptInterpreter::Powershell
+    );
+    state.key(key(KeyCode::Tab), Duration::ZERO);
+    state.creator.source = editor("", "Source");
+    for c in "q12?".chars() {
+        assert_eq!(
+            state.key(key(KeyCode::Char(c)), Duration::ZERO),
+            Effect::None
+        );
+    }
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.key(key(KeyCode::Char('x')), Duration::ZERO);
+    assert_eq!(state.creator.source.lines(), &["q12?", "x"]);
+    assert!(state.overlay.is_none());
+    state.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    state.key(
+        KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        Duration::ZERO,
+    );
+    assert_eq!(state.creator.source.lines(), &["q12?", "x"]);
+    state.key(key(KeyCode::BackTab), Duration::ZERO);
+    assert_eq!(state.creator.step, Step::Interpreter);
+    Ok(())
+}
+
+#[test]
+fn creator_publish_requires_code_access_and_typed_confirmation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use super::creator::{Operation, Step};
+    let mut state = State::sample()?;
+    state.screen = Screen::Creator;
+    state.creator.step = Step::Publish;
+    assert!(render(&state)?.contains("Publish disabled: Architect"));
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    assert!(state.overlay.is_none());
+    state.mode = Mode::Ask;
+    assert!(render(&state)?.contains("Publish disabled: Ask"));
+    state.mode = Mode::Code;
+    state.creator.allowed = Some(false);
+    assert!(render(&state)?.contains("creator mode is disabled"));
+    state.creator.allowed = Some(true);
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.paste("y");
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    let text = render(&state)?;
+    for expected in [
+        "Confirm publish",
+        ".lain/tools/tool-demo_created.py",
+        ".lain/tools/tool-demo_created.json",
+        "read_fs",
+        "subprocess",
+        "unsandboxed",
+        "host user",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    state.key(key(KeyCode::Char('y')), Duration::ZERO);
+    state.mode = Mode::Ask;
+    assert_eq!(state.key(key(KeyCode::Enter), Duration::ZERO), Effect::None);
+    state.key(key(KeyCode::Esc), Duration::ZERO);
+    state.mode = Mode::Code;
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    state.key(key(KeyCode::Char('y')), Duration::ZERO);
+    assert_eq!(
+        state.key(key(KeyCode::Enter), Duration::ZERO),
+        Effect::Creator(Operation::Publish)
+    );
+    state.creator.dirty = true;
+    state.creator.simulate(Operation::Publish)?;
+    assert!(state.creator.dirty);
+    assert!(render(&state)?.contains("SIMULATED publish"));
+    assert!(render(&state)?.contains("no files written"));
+    state.creator.step = Step::Test;
+    assert_eq!(
+        state.key(key(KeyCode::Enter), Duration::ZERO),
+        Effect::Creator(Operation::Test)
+    );
+    state.creator.simulate(Operation::Test)?;
+    let text = render(&state)?;
+    for expected in [
+        "SIMULATED test",
+        "Exit: 0",
+        "Stdout",
+        "Stderr",
+        "Result",
+        "Duration:",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    Ok(())
+}
+
+#[test]
+fn creator_rejects_invalid_drafts_and_pastes_without_submitting(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use super::creator::{editor, Step};
+    let mut state = State::sample()?;
+    state.paste("keep\nthis draft");
+    assert_eq!(state.composer, "keep\nthis draft");
+    state.screen = Screen::Creator;
+    state.creator.step = Step::Source;
+    state.creator.source = editor("", "Source");
+    state.paste("first\nsecond");
+    assert_eq!(state.creator.source.lines(), &["first", "second"]);
+    state.creator.busy = true;
+    state.paste("must not insert");
+    assert_eq!(state.creator.source.lines(), &["first", "second"]);
+    state.creator.busy = false;
+    state.creator.source = editor("", "Source");
+    assert!(state.creator.proposal().is_err());
+    state.creator.source = editor("print('x')", "Source");
+    state.creator.args = editor("{", "Sample input");
+    assert!(state.creator.proposal().is_err());
+    state.creator.args = editor("{}", "Sample input");
+    state.creator.name = editor("../escape", "Name");
+    state.mode = Mode::Code;
+    state.creator.step = Step::Publish;
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(state.overlay.is_none());
+    assert!(state
+        .creator
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("Name needs")));
+    state.creator.name = editor("ok", "Name");
+    state.creator.allowed = None;
+    state.key(key(KeyCode::Enter), Duration::ZERO);
+    assert!(state.overlay.is_none());
+    state.creator.schema = editor("[]", "Schema");
+    assert!(state.creator.schema_value().is_err());
+    Ok(())
 }
 
 #[test]
@@ -405,6 +607,15 @@ fn plugins_browse_filter_and_pass_creator_template() -> Result<(), Box<dyn std::
         std::path::PathBuf::from(".lain/plugins/echo.json")
     );
     assert!(template.manifest.as_ref().is_ok_and(|m| m.name == "echo"));
+    assert_eq!(state.creator.name.lines(), &["demo_echo"]);
+    assert!(state
+        .creator
+        .description
+        .lines()
+        .join("\n")
+        .contains("webhook"));
+    assert!(state.creator.schema_value()?.get("properties").is_some());
+    assert_eq!(state.creator.source.lines(), &[""]);
     assert!(render(&state)?.contains("Template: echo"));
     Ok(())
 }

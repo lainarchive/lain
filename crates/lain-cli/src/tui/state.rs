@@ -39,6 +39,7 @@ impl Mode {
 
 #[derive(Debug, PartialEq)]
 pub enum Effect {
+    Creator(super::creator::Operation),
     None,
     Submit { text: String, read_only: bool },
     Steer(String),
@@ -109,6 +110,9 @@ pub enum Selection {
 
 #[derive(Clone, Copy, Default)]
 pub struct Scroll {
+    pub creator_output: u16,
+    pub creator_page: u16,
+    pub creator_max: u16,
     pub plugin_detail: u16,
     pub plugin_page: u16,
     pub plugin_max: u16,
@@ -123,6 +127,7 @@ pub struct Scroll {
 }
 
 pub struct State {
+    pub creator: super::creator::Creator,
     pub plugins: super::plugins::Plugins,
     pub creator_template: Option<lain_ipc::ManifestEntry>,
     pub screen: Screen,
@@ -162,6 +167,7 @@ pub struct State {
 impl State {
     pub fn new(branch: String, workspace: &Path) -> Result<Self, Error> {
         Ok(Self {
+            creator: super::creator::Creator::default(),
             plugins: super::plugins::Plugins::default(),
             creator_template: None,
             screen: Screen::Session,
@@ -305,7 +311,7 @@ impl State {
                 }
             }
             Action::Quit | Action::NewSession => {
-                if !confirmed && (self.running || !self.composer.is_empty()) {
+                if !confirmed && (self.running || !self.composer.is_empty() || self.creator.dirty) {
                     self.open(Overlay::Confirm(action));
                 } else if action == Action::Quit {
                     return Effect::Quit;
@@ -342,6 +348,31 @@ impl State {
         Effect::None
     }
 
+    pub fn paste(&mut self, text: &str) {
+        let text = clean(text);
+        if let Some(Overlay::Palette { query, selected }) = &mut self.overlay {
+            query.push_str(&text.replace(['\n', '\t'], " "));
+            *selected = 0;
+            return;
+        }
+        if self.overlay.is_some() {
+            return;
+        }
+        match self.screen {
+            Screen::Creator => self.creator.paste(&text),
+            Screen::Session => self.composer.push_str(&text),
+            Screen::Plugins if self.plugins.filtering => {
+                for c in text.replace(['\n', '\t'], " ").chars() {
+                    let _ = self.plugins.key(
+                        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                        &mut self.scroll,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn key(&mut self, key: KeyEvent, now: Duration) -> Effect {
         self.tick(now);
         if key.code != KeyCode::Esc {
@@ -371,6 +402,7 @@ impl State {
             || (key.code == KeyCode::Char('?')
                 && self.composer.is_empty()
                 && !(self.screen == Screen::Plugins && self.plugins.filtering)
+                && self.screen != Screen::Creator
                 && self.overlay.is_none())
         {
             if !matches!(self.overlay, Some(Overlay::Help)) {
@@ -413,6 +445,32 @@ impl State {
                         _ => None,
                     }
                 }
+                Overlay::Publish { typed } => {
+                    match key.code {
+                        KeyCode::Char(c)
+                            if !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                                && typed.len() < 32 =>
+                        {
+                            typed.push(c)
+                        }
+                        KeyCode::Backspace => {
+                            typed.pop();
+                        }
+                        KeyCode::Enter if typed == "y" => {
+                            let effect = self
+                                .creator
+                                .request(self.mode, super::creator::Operation::Publish);
+                            if effect != Effect::None {
+                                self.close();
+                                return effect;
+                            }
+                        }
+                        _ => {}
+                    }
+                    None
+                }
                 Overlay::Confirm(action) if key.code == KeyCode::Enter => {
                     return self.execute(*action, now, true);
                 }
@@ -424,6 +482,21 @@ impl State {
             }
             self.overlay = Some(overlay);
             return Effect::None;
+        }
+        if self.screen == Screen::Creator {
+            if self.creator.step == super::creator::Step::Publish && key.code == KeyCode::Enter {
+                if self
+                    .creator
+                    .request(self.mode, super::creator::Operation::Publish)
+                    != Effect::None
+                {
+                    self.open(Overlay::Publish {
+                        typed: String::new(),
+                    });
+                }
+                return Effect::None;
+            }
+            return self.creator.key(key, self.mode, &mut self.scroll);
         }
         if self.screen == Screen::Plugins && self.plugins.filtering {
             return self.plugin_key(key, now);
@@ -497,6 +570,14 @@ impl State {
     fn plugin_key(&mut self, key: KeyEvent, now: Duration) -> Effect {
         match self.plugins.key(key, &mut self.scroll) {
             Ok(Some(template)) => {
+                if self.creator.busy {
+                    self.notify(
+                        "Wait for the Creator request before replacing its draft",
+                        now,
+                    );
+                    return Effect::None;
+                }
+                self.creator.prefill(&template);
                 self.creator_template = Some(template);
                 self.navigate(Screen::Creator);
             }
@@ -807,6 +888,7 @@ impl State {
             Path::new(env!("CARGO_MANIFEST_DIR")),
         )?;
         state.plugins = super::plugins::Plugins::sample()?;
+        state.creator = super::creator::Creator::sample();
         state.model_chain = "planner → coder → advisor".into();
         state.context = 42_000;
         state.context_window = 128_000;
