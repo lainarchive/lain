@@ -11,6 +11,104 @@ enum Case {
     Disconnected,
 }
 
+#[tokio::test]
+async fn doctor_rejects_session_invalid_config_in_text_and_json()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("lain.json");
+    let config = serde_json::json!({
+        "provider":{"kind":"open_ai_compatible","base_url":"http://127.0.0.1:1/v1","api_key_env":null},
+        "model":"fixture", "system_prompt":"", "temperature":null, "max_turns":4,
+        "max_consecutive_tool_errors":3,"memory_context_limit":5,"budget":{}
+    });
+    for (field, value, message) in [
+        (
+            "max_turns",
+            serde_json::json!(0),
+            "max_turns must be at least 1",
+        ),
+        ("model", serde_json::json!(""), "model is required"),
+        (
+            "temperature",
+            serde_json::json!(3.0),
+            "temperature must be 0.0..=2.0",
+        ),
+    ] {
+        let mut invalid = config.clone();
+        *invalid.get_mut(field).ok_or("missing fixture field")? = value;
+        std::fs::write(&path, serde_json::to_vec(&invalid)?)?;
+        for json in [false, true] {
+            let mut command = Process::new(env!("CARGO_BIN_EXE_lain"));
+            command
+                .args(["doctor", "--config"])
+                .arg(&path)
+                .current_dir(directory.path())
+                .kill_on_drop(true);
+            if json {
+                command.arg("--json");
+            }
+            let output = timeout(Duration::from_secs(8), command.output()).await??;
+            assert_eq!(output.status.code(), Some(1));
+            let text = String::from_utf8(output.stdout)?;
+            assert!(text.contains(message), "missing validation error: {text}");
+            if json {
+                let report: serde_json::Value = serde_json::from_str(&text)?;
+                let checks = report
+                    .get("checks")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or("missing checks")?;
+                assert!(checks.iter().any(|check| {
+                    check.get("name").and_then(serde_json::Value::as_str) == Some("model config")
+                        && check.get("level").and_then(serde_json::Value::as_str) == Some("fail")
+                }));
+                assert!(!checks.iter().any(|check| {
+                    check.get("name").and_then(serde_json::Value::as_str)
+                        == Some("local model endpoint")
+                }));
+            } else {
+                assert!(text.contains("✗ model config:"));
+            }
+        }
+    }
+    for (bytes, valid) in [
+        (serde_json::to_vec(&config)?, true),
+        (Vec::new(), false),
+        (b"not json".to_vec(), false),
+    ] {
+        std::fs::write(&path, bytes)?;
+        let output = timeout(
+            Duration::from_secs(8),
+            Process::new(env!("CARGO_BIN_EXE_lain"))
+                .args(["doctor", "--json", "--config"])
+                .arg(&path)
+                .current_dir(directory.path())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await??;
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let checks = report
+            .get("checks")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("missing checks")?;
+        assert_eq!(
+            checks.iter().any(
+                |check| check.get("name").and_then(serde_json::Value::as_str)
+                    == Some("model config")
+            ),
+            !valid
+        );
+        assert_eq!(
+            checks.iter().any(
+                |check| check.get("name").and_then(serde_json::Value::as_str)
+                    == Some("local model endpoint")
+            ),
+            valid
+        );
+    }
+    Ok(())
+}
+
 struct Fixture {
     case: Case,
     stop: watch::Sender<bool>,
