@@ -292,8 +292,9 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                             if let Some(id)=finish_new_session(&mut state,candidate,&event,started.elapsed()) {
                                 let old=abandon_turn(&mut session,&mut active_request,&mut poll_request,&mut ignored);
                                 session=Some(id);
-                                if let (Some(client),Some(old))=(&mut client,old) {
-                                    ignored.insert(client.send(Command::CancelTurn {session_id:old}).await?);
+                                if let Some(client)=&mut client {
+                                    if let Some(old)=old {ignored.insert(client.send(Command::CancelTurn {session_id:old}).await?);}
+                                    client.send(Command::InspectRules {session_id:None,limit:Some(20)}).await?;
                                 }
                             }
                         }
