@@ -1,8 +1,7 @@
 use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
-use lain_plugin::{DynamicPlugin, MAX_SCRIPT_BYTES, PluginManager, manifest::ScriptInterpreter};
-use serde::Deserialize;
+use lain_plugin::{DynamicPlugin, MAX_SCRIPT_BYTES, PluginManager, manifest::ScriptProposal};
 use serde_json::{Value, json};
 
 use super::{
@@ -51,17 +50,6 @@ impl ToolRegistry {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ScriptRequest {
-    name: String,
-    description: String,
-    parameters: Value,
-    interpreter: ScriptInterpreter,
-    source: String,
-    test_args: Value,
-}
-
 fn script_schema() -> Value {
     json!({
         "type":"object",
@@ -81,7 +69,7 @@ fn script_schema() -> Value {
 
 fn prepare(
     manager: &PluginManager,
-    request: ScriptRequest,
+    request: ScriptProposal,
 ) -> Result<(Arc<DynamicPlugin>, RegisteredTool, Value), ToolError> {
     let plugin = Arc::new(manager.prepare_script(
         request.name,
@@ -96,8 +84,34 @@ fn prepare(
     Ok((plugin, entry, request.test_args))
 }
 
-fn parse(args: Value) -> Result<ScriptRequest, ToolError> {
+fn parse(args: Value) -> Result<ScriptProposal, ToolError> {
     serde_json::from_value(args).map_err(|e| ToolError::Arguments(e.to_string()))
+}
+
+pub async fn test_tool_proposal(
+    manager: &PluginManager,
+    proposal: ScriptProposal,
+) -> Result<ToolOutput, ToolError> {
+    let (_, entry, test_args) = prepare(manager, proposal)?;
+    entry.dispatch(test_args).await
+}
+
+pub async fn publish_tool_proposal(
+    manager: &PluginManager,
+    registry: &ToolRegistry,
+    proposal: ScriptProposal,
+) -> Result<ToolOutput, ToolError> {
+    if proposal.name == UPDATE_SCRATCHPAD_TOOL_NAME || registry.contains(&proposal.name) {
+        return Err(ToolError::Duplicate(proposal.name));
+    }
+    let (plugin, entry, test_args) = prepare(manager, proposal)?;
+    let test = entry.dispatch(test_args).await?;
+    let name = entry.definition.name.clone();
+    let path = registry.register_batch(vec![entry], || Ok(manager.persist_script(&plugin)?))?;
+    Ok(ToolOutput {
+        content: json!({"name":name,"path":path,"test_result":test.content}).to_string(),
+        exit_code: Some(0),
+    })
 }
 
 #[async_trait]
@@ -119,19 +133,7 @@ impl Tool for CreateToolTool {
             .registry
             .upgrade()
             .ok_or_else(|| ToolError::Execution("tool registry closed".into()))?;
-        let request = parse(args)?;
-        if request.name == UPDATE_SCRATCHPAD_TOOL_NAME || registry.contains(&request.name) {
-            return Err(ToolError::Duplicate(request.name));
-        }
-        let (plugin, entry, test_args) = prepare(&self.manager, request)?;
-        let test = entry.dispatch(test_args).await?;
-        let name = entry.definition.name.clone();
-        let path =
-            registry.register_batch(vec![entry], || Ok(self.manager.persist_script(&plugin)?))?;
-        Ok(ToolOutput {
-            content: json!({"name":name,"path":path,"test_result":test.content}).to_string(),
-            exit_code: Some(0),
-        })
+        publish_tool_proposal(&self.manager, &registry, parse(args)?).await
     }
 }
 
@@ -150,7 +152,6 @@ impl Tool for TestToolTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
-        let (_, entry, test_args) = prepare(&self.manager, parse(args)?)?;
-        entry.dispatch(test_args).await
+        test_tool_proposal(&self.manager, parse(args)?).await
     }
 }
