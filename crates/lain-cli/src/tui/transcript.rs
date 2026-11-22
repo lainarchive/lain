@@ -11,11 +11,46 @@ use ratatui::{
 use throbber_widgets_tui::{Throbber, ThrobberState};
 
 use super::{
-    app,
     launch_view::fit,
     state::{Scroll, Selection, State},
     theme::*,
 };
+
+const TIPS: [&str; 8] = [
+    "Esc Esc rewinds the prompt; executed tools and writes are not undone.",
+    "Ctrl+K finds screens, commands, and modes.",
+    "/creator builds a tool; review its source and test before publishing.",
+    "Ctrl+O expands the selected or last tool output.",
+    "Alt+←/→ switches screens without losing your draft.",
+    "PgUp reads earlier output; PgDn to the bottom follows again.",
+    "Ctrl+G opens the DAG; Ctrl+P opens the plan and rules.",
+    "/plugins shows tool permissions; scripts run unsandboxed as the host user.",
+];
+
+pub fn arguments(text: &str) -> String {
+    fn value(v: &serde_json::Value) -> String {
+        match v.as_str() {
+            Some(text) if !text.is_empty() && !text.contains([',', '\n', '\r']) => text.to_owned(),
+            _ => v.to_string(),
+        }
+    }
+    let display = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::Object(fields)) if fields.len() == 1 => {
+            fields.values().next().map(value).unwrap_or_default()
+        }
+        Ok(serde_json::Value::Object(fields)) => fields
+            .iter()
+            .map(|(key, v)| format!("{key}={}", value(v)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Ok(v) => value(&v),
+        Err(_) => crate::render::clean(text)
+            .lines()
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    crate::render::clean(&display).replace(['\n', '\r', '\t'], " ")
+}
 
 pub fn spinner(now: Duration) -> String {
     let mut state = ThrobberState::default();
@@ -174,13 +209,15 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                     ),
                 ));
             }
-            rows.push((
-                None,
-                Line::styled(
-                    format!("  {} {}", task.phase.glyph(), task.phase.label()),
-                    Style::default().fg(super::view::color(task.phase)),
-                ),
-            ));
+            if task.phase != super::state::Phase::Running {
+                rows.push((
+                    None,
+                    Line::styled(
+                        format!("  {} {}", task.phase.glyph(), task.phase.label()),
+                        Style::default().fg(super::view::color(task.phase)),
+                    ),
+                ));
+            }
             if state.collapsed_nodes.contains(&node.id) {
                 continue;
             }
@@ -215,20 +252,33 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                     Line::from(vec![
                         Span::styled("▎ ", Style::default().fg(CYAN)),
                         Span::styled(status, Style::default().fg(color)),
-                        Span::raw(format!(" {}({})", tool.name, tool.arguments)),
+                        Span::raw(format!(
+                            " {}({})",
+                            tool.name,
+                            if tool.expanded {
+                                arguments(&tool.arguments)
+                            } else {
+                                fit(
+                                    &arguments(&tool.arguments),
+                                    usize::from(width).saturating_sub(tool.name.len() + 14),
+                                )
+                            }
+                        )),
                         Span::styled(format!("  {elapsed:.1}s"), Style::default().fg(MUTED)),
                     ]),
                 ));
-                for line in tool
+                for (index, line) in tool
                     .output
                     .lines()
                     .take(if tool.expanded { usize::MAX } else { 3 })
+                    .enumerate()
                 {
                     rows.push((
                         None,
                         Line::styled(
                             format!(
-                                "▎  └ {}",
+                                "▎  {} {}",
+                                if index == 0 { "└" } else { " " },
                                 if tool.expanded {
                                     line.to_owned()
                                 } else {
@@ -391,7 +441,10 @@ pub fn working(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
     let Some(task) = state.active.as_ref().and_then(|id| state.tasks.get(id)) else {
         return;
     };
-    let tip = app::COMMANDS.get(((now.as_secs() / 5) as usize) % app::COMMANDS.len());
+    let tip = TIPS
+        .get(((now.as_secs() / 8) as usize) % TIPS.len())
+        .copied()
+        .unwrap_or_default();
     let lines = vec![
         Line::styled(
             format!(
@@ -402,12 +455,7 @@ pub fn working(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
             ),
             Style::default().fg(CYAN),
         ),
-        Line::styled(
-            tip.map_or(String::new(), |tip| {
-                format!("└ Tip: /{} — {} {}", tip.id, tip.title, tip.hint)
-            }),
-            Style::default().fg(MUTED),
-        ),
+        Line::styled(format!("└ Tip: {tip}"), Style::default().fg(MUTED)),
     ];
     frame.render_widget(Paragraph::new(lines), area);
 }

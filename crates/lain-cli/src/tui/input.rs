@@ -42,6 +42,7 @@ pub(super) fn handle_key(
         || (key.code == KeyCode::Char('q')
             && state.composer.is_empty()
             && state.screen != super::app::Screen::Creator
+            && !(state.screen == super::app::Screen::Memory && state.inspect.filtering)
             && !(state.screen == super::app::Screen::Plugins && state.plugins.filtering))
     {
         Effect::Quit
@@ -146,13 +147,16 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
     let mut ignored = BTreeSet::new();
     let mut plugin_requests = plugins::Requests::default();
     let mut creator_requests = creator_ipc::Requests::default();
+    let mut inspect_requests = super::inspect::Requests::default();
     let mut plugins_session = session.clone();
     let result = async {
         loop {
-            if !demo {state.session_id = session.clone();}
+            if !demo {state.session_id = session.clone();state.inspect.config_path=options.config.clone();}
             if plugins_session != session {
                 ignored.extend(plugin_requests.clear());
                 ignored.extend(creator_requests.clear());
+                ignored.extend(inspect_requests.clear());
+                state.inspect.reset_socket();
                 state.creator.reset_access();
                 state.plugins.refresh();
                 plugins_session = session.clone();
@@ -167,6 +171,9 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                     creator_requests.access(client, session.as_deref(), &mut state.creator).await?;
                 } else {state.creator.set_access(true);}
             }
+            if let Some(client)=&mut client {
+                inspect_requests.ensure(client,&mut state.inspect,state.screen,started.elapsed()).await?;
+            } else {state.inspect.demo_refresh(state.screen,started.elapsed());}
             terminal.draw(|frame| {
                 state.scroll = view::draw(frame, &state, started.elapsed());
             })?;
@@ -246,6 +253,7 @@ pub async fn run(options: &Options, demo: bool) -> Result<(), Error> {
                 event = next(&mut client) => {
                     let Some((request, event)) = event? else { return Err(Error::failure("TUI_DISCONNECTED", "Daemon closed the connection")); };
                     if ignored.contains(&request) { continue; }
+                    if inspect_requests.event(request,&event,&mut state.inspect,started.elapsed()) {continue;}
                     if plugin_requests.event(request, &event, &mut state.plugins) {
                         if let Event::Tools {session_id, allow_creator_mode, ..} = &event {
                             if session.as_deref() == Some(session_id.as_str()) {state.creator.set_access(*allow_creator_mode);}

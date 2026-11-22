@@ -1,5 +1,18 @@
 # Current Project State
 
+## Terminal inspection screens
+
+- The six-screen shell now includes read-only Memory (`InspectMemory`), Sessions (`ListSessions` + `GetStatus`),
+  and Models (telemetry plus bounded local Rust config metadata). No provider is constructed to inspect config.
+- Session attachment, model selection and memory editing are not exposed by IPC; the TUI labels those limitations.
+  Sessions omits unsupported timestamps, pid/uptime, directional tokens and cost. Offline fixtures are labelled synthetic.
+- Transcript headers compact actual arguments, previews use one branch glyph, and the working line rotates eight practical tips.
+  Model rates need two timed samples and exclude the initial lifetime token count; unknown live pricing stays hidden.
+- Linux checks passed 229 workspace tests, Clippy with warnings denied, Rust formatting and repository hygiene.
+  Fresh Konsole evidence: `/home/ubuntu/screenshots/ss_7dce20ed.png` (Sessions) and
+  `/home/ubuntu/screenshots/ss_23ec78da.png` (mid-turn). Memory/Models renders and unavailable states use TestBackend.
+  Live-provider UI interaction and native Windows remain unverified. Next: review the completed screens before adding capabilities.
+
 ## Rust frontier harness / TUI increment
 
 - `lain-harness` adds evidence-gated reports, immutable scopes and DAG validation, bounded repair,

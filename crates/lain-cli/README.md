@@ -38,8 +38,23 @@ the configured agent to execute host-permission tools. Lain is not a sandbox.
 without a daemon, config, provider call, or credentials. It uses the same renderer and keyboard handling.
 The numbered tabs are **Session, Plugins, Creator, Memory, Sessions, Models**. Session contains a borderless conversation transcript;
 Plugins browses disk manifests and active session tools. Creator edits, tests and publishes script proposals through the daemon.
-Memory, Sessions and Models remain named placeholders for later phases.
-Outside overlays, 1–6 switches screens when not editing a Creator field or Plugins filter and the Session composer is empty or unfocused.
+Memory, Sessions and Models are read-only inspection screens; unavailable socket capabilities are labelled rather than simulated in live mode.
+
+- **4 Memory:** recent workspace-wide episodic memory and procedural rules via `InspectMemory` (50 of each),
+  with ↑↓ selection, `/` local filtering, PgUp/PgDn detail scrolling and `r` refresh.
+  Editing, deletion and semantic search are not available over the socket yet; use `lain ui`.
+- **5 Sessions:** `ListSessions` plus daemon `GetStatus`, ↑↓ selection and `r` refresh.
+  The list is live daemon memory, not saved history. Enter explains that attaching is not available over the socket yet:
+  `StartSession` creates a new session and refuses existing ids. Unknown pid, uptime, age, token direction and cost are omitted.
+- **6 Models:** current model, context usage and total tokens from telemetry, plus a local observed token rate only after two timed samples.
+  Cost is omitted without known pricing. The local `--config` / `LAIN_CONFIG` / `lain.json` metadata is read without building a provider
+  or resolving credential environment variables. Rust config currently has one provider/model pair; it may differ from the daemon's config.
+  `r` reloads that metadata. Edit `model` / `provider` in that file, then start a new session; selection is not supported over the socket.
+
+The offline demo fills all three screens with labelled synthetic data, including optional Sessions columns that live IPC does not provide.
+Tool headers compact actual JSON arguments; empty objects show `tool()`. `repo_map` really takes no arguments, while demo `memory_read`
+uses a real query. Preview continuation lines keep their indentation without repeating `└`. The working line rotates eight practical tips.
+Outside overlays, 1–6 switches screens when not editing a Creator field or a Plugins/Memory filter and the Session composer is empty or unfocused.
 Alt+Left/Right always switches screens, closing overlays while preserving the Session draft and active turn.
 
 On **Plugins (2)**, Up/Down selects manifests or active tools; PgUp/PgDn scrolls the detail pane.

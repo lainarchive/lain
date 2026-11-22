@@ -119,6 +119,9 @@ pub enum Selection {
 
 #[derive(Clone, Copy, Default)]
 pub struct Scroll {
+    pub memory_detail: u16,
+    pub memory_page: u16,
+    pub memory_max: u16,
     pub transcript: usize,
     pub transcript_max: usize,
     pub transcript_page: usize,
@@ -142,6 +145,7 @@ pub struct Scroll {
 }
 
 pub struct State {
+    pub inspect: super::inspect::Inspect,
     pub demo: bool,
     pub follow: bool,
     pub unseen: bool,
@@ -191,6 +195,10 @@ pub struct State {
 impl State {
     pub fn new(branch: String, workspace: &Path) -> Result<Self, Error> {
         Ok(Self {
+            inspect: super::inspect::Inspect {
+                config_path: workspace.join("lain.json"),
+                ..super::inspect::Inspect::default()
+            },
             demo: false,
             follow: true,
             unseen: false,
@@ -271,6 +279,27 @@ impl State {
     #[cfg(test)]
     pub fn select_tool(&mut self, index: usize) {
         self.selected = Some(Selection::Tool(index));
+    }
+
+    pub fn tokens_used(&self) -> Option<u64> {
+        (!self.samples.is_empty()).then_some(self.total_tokens)
+    }
+
+    pub fn token_rate(&self, now: Duration) -> Option<f64> {
+        if self.demo {
+            return Some(self.velocity(now));
+        }
+        let (first, _) = self.samples.front()?;
+        let (last, _) = self.samples.back()?;
+        let elapsed = last.saturating_sub(*first).as_secs_f64();
+        (elapsed > 0.0 && now.saturating_sub(*last) <= Duration::from_secs(5)).then(|| {
+            self.samples
+                .iter()
+                .skip(1)
+                .map(|(_, count)| *count)
+                .sum::<u64>() as f64
+                / elapsed
+        })
     }
 
     pub fn velocity(&self, now: Duration) -> f64 {
@@ -424,6 +453,15 @@ impl State {
         match self.screen {
             Screen::Creator => self.creator.paste(&text),
             Screen::Session => self.composer.push_str(&text),
+            Screen::Memory if self.inspect.filtering => {
+                for c in text.replace(['\n', '\t'], " ").chars() {
+                    self.inspect.key(
+                        self.screen,
+                        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                        &mut self.scroll,
+                    );
+                }
+            }
             Screen::Plugins if self.plugins.filtering => {
                 for c in text.replace(['\n', '\t'], " ").chars() {
                     let _ = self.plugins.key(
@@ -465,6 +503,7 @@ impl State {
             || (key.code == KeyCode::Char('?')
                 && self.composer.is_empty()
                 && !(self.screen == Screen::Plugins && self.plugins.filtering)
+                && !(self.screen == Screen::Memory && self.inspect.filtering)
                 && self.screen != Screen::Creator
                 && self.overlay.is_none())
         {
@@ -575,6 +614,10 @@ impl State {
         if self.screen == Screen::Plugins && self.plugins.filtering {
             return self.plugin_key(key, now);
         }
+        if self.screen == Screen::Memory && self.inspect.filtering {
+            self.inspect.key(self.screen, key, &mut self.scroll);
+            return Effect::None;
+        }
         if let Some((commands, selected)) = self.slash() {
             match key.code {
                 KeyCode::Esc => {
@@ -628,6 +671,9 @@ impl State {
             return self.plugin_key(key, now);
         }
         if self.screen != Screen::Session {
+            if let Some(message) = self.inspect.key(self.screen, key, &mut self.scroll) {
+                self.notify(message, now);
+            }
             return if key.code == KeyCode::Char('q') && self.composer.is_empty() {
                 Effect::Quit
             } else {
@@ -1010,6 +1056,7 @@ impl State {
         state.model_chain = "planner → coder → advisor".into();
         state.context = 42_000;
         state.context_window = 128_000;
+        state.samples.push_back((Duration::ZERO, 0));
         state.samples.push_back((Duration::from_secs(1), 175));
         state.plan = "[✓] Inspect workspace\n[✓] Design lanes\n[✓] Add outlines\n[●] Wire execution\n[ ] Verify changes".into();
         state.rules = vec![
