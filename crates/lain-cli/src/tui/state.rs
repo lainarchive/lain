@@ -119,6 +119,8 @@ pub enum Selection {
 
 #[derive(Clone, Copy, Default)]
 pub struct Scroll {
+    pub composer: usize,
+    pub composer_max: usize,
     pub help: u16,
     pub help_page: u16,
     pub help_max: u16,
@@ -454,7 +456,10 @@ impl State {
         }
         match self.screen {
             Screen::Creator => self.creator.paste(&text),
-            Screen::Session => self.composer.push_str(&text),
+            Screen::Session => {
+                self.composer.push_str(&text);
+                self.scroll.composer = 0;
+            }
             Screen::Memory if self.inspect.filtering => {
                 for c in text.replace(['\n', '\t'], " ").chars() {
                     self.inspect.key(
@@ -728,6 +733,9 @@ impl State {
     }
 
     fn session_key(&mut self, key: KeyEvent, now: Duration) -> Effect {
+        if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            self.scroll.composer = 0;
+        }
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Effect::Quit,
             KeyCode::Char('q') if self.composer.is_empty() => Effect::Quit,
@@ -759,6 +767,20 @@ impl State {
                     Mode::Ask => Mode::Architect,
                 };
                 self.execute(Action::Mode(mode), now, false)
+            }
+            KeyCode::Up | KeyCode::Down
+                if !self.composer.is_empty()
+                    && (self.composer.contains('\n') || self.scroll.composer_max > 0) =>
+            {
+                self.scroll.composer = if key.code == KeyCode::Up {
+                    self.scroll
+                        .composer
+                        .saturating_add(1)
+                        .min(self.scroll.composer_max)
+                } else {
+                    self.scroll.composer.saturating_sub(1)
+                };
+                Effect::None
             }
             KeyCode::Up | KeyCode::Down => {
                 let rows = self.selections();

@@ -50,6 +50,44 @@ fn shell_routes_without_losing_a_draft() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn switching_to_code_recomputes_only_stale_creator_mode_refusals() -> Result<(),Box<dyn std::error::Error>> {
+    let mut state=State::demo_launch()?;
+    state.creator.request(Mode::Architect,super::creator::Operation::Publish);
+    assert!(state.creator.error.as_deref().is_some_and(|error|error.contains("Architect is read-only")));
+    state.composer="/code".into();
+    state.key(key(KeyCode::Enter),Duration::ZERO);
+    assert!(state.creator.error.is_none());
+    state.creator.error=Some("real execution failure".into());
+    state.composer="/ask".into();state.key(key(KeyCode::Enter),Duration::ZERO);
+    assert_eq!(state.creator.error.as_deref(),Some("real execution failure"));
+    Ok(())
+}
+
+#[test]
+fn multiline_paste_grows_and_scrolls_without_changing_the_submitted_text(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::demo_launch()?;
+    let text = (0..12)
+        .map(|i| format!("draft-line-{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.paste(&text);
+    let mut terminal = Terminal::new(TestBackend::new(140, 45))?;
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(contents(&terminal).contains("draft-line-11"));
+    assert!(!contents(&terminal).contains("draft-line-00"));
+    for _ in 0..12 {
+        state.key(key(KeyCode::Up), Duration::ZERO);
+    }
+    draw_scrolled(&mut terminal, &mut state)?;
+    assert!(contents(&terminal).contains("draft-line-00"));
+    assert!(
+        matches!(state.key(key(KeyCode::Enter),Duration::ZERO),Effect::Submit {text:submitted,..} if submitted==text)
+    );
+    Ok(())
+}
+
+#[test]
 fn demo_new_session_metadata_uses_the_current_clock() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = State::new("demo/workspace".into(), &std::env::current_dir()?)?;
     let now = Duration::from_secs(100);
