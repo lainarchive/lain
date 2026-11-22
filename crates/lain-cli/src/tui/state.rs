@@ -553,6 +553,12 @@ impl State {
                 text: text.into(),
             });
         }
+        state.next_turn = state
+            .notes
+            .iter()
+            .map(|note| note.turn)
+            .max()
+            .unwrap_or_default();
         state.rebuild()?;
         Ok(state)
     }
