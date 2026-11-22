@@ -193,6 +193,15 @@ pub fn screen_keys(screen: Screen) -> &'static [(&'static str, &'static str)] {
                 "Rewind / quit with empty composer / quit",
             ),
         ]
+    } else if screen == Screen::Plugins {
+        &[
+            ("↑↓ / PgUp/PgDn", "Select entry / scroll detail"),
+            ("r / /", "Refresh inventory and active tools / edit filter"),
+            (
+                "Enter / Esc",
+                "Apply filter or open manifest template in Creator / clear filter",
+            ),
+        ]
     } else {
         &[("—", "Placeholder: screen actions arrive in a later phase")]
     }
