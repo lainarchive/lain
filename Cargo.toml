@@ -1,3 +1,21 @@
+[package]
+name = "lain"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lain-cli = { path = "crates/lain-cli" }
+
+[dev-dependencies]
+lain-ipc = { path = "crates/lain-ipc" }
+tempfile = "3"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time"] }
+
+[lints]
+workspace = true
+
 [workspace]
 members = ["crates/*"]
 resolver = "3"

@@ -195,6 +195,8 @@ pub enum Event {
         name: String,
         ok: bool,
         summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
     },
     ReflectionGenerated {
         session_id: String,
@@ -283,6 +285,16 @@ mod tests {
 
     #[test]
     fn commands_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = serde_json::json!({"type":"tool_finished","session_id":"s","call_id":"c","name":"bash","ok":true,"summary":"ok"});
+        let event: Event = serde_json::from_value(legacy.clone())?;
+        assert!(matches!(
+            event,
+            Event::ToolFinished {
+                exit_code: None,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(event)?, legacy);
         for kind in ["send_message", "send_read_only_message"] {
             let legacy = serde_json::json!({"type":kind,"session_id":"s","text":"hello"});
             let command: Command = serde_json::from_value(legacy.clone())?;
@@ -369,6 +381,7 @@ mod tests {
                 name: "tool".into(),
                 ok: false,
                 summary: "failed".into(),
+                exit_code: None,
             },
             Event::ReflectionGenerated {
                 session_id: "s".into(),

@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lain_cli::{
+use crate::{
     args::{Action, Options, USAGE},
     daemon::{ConfigFactory, DaemonHandler},
     ui::{self, Renderer},
@@ -31,7 +31,7 @@ async fn daemon(options: Options) -> Result<(), Error> {
     let serve = server.serve(handler.clone(), receiver);
     let http = async {
         if options.serve_ui {
-            lain_cli::dashboard::serve(handler.clone(), http_shutdown).await
+            crate::dashboard::serve(handler.clone(), http_shutdown).await
         } else {
             std::future::pending::<Result<(), Error>>().await
         }
@@ -62,19 +62,25 @@ async fn daemon(options: Options) -> Result<(), Error> {
     Ok(())
 }
 
-async fn run() -> Result<bool, Error> {
+async fn dispatch() -> Result<u8, Error> {
     let options = Options::parse(std::env::args().skip(1))?;
     if let Action::Tui { demo } = options.action {
-        lain_cli::tui::run(&options, demo).await?;
-        return Ok(true);
+        crate::tui::run(&options, demo).await?;
+        return Ok(0);
     }
     if options.action == Action::Help {
         write!(io::stdout().lock(), "{USAGE}")?;
-        return Ok(true);
+        return Ok(0);
     }
     if options.action == Action::Daemon {
         daemon(options).await?;
-        return Ok(true);
+        return Ok(0);
+    }
+    if options.action == Action::Doctor {
+        return crate::doctor::execute(&options).await;
+    }
+    if let Action::Run(prompt) = &options.action {
+        return crate::run_report::execute(&options, prompt.clone()).await;
     }
     let mut client = ui::connect_or_spawn(&options).await?;
     let mut renderer = Renderer::new(options.plain);
@@ -104,14 +110,25 @@ async fn run() -> Result<bool, Error> {
         _ => true,
     };
     client.close().await?;
-    Ok(ok)
+    Ok(if ok { 0 } else { 1 })
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match run().await {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::FAILURE,
+pub fn run() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = ui::report_error(&Error::Io(error));
+            return ExitCode::FAILURE;
+        }
+    };
+    let result = runtime.block_on(dispatch());
+    // Cancelling an HTTP request does not cancel a blocking OS DNS lookup.
+    runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+    match result {
+        Ok(code) => ExitCode::from(code),
         Err(error) => {
             let _ = ui::report_error(&error);
             ExitCode::FAILURE

@@ -1,5 +1,26 @@
 # Current Project State
 
+## Launch integration: CLI packaging and diagnostics
+
+- Root is now package `lain` plus workspace; `src/main.rs` calls public `lain_cli::run()`. The former binary logic
+  moved into `crates/lain-cli/src/cli.rs`; executable spawn tests moved to root `tests/`. Node entry points remain unchanged.
+- `run` opts into deltas, builds bounded harness StepReports from actual tool events and additive optional
+  ToolFinished exit codes, and returns 0 verified / 2 completed-unverified / 1 failure. Command evidence also requires
+  builtin provenance from the live session's tool inventory; a plugin named bash is not trusted as the builtin.
+  `doctor` probes toolchains,
+  IPC without autospawn, the public origin-guarded `/healthz`, and configured `/models` routes with bounded deadlines.
+  Keys are checked by environment-variable name, never printed/transmitted; redirects and rustup auto-install are disabled.
+- TDD failures were observed for new argument variants, absent exit-code fields/report symbols, doctor functions
+  and missing tool provenance. Final workspace tests: **262 passed (34 suites, 12.04 s)**; Clippy, fmt, repository
+  hygiene and its eight-check self-test passed. The new health test's expected-body assertion was corrected.
+- `cargo install --path . --root /tmp/lain-install` passed (cold release 1m28s; final reinstall 12.14 s); installed
+  `--help` passed. Runtime shutdown has a 100 ms bound so abandoned blocking DNS cannot hold CLI exit.
+- Offline fixture lives in `/home/ubuntu/lain-step3-fixture.py`; runtime files in `/home/ubuntu/lain-step3-samples`.
+  Real installed daemon + fake local SSE provider executed `printf offline-check`; `run --json` reported observed_verified
+  with exit code 0. Final installed `doctor` and `doctor --json` reported 5 passed, no warnings/failures. Fixture and
+  daemon were stopped after verification. No Node entry-point/package changes; new direct Rust dependencies are registered.
+- Next: await the next launch step after the local commit; do not push. Native Windows and real remote providers remain unverified.
+
 ## Launch integration: reconnect
 
 - Step 2 adds persistent TUI reconnect state, draft preservation, interrupted turn/tool status and responsive

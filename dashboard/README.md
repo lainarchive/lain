@@ -11,7 +11,7 @@ From the repository root, using the Node version in [`.node-version`](../.node-v
 ```sh
 npm --prefix dashboard ci
 npm --prefix dashboard run build
-cargo run -p lain-cli -- ui
+cargo run -p lain -- ui
 ```
 
 Open the local URL printed by the daemon, including its token fragment. Treat
