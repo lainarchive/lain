@@ -166,6 +166,36 @@ impl ModelProvider for ScriptedProvider {
 struct ScriptedFactory(Arc<Notify>);
 
 #[tokio::test]
+async fn a_dropped_turn_settles_before_the_next_client_runs() -> TestResult {
+    timeout(Duration::from_secs(10),async {
+        let directory=tempfile::tempdir()?;let endpoint=endpoint(&directory);
+        let started=Arc::new(Notify::new());
+        let handler=Arc::new(DaemonHandler::new(memory(&directory)?,Arc::new(ScriptedFactory(started.clone()))));
+        let (stop,receiver)=watch::channel(false);
+        let server=tokio::spawn(IpcServer::bind(&endpoint)?.serve(handler.clone(),receiver));
+        let mut first=IpcClient::connect(&endpoint).await?;
+        first.request(Command::StartSession {session_id:Some("pending-drop".into())}).await?;
+        first.send(Command::SendMessage {session_id:"pending-drop".into(),text:"wait".into(),stream_deltas:true}).await?;
+        started.notified().await;drop(first);
+        let mut next=IpcClient::connect(&endpoint).await?;
+        loop {
+            let replies=next.request(Command::ListSessions).await?;
+            if matches!(replies.as_slice(),[Event::Sessions {sessions}] if sessions.iter().all(|s|s.id!="pending-drop")) {break;}
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let status=handler.dashboard_status().await;
+        assert!(status.sessions.iter().all(|s|s.session_id!="pending-drop" || s.status!="running"));
+        next.request(Command::StartSession {session_id:Some("next".into())}).await?;
+        let replies=next.request(Command::SendMessage {session_id:"next".into(),text:"hi".into(),stream_deltas:false}).await?;
+        assert!(replies.iter().any(|event|matches!(event,Event::SessionCompleted {reason,..} if reason=="completed")));
+        assert!(matches!(next.request(Command::ListSessions).await?.as_slice(),[Event::Sessions {sessions}]
+            if sessions.len()==1 && sessions.iter().all(|s|s.status==Some(lain_ipc::SessionStatus::Idle))));
+        next.close().await?;stop.send(true)?;server.await??;
+        Ok::<(),Box<dyn std::error::Error>>(())
+    }).await?
+}
+
+#[tokio::test]
 async fn read_only_ipc_and_telemetry() -> TestResult {
     timeout(Duration::from_secs(10), async {
         let directory = tempfile::tempdir()?;

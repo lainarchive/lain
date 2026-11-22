@@ -1,5 +1,22 @@
 # Current Project State
 
+## Launch integration: reconnect
+
+- Step 2 adds persistent TUI reconnect state, draft preservation, interrupted turn/tool status and responsive
+  250 ms–5 s retries using the startup autospawner; each connection attempt is capped at six seconds.
+  Reconnection creates a fresh session, clears old request ids/access/catalog caches, and refreshes telemetry/rules.
+  Publish confirmation is invalidated across connection loss, including a confirmation underneath Help.
+- IPC now closes event sinks and polls handlers through cooperative cancellation instead of aborting them first.
+  Only disconnected clients get a two-second fallback deadline; normal shutdown still drains cooperatively.
+  The daemon prioritizes disconnect cancellation and handles a closed sink during event forwarding.
+- Verified: the new daemon client-drop regression failed before the fix (10 s timeout), then passed (0.49 s).
+  Cancelled sessions remain fail-closed and are removed; a subsequent client's fresh session is listed idle.
+- Fake-server return, reconnect rendering, bounded backoff, offline input and quit tests passed. The daemon serves
+  the next client after cancellation; its fresh session is listed idle. No dependencies were added.
+- Verification: workspace tests **254 passed (33 suites, 13.78 s)**; Clippy, fmt, repository hygiene and added-line
+  length checks passed. Commit locally; do not push. Next: await the next launch step.
+  Native Windows, desktop visuals and live providers remain unverified.
+
 ## Launch integration: streaming
 
 - Launch work is on `feat/launch-integration`, based on `origin/main` at `d15e5e2` (includes PRs 14 and 15).
