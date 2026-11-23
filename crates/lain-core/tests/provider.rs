@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
     use futures::StreamExt;
     use lain_core::{CoreError, provider::*};
     use serde_json::{Value, json};
@@ -119,6 +121,36 @@ mod tests {
                 serde_json::from_str::<Message>(&serde_json::to_string(&message).unwrap()).unwrap(),
                 message
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn status_errors_expose_retry_after_only_for_transient_statuses() {
+        let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
+        for (status, delay) in [
+            (
+                "429 Too Many Requests\r\nRetry-After: 3".into(),
+                Some((3, 3)),
+            ),
+            (
+                format!("503 Unavailable\r\nRetry-After: {date}"),
+                Some((30, 60)),
+            ),
+            ("408 Request Timeout".into(), Some((0, 0))),
+            ("403 Forbidden\r\nRetry-After: 3".into(), None),
+        ] {
+            let (url, handle) = server(&status, "{}".into(), false).await;
+            let error = OpenAiCompatibleProvider::new(url, Some("test-key".into()))
+                .complete(request())
+                .await
+                .unwrap_err();
+            match delay {
+                Some((min, max)) => {
+                    assert!((min..=max).contains(&error.retry_delay().unwrap().as_secs()));
+                }
+                None => assert!(error.retry_delay().is_none()),
+            }
+            handle.await.unwrap();
         }
     }
 
