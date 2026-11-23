@@ -492,6 +492,15 @@ impl AgentRunner {
                 }
             }
             let calls = message.tool_calls.clone();
+            if !truncated
+                && calls.is_empty()
+                && message
+                    .content
+                    .as_deref()
+                    .is_none_or(|text| text.trim().is_empty())
+            {
+                return Err(CoreError::Protocol("empty assistant response".into()).into());
+            }
             message
                 .tool_calls
                 .retain(|call| call.name != UPDATE_SCRATCHPAD);
@@ -2085,6 +2094,27 @@ mod tests {
             AgentStatus::Terminated(TerminationReason::BudgetExhausted { budget })
         );
         assert!(provider.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_reply_does_not_complete_the_run() {
+        for content in [None, Some(""), Some(" \n")] {
+            let mut response = text("").unwrap();
+            response.message.content = content.map(str::to_owned);
+            let provider = ScriptedProvider::new(vec![Ok(response)]);
+            let (mut agent, _) = runner(config(), provider);
+
+            let result = agent.run("Please investigate").await;
+            assert_eq!(
+                result.as_ref().err().map(AgentError::code),
+                Some("AGENT_PROVIDER_FAILED"),
+                "{result:?}"
+            );
+            assert_eq!(
+                agent.state().status,
+                AgentStatus::Terminated(TerminationReason::ProviderFailed)
+            );
+        }
     }
 
     #[tokio::test]
