@@ -21,8 +21,9 @@ cargo install --locked --path .
 lain tui demo
 ```
 
-Type a prompt and press Enter to see the sample turn. If another executable named `lain` is already on
-PATH, use `cargo run --locked -p lain -- tui demo` from this checkout.
+Use a terminal at least 120 columns by 30 rows to see the sample turn after you type a prompt and
+press Enter. If another executable named `lain` is already on PATH, use
+`cargo run --locked -p lain -- tui demo` from this checkout.
 
 ## Connect a model
 
