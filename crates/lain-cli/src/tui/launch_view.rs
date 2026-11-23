@@ -312,17 +312,27 @@ pub(super) fn count(n: usize) -> String {
     }
 }
 
-pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
+pub fn footer(frame: &mut Frame, area: Rect, state: &State, now: std::time::Duration) {
     let mut right = if state.model_chain == "model unknown" {
         String::new()
     } else {
         state.model_chain.clone()
     };
+    let rate = state
+        .token_rate(now)
+        .filter(|rate| *rate > 0.0)
+        .map(|rate| {
+            format!(
+                "{} {rate:.1} tok/s",
+                super::view::sparkline(&state.rate_history(now, 16))
+            )
+        });
     if state.context_window > 0 {
         let percent = (state.context as f64 / state.context_window as f64 * 100.0) as usize;
         let filled = (percent / 10).max(usize::from(state.context > 0)).min(10);
         let context = format!(
-            "ctx {}{} {percent}% {}/{}",
+            "{}ctx {}{} {percent}% {}/{}",
+            rate.as_ref().map(|r| format!("{r} · ")).unwrap_or_default(),
             "━".repeat(filled),
             "─".repeat(10 - filled),
             count(state.context),
@@ -332,9 +342,15 @@ pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
             right.push_str(" · ");
         }
         right.push_str(&context);
-        if Line::raw(&right).width() > usize::from(area.width) / 2 {
+        // The left side is short, so the meter strip may take two thirds before the model goes.
+        if Line::raw(&right).width() > usize::from(area.width) * 2 / 3 {
             right = context;
         }
+    } else if let Some(rate) = rate {
+        if !right.is_empty() {
+            right.push_str(" · ");
+        }
+        right.push_str(&rate);
     }
     if state.reconnecting {
         right = "reconnecting…".into();

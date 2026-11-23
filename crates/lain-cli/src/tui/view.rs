@@ -49,8 +49,7 @@ fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
 
 fn has_banner(state: &State, now: Duration) -> bool {
     let notice = state.toast_text(now).unwrap_or(&state.notice);
-    state.velocity(now) > 0.0
-        || state.cost.is_some_and(|c| c.is_finite() && c >= 0.0)
+    state.cost.is_some_and(|c| c.is_finite() && c >= 0.0)
         || (!notice.is_empty() && !notice.starts_with("Ready") && notice != "New session")
 }
 
@@ -60,12 +59,6 @@ fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
         .map(|cost| format!("cost ${cost:.4}"));
     let mut telemetry = vec![];
-    if let Some(rate) = state.token_rate(now).filter(|rate| *rate > 0.0) {
-        telemetry.push(format!(
-            "{} {rate:.1} tok/s",
-            sparkline(&state.rate_history(now, 16))
-        ));
-    }
     if let Some(cost) = cost {
         telemetry.push(cost);
     }
@@ -268,7 +261,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
 
 type Row = (Option<Selection>, Line<'static>);
 
-fn sparkline(values: &[u64]) -> String {
+pub(super) fn sparkline(values: &[u64]) -> String {
     const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let max = values.iter().copied().max().unwrap_or(0).max(1);
     values
@@ -742,12 +735,14 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                         .borders(Borders::TOP | Borders::BOTTOM)
                         .border_style(Style::default().fg(MUTED))
                         .title_bottom(
-                            Line::from(if draft.len()>1 {" ↑/↓ scroll draft · Enter submit · Ctrl+K commands · F1 help "}
-                            else if state.launch() {" Tab mode · Ctrl+K commands · F1 help "}
-                            else if state.plan_drawer.unwrap_or(state.scroll.plan_visible) {
-                                " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Ctrl+G DAG · Ctrl+P close · Ctrl+K commands · F1 help "
-                            } else {" Tab mode · Ctrl+O output · Ctrl+G DAG · Ctrl+P plan/rules · Ctrl+K commands · F1 help "})
-                                .alignment(ratatui::layout::Alignment::Right),
+                            Line::from(if draft.len() > 1 {
+                                " ↑/↓ scroll draft · Enter submit · Ctrl+K commands · F1 help "
+                            } else if state.launch() {
+                                " Tab mode · Ctrl+K commands · F1 help "
+                            } else {
+                                " Ctrl+K commands · F1 help "
+                            })
+                            .alignment(ratatui::layout::Alignment::Right),
                         ),
                 ),
             *area,
@@ -776,7 +771,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         }
     }
     if let Some(area) = vertical.get(4) {
-        super::launch_view::footer(frame, *area, state);
+        super::launch_view::footer(frame, *area, state, now);
     }
     if !matches!(state.screen, Screen::Session | Screen::Bots) {
         if let Some(area) = vertical.get(3) {

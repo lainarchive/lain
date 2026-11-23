@@ -2011,9 +2011,9 @@ fn sticky_panels_scroll_independently_and_do_not_overshoot(
     draw_scrolled(&mut terminal, &mut state)?;
     assert!(contents(&terminal).contains("No scratchpad yet"));
     assert!(contents(&terminal).contains("No procedural rules recalled"));
-    assert!(contents(&terminal).contains("Alt-PgUp/PgDn plan"));
-    assert!(contents(&terminal).contains("Shift alias"));
-    assert!(contents(&terminal).contains("Ctrl-PgUp/PgDn rules"));
+    // The run view keeps only the two hints that lead to the rest (F1 lists every key).
+    assert!(contents(&terminal).contains("Ctrl+K commands · F1 help"));
+    assert!(!contents(&terminal).contains("Alt-PgUp/PgDn plan"));
     Ok(())
 }
 
@@ -2087,7 +2087,7 @@ fn small_terminals_show_a_resize_message_and_recover_at_minimum_size(
     })?;
     let text = contents(&terminal);
     assert!(!text.contains("terminal too small"));
-    for expected in ["ctx", "Verify integration", "Ask Lain anything", "Tab mode"] {
+    for expected in ["ctx", "Verify integration", "Ask Lain anything", "F1 help"] {
         assert!(text.contains(expected), "missing {expected}");
     }
     let mut tiny = Terminal::new(TestBackend::new(1, 1))?;
