@@ -257,6 +257,20 @@ pub struct BashTool {
     pub output_byte_cap: usize,
 }
 
+const MAX_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn shell_timeout(args: &Value, default: Duration) -> Result<Duration, ToolError> {
+    let timeout = match args.get("timeout_ms") {
+        Some(value) => {
+            Duration::from_millis(value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                ToolError::Arguments("timeout_ms must be a positive integer".into())
+            })?)
+        }
+        None => default,
+    };
+    Ok(timeout.min(MAX_SHELL_TIMEOUT))
+}
+
 async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io::Result<String> {
     let mut stored = Vec::new();
     let mut buffer = [0; 8192];
@@ -287,16 +301,25 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a bash command with host permissions"
+        "Run a Bash command with host permissions. Each call starts a fresh shell; put directory changes and environment assignments inside command."
     }
     fn parameters_schema(&self) -> Value {
-        json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false})
+        json!({
+            "type":"object",
+            "properties":{
+                "command":{"type":"string"},
+                "timeout_ms":{"type":"integer","minimum":1,"description":"Optional deadline in milliseconds, capped at 300000."}
+            },
+            "required":["command"],
+            "additionalProperties":false
+        })
     }
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let script = args
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Arguments("command must be a string".into()))?;
+        let timeout = shell_timeout(&args, self.timeout)?;
         let mut command = tokio::process::Command::new("bash");
         command
             .arg("-c")
@@ -334,7 +357,7 @@ impl Tool for BashTool {
             .stderr
             .take()
             .ok_or_else(|| ToolError::Execution("missing stderr".into()))?;
-        let result = tokio::time::timeout(self.timeout, async {
+        let result = tokio::time::timeout(timeout, async {
             tokio::try_join!(
                 child.wait(),
                 read_capped(stdout, self.output_byte_cap),
@@ -376,7 +399,7 @@ pub struct PowerShellTool {
 
 impl PowerShellTool {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-    pub const MAX_TIMEOUT: Duration = Duration::from_secs(300);
+    pub const MAX_TIMEOUT: Duration = MAX_SHELL_TIMEOUT;
 
     pub fn new(working_directory: impl Into<PathBuf>) -> Self {
         Self {
@@ -529,15 +552,7 @@ impl Tool for PowerShellTool {
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Arguments("command must be a string".into()))?;
-        let timeout = match args.get("timeout_ms") {
-            Some(value) => {
-                Duration::from_millis(value.as_u64().filter(|value| *value > 0).ok_or_else(
-                    || ToolError::Arguments("timeout_ms must be a positive integer".into()),
-                )?)
-            }
-            None => self.timeout,
-        }
-        .min(Self::MAX_TIMEOUT);
+        let timeout = shell_timeout(&args, self.timeout)?;
         // I force UTF-8 for Windows PowerShell's legacy code page, then parse separately so param/using statements still work.
         let script = format!(
             "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ([scriptblock]::Create('{}'))",

@@ -128,6 +128,43 @@ async fn registry_validates_before_dispatch() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn bash_accepts_a_per_command_timeout() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(Arc::new(BashTool {
+            working_directory: directory.path().into(),
+            timeout: Duration::from_millis(20),
+            output_byte_cap: 1024,
+        }))
+        .unwrap();
+    let command = "exec sleep 0.1";
+    assert!(matches!(
+        registry.dispatch("bash", json!({"command":command})).await,
+        Err(ToolError::Timeout)
+    ));
+    assert_eq!(
+        registry
+            .dispatch("bash", json!({"command":command,"timeout_ms":2000}))
+            .await
+            .unwrap()
+            .exit_code,
+        Some(0)
+    );
+    for args in [
+        json!({"command":command,"timeout_ms":0}),
+        json!({"command":command,"timeout_ms":"2000"}),
+        json!({"command":command,"environment":{}}),
+    ] {
+        assert!(matches!(
+            registry.dispatch("bash", args).await,
+            Err(ToolError::Arguments(_))
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn bash_output_limits_exit_environment_and_timeout() {
     let directory = tempfile::tempdir().unwrap();
     let mut tool = BashTool {

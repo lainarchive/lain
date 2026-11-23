@@ -16,10 +16,12 @@ Malformed events and premature EOF surface as stream errors, not successful EOF.
 execution. `tool_messages` executes calls in order, preserving call IDs, and
 turns execution failures into JSON error messages for the model.
 
-`BashTool` runs with host user permissions. It is not OS-sandboxed. Its deadline
-kills and reaps the immediate child, not an entire descendant process tree.
-It clears inherited environment variables, supplies `/usr/bin:/bin` as PATH,
-and closes stdin. Each of stdout and stderr retains at most `output_byte_cap`
+`BashTool` runs with host user permissions. It is not OS-sandboxed. Its optional
+`timeout_ms` overrides the configured deadline (30 seconds in the CLI), capped at
+300 seconds. On timeout it kills and reaps the immediate child, not an entire
+descendant process tree.
+Each call starts a fresh shell, inherits only allowlisted environment variables
+such as PATH, and closes stdin. Each of stdout and stderr retains at most `output_byte_cap`
 bytes, plus a truncation marker when needed. Both pipes are drained concurrently
 without retaining unlimited output. Output is decoded lossily as UTF-8.
 
