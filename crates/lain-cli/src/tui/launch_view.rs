@@ -302,7 +302,7 @@ fn grid(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-fn count(n: usize) -> String {
+pub(super) fn count(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{}M", n / 1_000_000)
     } else if n >= 1000 {
@@ -348,7 +348,7 @@ pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    format!("[λ lain v{}] ", env!("CARGO_PKG_VERSION")),
+                    format!("lain v{}  ", env!("CARGO_PKG_VERSION")),
                     Style::default().fg(TEXT),
                 ),
                 Span::styled(

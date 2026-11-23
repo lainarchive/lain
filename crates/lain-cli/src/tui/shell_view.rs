@@ -20,19 +20,28 @@ fn selected() -> Style {
 }
 
 pub fn tabs(frame: &mut Frame, area: Rect, state: &State) {
-    let labels = Screen::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, screen)| {
+    let brand = [
+        Span::styled(
+            " lain",
+            Style::default().fg(HI).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  lainarchive   ", Style::default().fg(FAINT)),
+    ];
+    let labels = brand
+        .into_iter()
+        .chain(Screen::ALL.iter().enumerate().map(|(i, screen)| {
             Span::styled(
                 format!(" {} {} ", i + 1, screen.name()),
                 if *screen == state.screen {
-                    selected()
+                    Style::default()
+                        .fg(TEXT)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                        .underline_color(ACCENT)
                 } else {
-                    Style::default().fg(MUTED)
+                    Style::default().fg(FAINT)
                 },
             )
-        })
+        }))
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(Line::from(labels)), area);
 }

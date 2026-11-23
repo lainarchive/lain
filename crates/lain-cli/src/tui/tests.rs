@@ -610,8 +610,8 @@ fn shell_help_and_tab_highlight_fit_minimum_size() -> Result<(), Box<dyn std::er
         .buffer()
         .cell((x as u16, 0))
         .ok_or("missing cell")?;
-    assert_eq!(cell.fg, super::theme::ACCENT);
-    assert_eq!(cell.bg, super::theme::PANEL);
+    assert_eq!(cell.fg, super::theme::TEXT);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
     state.key(
         KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
         Duration::ZERO,
@@ -1680,8 +1680,8 @@ fn banner_lanes_and_sticky_plan() -> Result<(), Box<dyn std::error::Error>> {
         "32%",
         "42k/128k",
         "feat/frontier",
-        "layer 1",
-        "3 nodes",
+        "LAYER 1",
+        "/3",
         "✓",
         "×",
         "○",

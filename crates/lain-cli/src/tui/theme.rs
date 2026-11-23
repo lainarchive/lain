@@ -38,21 +38,16 @@ impl Theme {
         }
     }
 
-    /// Colour of one cell of a full-width rule: brushed silver, with a glint that
-    /// sweeps across once every `width + 30` ticks.
-    pub fn gradient(self, column: u16, width: u16, tick: u64) -> Color {
-        if self == Self::Mono {
-            return Color::Gray;
-        }
-        let span = u64::from(width) + 30;
-        let head = (tick * 9 % span) as i64 - 15;
-        match (i64::from(column) - head).abs() {
-            0..=1 => HI,
-            2..=3 => Color::Rgb(180, 198, 216),
-            4..=5 => Color::Rgb(108, 122, 138),
-            6..=7 => Color::Rgb(57, 66, 77),
-            _ => LINE,
-        }
+    // Jaden asked for still rules: the travelling glint read as noise.
+    pub fn gradient(self, _column: u16, _width: u16) -> Color {
+        self.resolve(LINE)
+    }
+
+    pub fn spinner(now: std::time::Duration) -> char {
+        SPINNER
+            .get((now.as_millis() / 80 % SPINNER.len() as u128) as usize)
+            .copied()
+            .unwrap_or('●')
     }
 
     pub fn mode(self, mode: Mode) -> Color {

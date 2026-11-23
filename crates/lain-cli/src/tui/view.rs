@@ -27,9 +27,12 @@ pub(super) fn color(phase: Phase) -> Color {
 
 fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
     Block::default()
-        .title(Span::styled(title, Style::default().fg(ACCENT)))
+        .title(Span::styled(
+            title,
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(MUTED))
+        .border_style(Style::default().fg(LINE))
         .style(Style::default().bg(PANEL).fg(TEXT))
 }
 
@@ -81,18 +84,22 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                     .is_some_and(|t| t.phase == Phase::Evidence(Status::ObservedVerified))
             })
             .count();
+        let label = format!(
+            "{} LAYER {}  {done}/{} ",
+            if collapsed { "▸" } else { "▾" },
+            layer + 1,
+            nodes.len()
+        );
+        let rule = "─".repeat(usize::from(width).saturating_sub(Line::raw(&label).width()));
         rows.push((
             Some(Selection::Layer(layer)),
-            Line::styled(
-                format!(
-                    "{} layer {} · {} nodes · {} done",
-                    if collapsed { "▸" } else { "▾" },
-                    layer + 1,
-                    nodes.len(),
-                    done
+            Line::from(vec![
+                Span::styled(
+                    label,
+                    Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
                 ),
-                Style::default().fg(ACCENT),
-            ),
+                Span::styled(rule, Style::default().fg(LINE)),
+            ]),
         ));
         if collapsed {
             continue;
@@ -105,7 +112,11 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
             let left = format!(
                 "  {} {} {}",
                 if collapsed { "▸" } else { "▾" },
-                task.phase.glyph(),
+                if task.phase == Phase::Running {
+                    Theme::spinner(now).to_string()
+                } else {
+                    task.phase.glyph().to_string()
+                },
                 task.title
             );
             let elapsed = task
@@ -114,11 +125,11 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                 .saturating_sub(task.started)
                 .as_secs();
             let right = format!(
-                "{} · {} {}s · ↓{}",
+                "{}  {}  {}s  ↓{}",
                 task.model,
                 task.phase.label(),
                 elapsed,
-                task.tokens
+                super::launch_view::count(usize::try_from(task.tokens).unwrap_or(usize::MAX))
             );
             let room = usize::from(width).saturating_sub(Line::from(right.clone()).width() + 1);
             let mut title = String::new();
@@ -223,6 +234,134 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
     rows
 }
 
+type Row = (Option<Selection>, Line<'static>);
+
+/// Segmented bar, one segment per lane, then the evidence counts.
+fn run_header(state: &State, width: u16) -> Vec<Row> {
+    let phases: Vec<Phase> = state
+        .dag
+        .layers()
+        .iter()
+        .flatten()
+        .filter_map(|n| state.tasks.get(&n.id).map(|t| t.phase))
+        .collect();
+    if phases.is_empty() {
+        return vec![];
+    }
+    let total = phases.len();
+    let verified = phases
+        .iter()
+        .filter(|p| **p == Phase::Evidence(Status::ObservedVerified))
+        .count();
+    let running = phases.iter().filter(|p| **p == Phase::Running).count();
+    let failed = phases.iter().filter(|p| **p == Phase::Failed).count();
+    let segment = (usize::from(width) / total).clamp(1, 10);
+    let bar = phases
+        .iter()
+        .map(|p| {
+            let fg = match p {
+                Phase::Evidence(Status::ObservedVerified) => GREEN,
+                Phase::Running => ACCENT,
+                Phase::Failed => RED,
+                _ => LINE,
+            };
+            Span::styled(
+                "▄".repeat(segment.saturating_sub(1)) + " ",
+                Style::default().fg(fg),
+            )
+        })
+        .collect::<Vec<_>>();
+    vec![
+        (None, Line::from(bar)),
+        (
+            None,
+            Line::from(vec![
+                Span::styled(
+                    format!("{verified}/{total} verified"),
+                    Style::default().fg(GREEN),
+                ),
+                Span::styled(format!("   {running} running"), Style::default().fg(ACCENT)),
+                Span::styled(
+                    format!("   {failed} failed"),
+                    Style::default().fg(if failed > 0 { RED } else { FAINT }),
+                ),
+            ]),
+        ),
+        (None, Line::raw("")),
+    ]
+}
+
+/// One bar per lane on a shared clock, so overlap and stragglers show at a glance.
+fn timeline(state: &State, width: u16, now: Duration) -> Vec<Row> {
+    let tasks: Vec<_> = state
+        .dag
+        .layers()
+        .iter()
+        .flatten()
+        .filter_map(|n| state.tasks.get(&n.id))
+        .collect();
+    let Some(start) = tasks.iter().map(|t| t.started).min() else {
+        return vec![];
+    };
+    let label = tasks
+        .iter()
+        .map(|t| Line::raw(&t.title).width())
+        .max()
+        .unwrap_or(0)
+        .min(16);
+    let track = usize::from(width).saturating_sub(label + 2);
+    if track < 8 {
+        return vec![];
+    }
+    let span = now.saturating_sub(start).as_secs_f64().max(1.0);
+    let col = |at: Duration| {
+        ((at.saturating_sub(start).as_secs_f64() / span) * (track - 1) as f64).round() as usize
+    };
+    let mut rows = vec![(
+        None,
+        Line::from(vec![
+            Span::styled(
+                "TIMELINE",
+                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "{:>w$}",
+                    format!("{}s ▼", span.round()),
+                    w = usize::from(width) - 8
+                ),
+                Style::default().fg(FAINT),
+            ),
+        ]),
+    )];
+    for task in tasks {
+        let from = col(task.started).min(track - 1);
+        let to = col(task.ended.unwrap_or(now)).clamp(from, track - 1);
+        let fg = color(task.phase);
+        let name: String = task.title.chars().take(label).collect();
+        let mut spans = vec![
+            Span::styled(format!("{name:<label$}  "), Style::default().fg(MUTED)),
+            Span::styled("·".repeat(from), Style::default().fg(LINE)),
+            Span::styled("━".repeat(to - from), Style::default().fg(fg)),
+        ];
+        let head = match task.phase {
+            Phase::Running => Span::styled("▸", Style::default().fg(HI)),
+            Phase::Evidence(Status::ObservedVerified) => {
+                Span::styled("✓", Style::default().fg(GREEN))
+            }
+            Phase::Failed => Span::styled("✕", Style::default().fg(RED)),
+            _ => Span::styled("·", Style::default().fg(LINE)),
+        };
+        spans.push(head);
+        spans.push(Span::styled(
+            "·".repeat(track.saturating_sub(to + 1)),
+            Style::default().fg(LINE),
+        ));
+        rows.push((None, Line::from(spans)));
+    }
+    rows
+}
+
 fn page_height(area: Rect) -> u16 {
     area.height.saturating_sub(3).max(1)
 }
@@ -232,6 +371,12 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> (usize,
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut rows = lane_rows(state, inner.width, now);
+    if !rows.is_empty() {
+        let mut top = run_header(state, inner.width);
+        top.append(&mut rows);
+        rows = top;
+        rows.extend(timeline(state, inner.width, now));
+    }
     if rows.is_empty() {
         rows.push((
             None,
@@ -255,7 +400,7 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> (usize,
         .skip(offset)
         .map(|(i, (_, line))| {
             if Some(i) == selected {
-                line.style(Style::default().bg(BACKGROUND).add_modifier(Modifier::BOLD))
+                line.style(Style::default().bg(SELECT).add_modifier(Modifier::BOLD))
             } else {
                 line
             }
