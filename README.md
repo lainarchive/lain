@@ -1,8 +1,10 @@
 # lain
 
-Lain is a local Rust daemon for working with language models from a terminal. Its terminal UI streams
-replies and tool calls. For a single prompt, `lain run` prints a report of what the tools could verify.
-Lain connects to a local or remote OpenAI-compatible endpoint and stores memory in SQLite.
+![la.03: Lain, a folded silver knot on black](docs/cover.png)
+
+Lain runs agents locally through a Rust daemon. The terminal UI streams replies and tool calls.
+For a single prompt, `lain run` reports what the tools could verify. Lain connects to a local or
+remote OpenAI-compatible endpoint and stores memory in SQLite.
 
 [Try the offline demo](#try-the-offline-demo) · [Connect a model](#connect-a-model) · [Browser dashboard](dashboard/README.md)
 
