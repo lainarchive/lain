@@ -9,6 +9,7 @@ ts-rs = { version = "10.1", features = ["serde-json-impl", "no-serde-warnings"] 
 async-trait = "0.1"
 async-stream = "0.3"
 futures = "0.3"
+httpdate = "1"
 jsonschema = { version = "0.33", default-features = false }
 lain-context = { path = "../lain-context" }
 lain-memory = { path = "../lain-memory" }

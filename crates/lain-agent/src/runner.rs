@@ -35,6 +35,11 @@ pub const EVENT_CAPACITY: usize = 1024;
 const QUERY_MAX_UTF16: usize = 1000;
 const CONTENT_MAX_UTF16: usize = 999_000;
 const RECALL_TERMS: usize = 8;
+const PROVIDER_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
 
 #[derive(Deserialize)]
@@ -568,6 +573,32 @@ impl AgentRunner {
         request: CompletionRequest,
         turn: u32,
     ) -> Result<lain_core::provider::CompletionResponse, CoreError> {
+        let mut emitted_delta = false;
+        for delay in PROVIDER_RETRY_DELAYS {
+            let result = self
+                .complete_once(request.clone(), turn, &mut emitted_delta)
+                .await;
+            let Err(error) = result else {
+                return result;
+            };
+            let Some(retry_after) = error.retry_delay() else {
+                return Err(error);
+            };
+            // A failed request can have used tokens even when it never returned usage.
+            if emitted_delta || self.config.budget.max_total_tokens.is_some() {
+                return Err(error);
+            }
+            tokio::time::sleep(delay.max(retry_after)).await;
+        }
+        self.complete_once(request, turn, &mut emitted_delta).await
+    }
+
+    async fn complete_once(
+        &self,
+        request: CompletionRequest,
+        turn: u32,
+        emitted_delta: &mut bool,
+    ) -> Result<lain_core::provider::CompletionResponse, CoreError> {
         use lain_core::provider::{CompletionResponse, Token};
         if !self.streaming {
             return self.provider.complete(request).await;
@@ -583,6 +614,7 @@ impl AgentRunner {
                 Token::Text(chunk) => {
                     bytes = bytes.saturating_add(chunk.len());
                     text.push_str(&chunk);
+                    *emitted_delta = true;
                     self.emit(AgentEvent::ThinkingToken { turn, text: chunk });
                     tokio::task::yield_now().await;
                 }
@@ -2114,6 +2146,113 @@ mod tests {
                 agent.state().status,
                 AgentStatus::Terminated(TerminationReason::ProviderFailed)
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn retrying_transient_provider_failure_preserves_the_turn() {
+        let provider = ScriptedProvider::new(vec![
+            Err(CoreError::Status {
+                status: 429,
+                body: "rate limited".into(),
+                retry_after: None,
+            }),
+            text("Recovered"),
+        ]);
+        let (mut agent, _) = runner(config(), provider.clone());
+
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Recovered"));
+        assert_eq!(outcome.turns, 1);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests.first().unwrap().messages,
+            requests.last().unwrap().messages
+        );
+    }
+
+    #[tokio::test]
+    async fn retrying_transient_provider_failure_respects_the_wall_time_budget() {
+        let provider = ScriptedProvider::new(vec![
+            Err(CoreError::Status {
+                status: 503,
+                body: "unavailable".into(),
+                retry_after: Some(Duration::from_secs(3)),
+            }),
+            text("Too late"),
+        ]);
+        let mut config = config();
+        config.budget.max_wall_time_ms = Some(1_500);
+        let (mut agent, _) = runner(config, provider.clone());
+
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::WallTime,
+            })
+        );
+        assert_eq!(provider.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retrying_a_dropped_stream_requires_no_visible_delta() {
+        #[derive(Debug)]
+        struct InterruptedStream {
+            emitted_text: bool,
+            attempts: AtomicU64,
+        }
+
+        #[async_trait]
+        impl ModelProvider for InterruptedStream {
+            async fn complete(
+                &self,
+                _: CompletionRequest,
+            ) -> Result<CompletionResponse, CoreError> {
+                Err(CoreError::Protocol("stream-only fixture".into()))
+            }
+
+            async fn stream(
+                &self,
+                _: CompletionRequest,
+            ) -> Result<BoxStream<'static, Result<Token, CoreError>>, CoreError> {
+                let mut events = Vec::new();
+                if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                    if self.emitted_text {
+                        events.push(Ok(Token::Text("Partial".into())));
+                    }
+                    events.push(Err(CoreError::IncompleteStream));
+                } else {
+                    events.extend([
+                        Ok(Token::Text("Recovered".into())),
+                        Ok(Token::Finished("stop".into())),
+                    ]);
+                }
+                Ok(Box::pin(futures::stream::iter(events)))
+            }
+        }
+
+        for emitted_text in [false, true] {
+            let provider = Arc::new(InterruptedStream {
+                emitted_text,
+                attempts: AtomicU64::new(0),
+            });
+            let mut agent =
+                AgentRunner::new(config(), provider.clone(), registry(), memory(), "s1").unwrap();
+            agent.set_streaming(true);
+
+            let result = agent.run("Please investigate").await;
+            if emitted_text {
+                assert!(matches!(
+                    result,
+                    Err(AgentError::Provider(CoreError::IncompleteStream))
+                ));
+                assert_eq!(provider.attempts.load(Ordering::Relaxed), 1);
+            } else {
+                assert_eq!(result.unwrap().output.as_deref(), Some("Recovered"));
+                assert_eq!(provider.attempts.load(Ordering::Relaxed), 2);
+            }
         }
     }
 

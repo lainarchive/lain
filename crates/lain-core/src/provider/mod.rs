@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
@@ -245,9 +245,23 @@ impl OpenAiCompatibleProvider {
         }
         let response = request.send().await?;
         if !response.status().is_success() {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| {
+                    value.parse().ok().map(Duration::from_secs).or_else(|| {
+                        let date = httpdate::parse_http_date(value).ok()?;
+                        Some(date.duration_since(SystemTime::now()).unwrap_or_default())
+                    })
+                });
             return Err(CoreError::Status {
                 status: response.status().as_u16(),
-                body: response.text().await?,
+                body: response
+                    .text()
+                    .await
+                    .unwrap_or_else(|error| error.to_string()),
+                retry_after,
             });
         }
         Ok(response)
@@ -386,7 +400,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                     }
                 }
             }
-            Err(CoreError::Protocol("SSE ended before [DONE]".into()))?;
+            Err(CoreError::IncompleteStream)?;
         }))
     }
 }
