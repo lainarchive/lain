@@ -464,7 +464,7 @@ impl AgentRunner {
             let truncated = response.finish_reason.as_deref() == Some("length");
             if truncated
                 && message.content.as_deref().is_none_or(str::is_empty)
-                && completion_retry_turn.is_none()
+                && completion_retry_turn != Some(run_turn)
                 && run_turn < self.config.max_turns
             {
                 completion_retry_turn = Some(run_turn + 1);
@@ -2287,6 +2287,25 @@ mod tests {
         );
         assert_eq!(provider.requests().len(), 2);
         assert_eq!(agent.state().tool_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn retries_again_after_an_intervening_successful_completion() {
+        let mut truncated = calls(None, &["ok"]).unwrap();
+        truncated.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![
+            Ok(truncated.clone()),
+            calls(None, &["ok"]),
+            Ok(truncated),
+            text("Recovered twice"),
+        ]);
+        let (mut agent, _) = runner(config(), provider.clone());
+
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Recovered twice"));
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        assert_eq!(provider.requests().len(), 4);
+        assert_eq!(agent.state().tool_calls, 1);
     }
 
     #[tokio::test]
