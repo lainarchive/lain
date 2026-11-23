@@ -413,6 +413,7 @@ impl AgentRunner {
             }
         }
 
+        let mut completion_retry_turn = None;
         for run_turn in 1..=self.config.max_turns {
             if let Err(reason) = self.bounded(self.control.ready()).await {
                 return Ok(self.stop(reason, run_turn - 1));
@@ -429,7 +430,11 @@ impl AgentRunner {
                 session_id: self.state.session_id.clone(),
                 turn,
             });
-            let Ok(request) = self.request(initial_repo_map.take().as_deref()) else {
+            let scratchpad_notice = self.scratchpad_notice.clone();
+            let Ok(request) = self.request(
+                initial_repo_map.as_deref(),
+                completion_retry_turn == Some(run_turn),
+            ) else {
                 return Ok(self.stop(
                     TerminationReason::BudgetExhausted {
                         budget: BudgetKind::ContextWindow,
@@ -457,6 +462,21 @@ impl AgentRunner {
                 return Err(CoreError::Protocol("expected an assistant response".into()).into());
             }
             let truncated = response.finish_reason.as_deref() == Some("length");
+            if truncated
+                && message.content.as_deref().is_none_or(str::is_empty)
+                && completion_retry_turn != Some(run_turn)
+                && run_turn < self.config.max_turns
+            {
+                completion_retry_turn = Some(run_turn + 1);
+                self.scratchpad_notice = scratchpad_notice;
+                self.emit(AgentEvent::TurnCompleted {
+                    turn,
+                    tool_calls: 0,
+                    tokens_used: self.state.tokens_used,
+                });
+                continue;
+            }
+            initial_repo_map = None;
             if truncated {
                 message.tool_calls.clear();
             } else if self.config.tool_call_mode == ToolCallMode::HermesTags
@@ -621,6 +641,7 @@ impl AgentRunner {
     fn request(
         &mut self,
         initial_repo_map: Option<&str>,
+        retry_completion: bool,
     ) -> Result<CompletionRequest, lain_context::ContextOverflow> {
         let mut prefix = Vec::new();
         let has_system_prompt = !self.config.system_prompt.trim().is_empty();
@@ -650,6 +671,12 @@ impl AgentRunner {
         }
         if let Some(notice) = self.scratchpad_notice.take() {
             prefix.push(notice);
+        }
+        if retry_completion {
+            prefix.push(
+                "Your previous response exceeded the completion length limit and was discarded. Continue from the last completed action. Keep the response concise; if using a tool, send one small, complete call."
+                    .into(),
+            );
         }
         let mut request = CompletionRequest {
             model: self.config.model.clone(),
@@ -1162,7 +1189,7 @@ mod tests {
         let mut agent =
             AgentRunner::new(config(), provider, registry(), memory(), "stream").unwrap();
         agent.set_streaming(true);
-        let request = agent.request(None).unwrap();
+        let request = agent.request(None, false).unwrap();
         let mut events = agent.subscribe();
         let response = agent.complete(request, 1).await.unwrap();
         assert_eq!(response.message.content.as_deref(), Some("hello"));
@@ -1238,7 +1265,7 @@ mod tests {
             )
             .unwrap();
             agent.set_streaming(true);
-            let request = agent.request(None).unwrap();
+            let request = agent.request(None, false).unwrap();
             assert!(agent.complete(request, 1).await.is_err());
         }
     }
@@ -1254,7 +1281,7 @@ mod tests {
         )
         .unwrap();
         agent.set_streaming(true);
-        let request = agent.request(None).unwrap();
+        let request = agent.request(None, false).unwrap();
         let response = agent.complete(request, 1).await.unwrap();
         assert!(response.message.content.is_none());
         assert!(response.message.tool_calls.is_empty());
@@ -1483,7 +1510,7 @@ mod tests {
         let provider = ScriptedProvider::new(vec![Ok(response), text("Done")]);
         let mut agent = AgentRunner::new(config(), provider, Arc::new(tools), store, "read-only")?;
         agent.set_read_only(true);
-        let request = agent.request(None)?;
+        let request = agent.request(None, false)?;
         assert!(request.tools.iter().any(|t| t.name == "repo_map"));
         assert!(!request.tools.iter().any(|t| t.name == "write_file"));
         let mut events = agent.subscribe();
@@ -1494,7 +1521,7 @@ mod tests {
         assert!(observed.iter().any(|e| matches!(e, AgentEvent::ToolCompleted { name, outcome: ToolOutcome::Succeeded(_), .. } if name == "repo_map")));
         agent.set_read_only(false);
         assert!(agent
-            .request(None)?
+            .request(None, false)?
             .tools
             .iter()
             .any(|t| t.name == "write_file"));
@@ -2209,6 +2236,76 @@ mod tests {
         );
         assert_eq!(provider.requests().len(), 1);
         assert!(agent.state().messages.last().unwrap().tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retries_an_empty_length_limited_completion_without_running_its_tools() {
+        let mut response = calls(None, &["ok"]).unwrap();
+        response.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![Ok(response), text("Recovered")]);
+        let mut config = config();
+        config.budget.max_completion_tokens = Some(64);
+        let (mut agent, _) = runner(config, provider.clone());
+
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Recovered"));
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        assert_eq!(agent.state().tool_calls, 0);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|request| request.max_tokens == Some(64)));
+        assert!(requests.last().unwrap().messages.iter().any(|message| {
+            message.role == Role::System
+                && message
+                    .content
+                    .as_deref()
+                    .is_some_and(|s| s.contains("length limit"))
+        }));
+        assert!(requests
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .all(|message| { message.role != Role::Assistant && message.tool_calls.is_empty() }));
+    }
+
+    #[tokio::test]
+    async fn stops_after_one_empty_length_limited_retry() {
+        let mut response = calls(None, &["ok"]).unwrap();
+        response.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![Ok(response.clone()), Ok(response)]);
+        let (mut agent, _) = runner(config(), provider.clone());
+
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::BudgetExhausted {
+                budget: BudgetKind::CompletionTokens,
+            }),
+        );
+        assert_eq!(provider.requests().len(), 2);
+        assert_eq!(agent.state().tool_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn retries_again_after_an_intervening_successful_completion() {
+        let mut truncated = calls(None, &["ok"]).unwrap();
+        truncated.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![
+            Ok(truncated.clone()),
+            calls(None, &["ok"]),
+            Ok(truncated),
+            text("Recovered twice"),
+        ]);
+        let (mut agent, _) = runner(config(), provider.clone());
+
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Recovered twice"));
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        assert_eq!(provider.requests().len(), 4);
+        assert_eq!(agent.state().tool_calls, 1);
     }
 
     #[tokio::test]
