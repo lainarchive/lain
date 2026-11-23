@@ -373,7 +373,12 @@ fn events(state: &State, width: u16, now: Duration) -> Vec<Row> {
                     Style::default().fg(ACCENT),
                 ),
             };
-            let detail = format!("{} {}", tool.name, arguments(&tool.arguments));
+            let detail = format!(
+                "{} {}  {}",
+                tool.name,
+                arguments(&tool.arguments),
+                tool.output.lines().next().unwrap_or_default()
+            );
             Some((tool.started, task.title.as_str(), status, detail))
         })
         .collect();
@@ -384,7 +389,7 @@ fn events(state: &State, width: u16, now: Duration) -> Vec<Row> {
                 ended,
                 task.title.as_str(),
                 Span::styled("● verified ", Style::default().fg(GREEN)),
-                format!("↓{} tokens", count(task.tokens)),
+                "own check passed".to_string(),
             )
         })
     }));

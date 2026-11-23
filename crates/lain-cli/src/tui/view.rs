@@ -87,6 +87,7 @@ fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
 
 fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>, Line<'static>)> {
     let mut rows = vec![];
+    let has_lanes = state.tasks.values().any(|t| t.prompt.is_empty());
     for (layer, nodes) in state.dag.layers().iter().enumerate() {
         let collapsed = state.collapsed_layers.contains(&layer);
         let done = nodes
@@ -173,7 +174,8 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                     Span::styled(right, Style::default().fg(MUTED)),
                 ]),
             ));
-            if collapsed {
+            // With planner lanes running, the chat turn's detail already lives in the transcript.
+            if collapsed || (has_lanes && !task.prompt.is_empty()) {
                 continue;
             }
             for (index, tool) in state
@@ -208,9 +210,22 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                                 None => ACCENT,
                             }),
                         ),
+                        Span::styled(
+                            match tool.output.lines().count() {
+                                1 => format!("  {}", tool.output.trim()),
+                                _ => String::new(),
+                            },
+                            Style::default().fg(MUTED),
+                        ),
                     ]),
                 ));
-                for line in tool.output.lines().take(10) {
+                // A one-line result already sits on the tool row.
+                for line in tool
+                    .output
+                    .lines()
+                    .take(10)
+                    .filter(|_| tool.output.lines().count() > 1)
+                {
                     rows.push((
                         None,
                         Line::styled(format!("      {line}"), Style::default().fg(MUTED)),
