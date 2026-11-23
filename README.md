@@ -1,24 +1,36 @@
 # lain
 
-Lain runs model/tool turns in a local Rust daemon. Its Ratatui client streams replies and tool activity;
-a one-shot CLI prints bounded execution evidence, and a browser dashboard reads the same runner events
-through Axum. Models use OpenAI-compatible endpoints, local or remote. SQLite stores memory. Plugins and
-Creator can execute host processes when explicitly enabled.
+![la.03: Lain, a folded silver knot on black](docs/cover.png)
 
-## Quickstart
+Lain runs agents locally through a Rust daemon. The terminal UI streams replies and tool calls.
+For a single prompt, `lain run` reports what the tools could verify. Lain connects to a local or
+remote OpenAI-compatible endpoint and stores memory in SQLite.
 
-From this checkout, with Rust and Cargo on PATH:
+[Try the offline demo](#try-the-offline-demo) · [Connect a model](#connect-a-model) · [Browser dashboard](dashboard/README.md)
+
+![Lain's terminal UI showing an offline conversation and tool output](docs/ui/tui-demo.webp)
+
+*Offline demo. The conversation and tool activity are simulated.*
+
+## Try the offline demo
+
+Build from source with a current Rust toolchain. The demo needs no model, credentials or running daemon.
 
 ```sh
-cargo install --path . && lain doctor
+git clone https://github.com/lainarchive/lain.git
+cd lain
+cargo install --locked --path .
+lain tui demo
 ```
 
-`doctor` checks the toolchain, IPC endpoint, port 4040 and the configured model endpoint. It returns 1
-if any check fails, including a missing config or unreachable model server. It does not download models
-or start a provider. `--json` emits diagnostics without printing API key values.
+Use a terminal at least 120 columns by 30 rows to see the sample turn after you type a prompt and
+press Enter. If another executable named `lain` is already on PATH, use
+`cargo run --locked -p lain -- tui demo` from this checkout.
 
-Save `lain.json` in the workspace the daemon should use. This example expects an already-running local
-OpenAI-compatible server; replace the model name with one that server provides:
+## Connect a model
+
+Start your model server, then save `lain.json` in the workspace you want Lain to use. Replace the model
+name and URL with values from your server:
 
 ```json
 {
@@ -42,7 +54,9 @@ OpenAI-compatible server; replace the model name with one that server provides:
 For a remote provider, set its `base_url` and put the name of an environment variable in `api_key_env`.
 Keep the key value out of JSON. Full configuration is in the [Rust CLI guide](crates/lain-cli/README.md).
 
-Run the daemon from that workspace:
+Run `lain doctor` from that workspace to check the toolchain, IPC endpoint, dashboard port and model
+connection. It returns 1 if any check fails and does not start a model server. Use `--json` for
+machine-readable diagnostics. Then start the daemon:
 
 ```sh
 lain daemon
@@ -78,15 +92,6 @@ Unix or PowerShell on Windows. Plugin/Creator grants are separate. Script and CL
 host user, without an OS sandbox. Release builds disable Creator unless `allow_creator_mode` is set;
 plugin discovery requires `read_fs` in `plugin_permissions`. Creator and script/CLI plugins require all
 four grants: `read_fs`, `write_fs`, `network`, `subprocess`. Review source before enabling them.
-
-For the offline terminal fixture, without config or a provider:
-
-```sh
-lain tui demo
-```
-
-It starts on the launch screen. The first submission reveals a labelled canned turn; activity, prices,
-agent rows and verification states in this mode are synthetic.
 
 ## Architecture
 
@@ -180,12 +185,12 @@ through its AST, edits it through a scripted real runner in a worktree, rejects 
 runs Cargo before and after the fix. It uses a private target directory and `--offline`; local execution
 took 0.68 seconds.
 
-## Terminal aesthetic preview spec
+## Terminal controls
 
-The launch view has workspace/session cards and grouped tools. During a turn, the center becomes a
-transcript: prompt, compact tool arguments, aligned output previews, assistant text and working summary.
-DAG and plan/rules drawers are optional. These shortened ASCII transcriptions come from 140x45
-TestBackend renders of the actual demo states; colors and variable metadata are omitted.
+<details>
+<summary>Text previews of the launch screen and a sample turn</summary>
+
+These shortened transcriptions come from 140×45 test renders. They omit color and variable metadata.
 
 Launch screen:
 
@@ -239,6 +244,8 @@ advisor - warning: Scripts run unsandboxed as the host user; inspect source befo
 > Ask Lain anything
 ```
 
+</details>
+
 | Key / command | Screen |
 | --- | --- |
 | `1` / `/session` | Session: streaming transcript, tools and optional drawers. |
@@ -261,7 +268,8 @@ The daemon has no pricing source; live cost is unknown. Per-session directional 
 columns are omitted when unavailable. Memory shows entries read rather than storage capacity. Creator's Test/Publish can run
 host code; review source and permissions before confirming.
 
-### Palette
+<details>
+<summary>Theme palettes</summary>
 
 Values come from [`theme.rs`](crates/lain-cli/src/tui/theme.rs). `wired` uses fixed RGB:
 
@@ -283,6 +291,8 @@ terminal's palette controls actual colors.
 | Text, red/amber/peach accents | White / 15 | `#ffffff` |
 | Muted, cyan/blue/green/violet accents, gradient | Gray / 7 | `#c0c0c0` |
 | Shadow | DarkGray / 8 | `#808080` |
+
+</details>
 
 ## Earlier Node CLI
 
