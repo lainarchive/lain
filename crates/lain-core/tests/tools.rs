@@ -128,6 +128,43 @@ async fn registry_validates_before_dispatch() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn bash_accepts_a_per_command_timeout() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(Arc::new(BashTool {
+            working_directory: directory.path().into(),
+            timeout: Duration::from_millis(20),
+            output_byte_cap: 1024,
+        }))
+        .unwrap();
+    let command = "exec sleep 0.1";
+    assert!(matches!(
+        registry.dispatch("bash", json!({"command":command})).await,
+        Err(ToolError::Timeout)
+    ));
+    assert_eq!(
+        registry
+            .dispatch("bash", json!({"command":command,"timeout_ms":2000}))
+            .await
+            .unwrap()
+            .exit_code,
+        Some(0)
+    );
+    for args in [
+        json!({"command":command,"timeout_ms":0}),
+        json!({"command":command,"timeout_ms":"2000"}),
+        json!({"command":command,"environment":{}}),
+    ] {
+        assert!(matches!(
+            registry.dispatch("bash", args).await,
+            Err(ToolError::Arguments(_))
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn bash_output_limits_exit_environment_and_timeout() {
     let directory = tempfile::tempdir().unwrap();
     let mut tool = BashTool {
@@ -396,6 +433,33 @@ fn vanished_process_errors() {
         )));
     }
     assert!(!process_disappeared(&std::io::Error::from_raw_os_error(13)));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn bash_timeout_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let tool = BashTool {
+        working_directory: directory.path().into(),
+        timeout: Duration::from_millis(500),
+        output_byte_cap: 1024,
+    };
+    assert!(matches!(
+        tool.execute(json!({"command":"sleep 30 & echo $! > child.pid; wait"}))
+            .await,
+        Err(ToolError::Timeout)
+    ));
+    let pid = std::fs::read_to_string(directory.path().join("child.pid"))?
+        .trim()
+        .parse::<u32>()?;
+    let result = wait_for_process_exit(pid).await;
+    if result.is_err() {
+        tokio::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .await?;
+    }
+    result
 }
 
 #[cfg(target_os = "linux")]
