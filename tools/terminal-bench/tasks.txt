@@ -1,0 +1,14 @@
+# Pinned head-to-head task list, Terminal-Bench 2.0.
+# Selection: exclude tasks requesting exploit work and tasks used in earlier
+# smoke runs, sort the rest easy-before-medium-before-hard then alphabetical,
+# take the first ten.
+adaptive-rejection-sampler
+build-pmars
+caffe-cifar-10
+cobol-modernization
+compile-compcert
+constraints-scheduling
+count-dataset-tokens
+fix-git
+overfull-hbox
+prove-plus-comm
