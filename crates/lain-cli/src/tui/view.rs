@@ -217,7 +217,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
             for note in state.notes.iter().filter(|n| Some(n.turn) == turn) {
                 let (kind, color) = match note.kind {
                     AdvisorKind::Aside => ("aside", HI),
-                    AdvisorKind::Warning => ("warning", HI),
+                    AdvisorKind::Warning => ("warning", ACCENT),
                     AdvisorKind::Blocker => ("blocker", RED),
                 };
                 rows.push((
