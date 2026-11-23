@@ -89,7 +89,7 @@ pub fn inline(text: &str) -> Vec<Span<'static>> {
                     if marker == "**" {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(CYAN).bg(PANEL)
+                        Style::default().fg(ACCENT).bg(PANEL)
                     },
                 ));
                 rest = tail;
@@ -162,7 +162,7 @@ pub fn markdown(text: &str, width: u16) -> Vec<Line<'static>> {
         } else if code {
             lines.extend(code_lines(line, width - 4));
         } else if let Some(bullet) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            let mut spans = vec![Span::styled("• ", Style::default().fg(CYAN))];
+            let mut spans = vec![Span::styled("• ", Style::default().fg(ACCENT))];
             spans.extend(inline(bullet));
             lines.push(Line::from(spans));
         } else {
@@ -238,7 +238,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                 let color = match tool.ok {
                     Some(true) => GREEN,
                     Some(false) => RED,
-                    None if running => BLUE,
+                    None if running => ACCENT,
                     None => MUTED,
                 };
                 let elapsed = tool
@@ -250,7 +250,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                 rows.push((
                     Some(Selection::Tool(index)),
                     Line::from(vec![
-                        Span::styled("▎ ", Style::default().fg(CYAN)),
+                        Span::styled("▎ ", Style::default().fg(ACCENT)),
                         Span::styled(status, Style::default().fg(color)),
                         Span::raw(format!(
                             " {}({})",
@@ -310,7 +310,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                         } else {
                             format!("λ lain · {}", task.model)
                         },
-                        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                     ),
                 ));
                 rows.extend(
@@ -322,8 +322,8 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
             let turn = node.id.trim_start_matches("turn-").parse::<u64>().ok();
             for note in state.notes.iter().filter(|note| Some(note.turn) == turn) {
                 let (kind, color) = match note.kind {
-                    AdvisorKind::Aside => ("aside", VIOLET),
-                    AdvisorKind::Warning => ("warning", AMBER),
+                    AdvisorKind::Aside => ("aside", HI),
+                    AdvisorKind::Warning => ("warning", HI),
                     AdvisorKind::Blocker => ("blocker", RED),
                 };
                 rows.push((
@@ -427,7 +427,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State, now: Duration, scroll:
     if !state.follow && state.unseen {
         frame.render_widget(
             Paragraph::new(" ↓ new output · PgDn to follow ")
-                .style(Style::default().bg(PANEL).fg(CYAN)),
+                .style(Style::default().bg(PANEL).fg(ACCENT)),
             Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
         );
     }
@@ -453,7 +453,7 @@ pub fn working(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
                 now.saturating_sub(task.started).as_secs(),
                 count(task.tokens)
             ),
-            Style::default().fg(CYAN),
+            Style::default().fg(ACCENT),
         ),
         Line::styled(format!("└ Tip: {tip}"), Style::default().fg(MUTED)),
     ];

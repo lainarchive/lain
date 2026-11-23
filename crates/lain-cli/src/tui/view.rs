@@ -18,7 +18,7 @@ use super::{
 
 pub(super) fn color(phase: Phase) -> Color {
     match phase {
-        Phase::Running => BLUE,
+        Phase::Running => ACCENT,
         Phase::Failed => RED,
         Phase::Evidence(Status::ObservedVerified) => GREEN,
         _ => MUTED,
@@ -27,7 +27,7 @@ pub(super) fn color(phase: Phase) -> Color {
 
 fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
     Block::default()
-        .title(Span::styled(title, Style::default().fg(CYAN)))
+        .title(Span::styled(title, Style::default().fg(ACCENT)))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(MUTED))
         .style(Style::default().bg(PANEL).fg(TEXT))
@@ -91,7 +91,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                     nodes.len(),
                     done
                 ),
-                Style::default().fg(CYAN),
+                Style::default().fg(ACCENT),
             ),
         ));
         if collapsed {
@@ -138,7 +138,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                         title,
                         Style::default()
                             .fg(if task.title.starts_with('↻') {
-                                VIOLET
+                                HI
                             } else {
                                 color(task.phase)
                             })
@@ -158,9 +158,9 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                 .filter(|(_, t)| t.node == node.id)
             {
                 let tool_color = if tool.name.contains("file") || tool.name == "repo_map" {
-                    PEACH
+                    MUTED
                 } else {
-                    AMBER
+                    HI
                 };
                 rows.push((
                     Some(Selection::Tool(index)),
@@ -177,7 +177,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                             Style::default().fg(match tool.ok {
                                 Some(true) => GREEN,
                                 Some(false) => RED,
-                                None => BLUE,
+                                None => ACCENT,
                             }),
                         ),
                     ]),
@@ -205,8 +205,8 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
             let turn = node.id.trim_start_matches("turn-").parse::<u64>().ok();
             for note in state.notes.iter().filter(|n| Some(n.turn) == turn) {
                 let (kind, color) = match note.kind {
-                    AdvisorKind::Aside => ("aside", VIOLET),
-                    AdvisorKind::Warning => ("warning", AMBER),
+                    AdvisorKind::Aside => ("aside", HI),
+                    AdvisorKind::Warning => ("warning", HI),
                     AdvisorKind::Blocker => ("blocker", RED),
                 };
                 rows.push((
@@ -315,7 +315,7 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
         .count();
     let mut plan = vec![Line::styled(
         format!("[Plan] {done}/{}", plan_lines.len()),
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
     )];
     if plan_lines.is_empty() {
         plan.push(Line::styled(

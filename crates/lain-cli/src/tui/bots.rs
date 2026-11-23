@@ -26,7 +26,7 @@ fn status(value: Option<SessionStatus>) -> (&'static str, ratatui::style::Color)
     match value {
         Some(SessionStatus::Running) => ("● running", GREEN),
         Some(SessionStatus::Idle) => ("○ idle", MUTED),
-        Some(SessionStatus::Busy) => ("● busy", AMBER),
+        Some(SessionStatus::Busy) => ("● busy", HI),
         None => ("— unknown", MUTED),
     }
 }
@@ -51,7 +51,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
         ),
         Span::styled(
             "λ lain daemon",
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
     ];
     if let Some(pid) = view.pid {
@@ -116,7 +116,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
                         "{} read",
                         number(view.memory.data.iter().filter(|m| m.kind == kind).count() as u64)
                     ),
-                    Style::default().fg(CYAN),
+                    Style::default().fg(ACCENT),
                 ),
             ]));
         }
@@ -210,7 +210,7 @@ pub fn draw(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
     );
     frame.render_stateful_widget(
         Table::new(rows, widths)
-            .header(Row::new(names).style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD)))
+            .header(Row::new(names).style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
             .block(panel(format!(" {} agents ", n)))
             .column_spacing(1)
             .row_highlight_style(Style::default().bg(PANEL))

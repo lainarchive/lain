@@ -14,7 +14,7 @@ use super::{
 
 fn selected() -> Style {
     Style::default()
-        .fg(CYAN)
+        .fg(ACCENT)
         .bg(PANEL)
         .add_modifier(Modifier::BOLD)
 }
@@ -67,7 +67,7 @@ pub fn completion(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(Span::styled(
             " Slash commands · Tab/↑↓ select · Enter run · Esc close ",
-            Style::default().fg(CYAN),
+            Style::default().fg(ACCENT),
         ))),
         area,
     );
@@ -89,7 +89,7 @@ pub fn overlay(frame: &mut Frame, state: &State, scroll: &mut Scroll) {
                 .max(1);
             let start = selected.saturating_sub(visible - 1);
             let mut lines = vec![
-                Line::styled(format!(" > {query}"), Style::default().fg(CYAN)),
+                Line::styled(format!(" > {query}"), Style::default().fg(ACCENT)),
                 Line::from(""),
             ];
             lines.extend(
@@ -111,7 +111,7 @@ pub fn overlay(frame: &mut Frame, state: &State, scroll: &mut Scroll) {
             (" Commands ", lines, height)
         }
         Overlay::Help => {
-            let mut lines = vec![Line::styled("Global keys", Style::default().fg(CYAN))];
+            let mut lines = vec![Line::styled("Global keys", Style::default().fg(ACCENT))];
             lines.extend(
                 app::GLOBAL_KEYS
                     .iter()
@@ -119,14 +119,14 @@ pub fn overlay(frame: &mut Frame, state: &State, scroll: &mut Scroll) {
             );
             lines.push(Line::styled(
                 format!("{} keys", state.screen.name()),
-                Style::default().fg(CYAN),
+                Style::default().fg(ACCENT),
             ));
             lines.extend(
                 app::screen_keys(state.screen)
                     .iter()
                     .map(|(key, text)| Line::from(format!("{key}  {text}"))),
             );
-            lines.push(Line::styled("Commands (/id)", Style::default().fg(CYAN)));
+            lines.push(Line::styled("Commands (/id)", Style::default().fg(ACCENT)));
             let width = usize::from(frame.area().width.saturating_sub(8).min(112)) / 2;
             for pair in app::COMMANDS.chunks(2) {
                 let mut spans = vec![];
@@ -149,7 +149,7 @@ pub fn overlay(frame: &mut Frame, state: &State, scroll: &mut Scroll) {
             vec![
                 Line::styled(
                     "Discard current draft / session view?",
-                    Style::default().fg(AMBER),
+                    Style::default().fg(HI),
                 ),
                 Line::from("Any active turn will be cancelled; filesystem writes are not undone."),
                 Line::from("Enter confirms · Esc keeps working"),
@@ -172,7 +172,7 @@ pub fn overlay(frame: &mut Frame, state: &State, scroll: &mut Scroll) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(Span::styled(title, Style::default().fg(CYAN))),
+                .title(Span::styled(title, Style::default().fg(ACCENT))),
         );
     if matches!(state.overlay, Some(Overlay::Help)) {
         let paragraph = paragraph.wrap(Wrap { trim: false });

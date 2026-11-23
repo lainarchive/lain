@@ -3,18 +3,19 @@ use ratatui::style::Color;
 
 use super::state::Mode;
 
-pub const BACKGROUND: Color = Color::Rgb(10, 13, 20);
-pub const PANEL: Color = Color::Rgb(17, 23, 34);
-pub const TEXT: Color = Color::Rgb(218, 228, 239);
-pub const MUTED: Color = Color::Rgb(136, 151, 174);
-pub const CYAN: Color = Color::Rgb(159, 216, 250);
-pub const BLUE: Color = Color::Rgb(132, 182, 230);
-pub const GREEN: Color = Color::Rgb(143, 201, 179);
-pub const RED: Color = Color::Rgb(239, 155, 152);
-pub const VIOLET: Color = Color::Rgb(179, 160, 238);
-pub const AMBER: Color = Color::Rgb(232, 163, 145);
-pub const PEACH: Color = Color::Rgb(216, 170, 159);
-pub const SHADOW: Color = Color::Rgb(43, 53, 76);
+// Silver and ice on near-black, after the la.03 sleeve. One accent; no violet, no orange.
+pub const BACKGROUND: Color = Color::Rgb(7, 8, 10);
+pub const PANEL: Color = Color::Rgb(14, 16, 20);
+pub const SELECT: Color = Color::Rgb(18, 22, 28);
+pub const LINE: Color = Color::Rgb(32, 36, 42);
+pub const TEXT: Color = Color::Rgb(230, 233, 237);
+pub const MUTED: Color = Color::Rgb(141, 148, 158);
+pub const FAINT: Color = Color::Rgb(77, 83, 93);
+pub const ACCENT: Color = Color::Rgb(142, 203, 255);
+pub const HI: Color = Color::Rgb(228, 245, 255);
+pub const GREEN: Color = Color::Rgb(159, 227, 200);
+pub const RED: Color = Color::Rgb(255, 122, 133);
+pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Theme {
@@ -37,22 +38,27 @@ impl Theme {
         }
     }
 
-    pub fn gradient(self, column: u16, width: u16) -> Color {
+    /// Colour of one cell of a full-width rule: brushed silver, with a glint that
+    /// sweeps across once every `width + 30` ticks.
+    pub fn gradient(self, column: u16, width: u16, tick: u64) -> Color {
         if self == Self::Mono {
             return Color::Gray;
         }
-        let t = f32::from(column) / f32::from(width.saturating_sub(1).max(1));
-        Color::Rgb(
-            (159.0 + 20.0 * t) as u8,
-            (216.0 - 56.0 * t) as u8,
-            (250.0 - 12.0 * t) as u8,
-        )
+        let span = u64::from(width) + 30;
+        let head = (tick * 9 % span) as i64 - 15;
+        match (i64::from(column) - head).abs() {
+            0..=1 => HI,
+            2..=3 => Color::Rgb(180, 198, 216),
+            4..=5 => Color::Rgb(108, 122, 138),
+            6..=7 => Color::Rgb(57, 66, 77),
+            _ => LINE,
+        }
     }
 
     pub fn mode(self, mode: Mode) -> Color {
         self.resolve(match mode {
-            Mode::Architect => VIOLET,
-            Mode::Code => CYAN,
+            Mode::Architect => ACCENT,
+            Mode::Code => HI,
             Mode::Ask => GREEN,
         })
     }
@@ -62,13 +68,11 @@ impl Theme {
             return color;
         }
         match color {
-            BACKGROUND => Color::Black,
-            PANEL => Color::Black,
-            TEXT => Color::White,
-            MUTED => Color::Gray,
-            SHADOW => Color::DarkGray,
-            RED | AMBER | PEACH => Color::White,
-            CYAN | BLUE | GREEN | VIOLET => Color::Gray,
+            BACKGROUND | PANEL | SELECT => Color::Black,
+            TEXT | HI => Color::White,
+            MUTED | ACCENT | GREEN => Color::Gray,
+            FAINT | LINE => Color::DarkGray,
+            RED => Color::White,
             _ => color,
         }
     }

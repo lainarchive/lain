@@ -98,7 +98,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
                             } else {
                                 format!("{} · {}", state.model_chain, state.mode.name())
                             },
-                            Style::default().fg(CYAN),
+                            Style::default().fg(ACCENT),
                         ),
                         Line::from(format!(
                             "session {}",
@@ -114,19 +114,19 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
                 frame.render_widget(
                     Paragraph::new(vec![
                         Line::from(vec![
-                            Span::styled("/creator", Style::default().fg(CYAN)),
+                            Span::styled("/creator", Style::default().fg(ACCENT)),
                             Span::raw("   build a tool"),
                         ]),
                         Line::from(vec![
-                            Span::styled("/plugins", Style::default().fg(CYAN)),
+                            Span::styled("/plugins", Style::default().fg(ACCENT)),
                             Span::raw("   browse tools"),
                         ]),
                         Line::from(vec![
-                            Span::styled("/theme", Style::default().fg(CYAN)),
+                            Span::styled("/theme", Style::default().fg(ACCENT)),
                             Span::raw("     switch look"),
                         ]),
                         Line::from(vec![
-                            Span::styled("?", Style::default().fg(CYAN)),
+                            Span::styled("?", Style::default().fg(ACCENT)),
                             Span::raw("          every shortcut"),
                         ]),
                     ])
@@ -137,7 +137,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
         } else {
             frame.render_widget(
                 Paragraph::new("/creator build · /plugins tools · /theme look · ? help")
-                    .style(Style::default().fg(CYAN)),
+                    .style(Style::default().fg(ACCENT)),
                 *area,
             );
         }
@@ -189,7 +189,7 @@ fn wordmark(frame: &mut Frame, area: Rect, theme: Theme) {
                     if let Some(cell) = frame.buffer_mut().cell_mut(point) {
                         cell.set_symbol(&c.to_string())
                             .set_style(Style::default().fg(if shadow {
-                                SHADOW
+                                LINE
                             } else {
                                 theme.gradient(x as u16, width)
                             }));
@@ -254,7 +254,7 @@ fn grid(frame: &mut Frame, area: Rect, state: &State) {
         names.sort();
         let mut spans = vec![Span::styled(
             format!("{:<24}", fit(&label, 23)),
-            Style::default().fg(if plugin { VIOLET } else { CYAN }),
+            Style::default().fg(if plugin { HI } else { ACCENT }),
         )];
         let shown = if names.len() > columns {
             columns.saturating_sub(1)

@@ -610,7 +610,7 @@ fn shell_help_and_tab_highlight_fit_minimum_size() -> Result<(), Box<dyn std::er
         .buffer()
         .cell((x as u16, 0))
         .ok_or("missing cell")?;
-    assert_eq!(cell.fg, super::theme::CYAN);
+    assert_eq!(cell.fg, super::theme::ACCENT);
     assert_eq!(cell.bg, super::theme::PANEL);
     state.key(
         KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
@@ -1346,7 +1346,7 @@ fn markdown_styles_fences_and_drawer_defaults() -> Result<(), Box<dyn std::error
             .contains(ratatui::style::Modifier::BOLD)));
     assert!(spans
         .iter()
-        .any(|span| span.content == "code" && span.style.fg == Some(super::theme::CYAN)));
+        .any(|span| span.content == "code" && span.style.fg == Some(super::theme::ACCENT)));
     assert!(spans
         .iter()
         .any(|span| span.content.contains("**unfinished")));
