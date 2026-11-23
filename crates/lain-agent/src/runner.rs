@@ -40,6 +40,7 @@ const PROVIDER_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(4),
 ];
+const MAX_RETRY_DELAY_WITHOUT_DEADLINE: Duration = Duration::from_secs(120);
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
 
 #[derive(Deserialize)]
@@ -586,6 +587,9 @@ impl AgentRunner {
             };
             // A failed request can have used tokens even when it never returned usage.
             if emitted_delta || self.config.budget.max_total_tokens.is_some() {
+                return Err(error);
+            }
+            if self.deadline().is_none() && retry_after > MAX_RETRY_DELAY_WITHOUT_DEADLINE {
                 return Err(error);
             }
             tokio::time::sleep(delay.max(retry_after)).await;
@@ -2193,6 +2197,25 @@ mod tests {
                 budget: BudgetKind::WallTime,
             })
         );
+        assert_eq!(provider.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retrying_does_not_wait_indefinitely_without_a_wall_time_budget() {
+        let provider = ScriptedProvider::new(vec![Err(CoreError::Status {
+            status: 429,
+            body: "rate limited".into(),
+            retry_after: Some(Duration::from_secs(3_600)),
+        })]);
+        let (mut agent, _) = runner(config(), provider.clone());
+
+        let result = tokio::time::timeout(Duration::from_secs(2), agent.run("Please investigate"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            Err(AgentError::Provider(CoreError::Status { status: 429, .. }))
+        ));
         assert_eq!(provider.requests().len(), 1);
     }
 

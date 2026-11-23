@@ -1,9 +1,9 @@
+use std::time::Duration;
+
 pub mod provider;
 pub mod tools;
 
 pub use lain_plugin as plugin;
-
-use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
