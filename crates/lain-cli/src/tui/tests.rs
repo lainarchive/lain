@@ -229,7 +229,7 @@ fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
     ));
     state.seed_demo_turn(Duration::from_secs(2));
     assert!(!state.launch());
-    assert_eq!(state.tools.len(), 3);
+    assert_eq!(state.tools.len(), 8);
     let task = state
         .active
         .as_ref()
@@ -237,7 +237,11 @@ fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
         .ok_or("missing turn")?;
     assert_eq!(task.prompt, "my own prompt");
     assert!(task.text.contains("Canned demo turn"));
-    assert!(state.tools.iter().all(|tool| tool.node == task.node.id));
+    assert!(state
+        .tools
+        .iter()
+        .filter(|tool| !tool.call_id.starts_with("demo-lane"))
+        .all(|tool| tool.node == task.node.id));
     Ok(())
 }
 
@@ -1227,7 +1231,12 @@ fn transcript_polish_uses_compact_arguments_and_useful_tips(
     );
     assert_eq!(super::transcript::arguments("invalid"), "invalid");
     let state = State::demo_turn()?;
-    let text = render(&state)?;
+    // Tall enough that the demo's lane events don't push the turn's tools out of view.
+    let mut terminal = Terminal::new(TestBackend::new(140, 70))?;
+    terminal.draw(|frame| {
+        view::draw(frame, &state, Duration::from_secs(2));
+    })?;
+    let text = contents(&terminal);
     assert!(!text.contains("● running"));
     assert!(text.contains("repo_map()"));
     assert!(text.contains("memory_read(Creator publishing workflow)"));
@@ -1832,8 +1841,10 @@ fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
                 .skip_while(|line| !line.contains(title))
                 .skip(1)
                 .map_while(|line| {
-                    line.split_once('│')
-                        .and_then(|(_, right)| right.rsplit_once('│').map(|(content, _)| content))
+                    // Panels only draw a left rule, so a closing │ is optional.
+                    line.split_once('│').map(|(_, right)| {
+                        right.rsplit_once('│').map_or(right, |(content, _)| content)
+                    })
                 })
                 .collect::<Vec<_>>()
                 .join("\n")

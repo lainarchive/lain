@@ -32,6 +32,17 @@ fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
+        // Open panels: one left rule, same box geometry the scroll maths assumes.
+        .border_set(ratatui::symbols::border::Set {
+            top_left: " ",
+            top_right: " ",
+            bottom_left: " ",
+            bottom_right: " ",
+            vertical_left: "│",
+            vertical_right: " ",
+            horizontal_top: " ",
+            horizontal_bottom: " ",
+        })
         .border_style(Style::default().fg(LINE))
         .style(Style::default().bg(PANEL).fg(TEXT))
 }
@@ -50,7 +61,10 @@ fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         .map(|cost| format!("cost ${cost:.4}"));
     let mut telemetry = vec![];
     if let Some(rate) = state.token_rate(now).filter(|rate| *rate > 0.0) {
-        telemetry.push(format!("{rate:.1} tok/s"));
+        telemetry.push(format!(
+            "{} {rate:.1} tok/s",
+            sparkline(&state.rate_history(now, 16))
+        ));
     }
     if let Some(cost) = cost {
         telemetry.push(cost);
@@ -178,7 +192,10 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                     Line::from(vec![
                         Span::raw(format!("    {} › ", if tool.expanded { "▾" } else { "▸" })),
                         Span::styled(tool.name.clone(), Style::default().fg(tool_color)),
-                        Span::styled(format!("({})", tool.arguments), Style::default().fg(MUTED)),
+                        Span::styled(
+                            format!("({})", super::transcript::arguments(&tool.arguments)),
+                            Style::default().fg(MUTED),
+                        ),
                         Span::styled(
                             match tool.ok {
                                 Some(true) => " ✓",
@@ -235,6 +252,15 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
 }
 
 type Row = (Option<Selection>, Line<'static>);
+
+fn sparkline(values: &[u64]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = values.iter().copied().max().unwrap_or(0).max(1);
+    values
+        .iter()
+        .map(|v| BARS.get((v * 7 / max) as usize).copied().unwrap_or('▁'))
+        .collect()
+}
 
 /// Segmented bar, one segment per lane, then the evidence counts.
 fn run_header(state: &State, width: u16) -> Vec<Row> {
@@ -336,7 +362,14 @@ fn timeline(state: &State, width: u16, now: Duration) -> Vec<Row> {
     )];
     for task in tasks {
         let from = col(task.started).min(track - 1);
-        let to = col(task.ended.unwrap_or(now)).clamp(from, track - 1);
+        let to = if matches!(
+            task.phase,
+            Phase::Evidence(Status::Planned) | Phase::NotSent
+        ) {
+            from
+        } else {
+            col(task.ended.unwrap_or(now)).clamp(from, track - 1)
+        };
         let fg = color(task.phase);
         let name: String = task.title.chars().take(label).collect();
         let mut spans = vec![
@@ -622,7 +655,12 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                     let sections = Layout::vertical([
                         Constraint::Percentage(if dag {
                             if plan {
-                                40
+                                // The full-output drawer needs the room back when a tool is open.
+                                if matches!(state.selected, Some(Selection::Tool(i)) if state.tools.get(i).is_some_and(|t| t.expanded)) {
+                                    40
+                                } else {
+                                    70
+                                }
                             } else {
                                 100
                             }

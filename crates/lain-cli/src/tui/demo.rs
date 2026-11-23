@@ -120,7 +120,7 @@ impl State {
             task.model = state.model_chain.clone();
             task.tokens = 3400;
             task.text = concat!(
-                "**Canned demo turn — not a provider response to your prompt.**\n\n",
+                "**Canned demo turn, not a provider response to your prompt.**\n\n",
                 "**The Creator path is ready to review.**\n\n",
                 "- Browse manifests with `/plugins`.\n",
                 "- Build and test a proposal in `/creator`.\n",
@@ -150,5 +150,143 @@ impl State {
         state.plan =
             "[✓] Inspect plugin contracts\n[✓] Prepare Creator plan\n[●] Review catalog".into();
         state.rules = vec!["Require observed evidence before claiming verification.".into()];
+        state.seed_demo_lanes(&node, now);
+    }
+
+    /// Six planned lanes over three layers, so the rail and timeline have a run to show.
+    fn seed_demo_lanes(&mut self, plan: &str, now: Duration) {
+        use super::state::Phase;
+        use lain_harness::evidence::Status;
+        let at = |s: u64| now + Duration::from_secs(s);
+        if let Some(task) = self.tasks.get_mut(plan) {
+            task.title = "plan".into();
+        }
+        let verified = Phase::Evidence(Status::ObservedVerified);
+        let waiting = Phase::Evidence(Status::Planned);
+        for (id, deps, model, phase, started, ended, tokens) in [
+            (
+                "manifest-v2",
+                vec![plan],
+                "gpt-5-mini",
+                verified,
+                at(1),
+                Some(at(18)),
+                312_000,
+            ),
+            (
+                "policy-gate",
+                vec![plan],
+                "claude-4.5",
+                verified,
+                at(1),
+                Some(at(24)),
+                1_100_000,
+            ),
+            (
+                "ipc-bridge",
+                vec!["manifest-v2", "policy-gate"],
+                "gpt-5",
+                Phase::Running,
+                at(19),
+                None,
+                608_000,
+            ),
+            (
+                "windows-job",
+                vec!["policy-gate"],
+                "gpt-5",
+                Phase::Running,
+                at(25),
+                None,
+                291_000,
+            ),
+            (
+                "sandbox-tests",
+                vec!["ipc-bridge", "windows-job"],
+                "claude-4.5",
+                waiting,
+                now,
+                None,
+                0,
+            ),
+            (
+                "security-doc",
+                vec!["windows-job"],
+                "gpt-5-mini",
+                waiting,
+                now,
+                None,
+                0,
+            ),
+        ] {
+            if self
+                .add_lane(id, &deps, model, phase, started, ended, tokens)
+                .is_err()
+            {
+                return;
+            }
+        }
+        for (index, (lane, name, arguments, output, ok, started, ended)) in [
+            (
+                "manifest-v2",
+                "bash",
+                json!({"command":"cargo test -p lain-plugin"}),
+                "23 passed",
+                Some(true),
+                14,
+                Some(18),
+            ),
+            (
+                "policy-gate",
+                "bash",
+                json!({"command":"cargo test policy"}),
+                "41 passed",
+                Some(true),
+                20,
+                Some(24),
+            ),
+            (
+                "ipc-bridge",
+                "bash",
+                json!({"command":"cargo check -p lain-ipc"}),
+                "finished",
+                Some(true),
+                22,
+                Some(26),
+            ),
+            (
+                "windows-job",
+                "edit",
+                json!({"path":"sandbox/windows.rs"}),
+                "+40 -6",
+                Some(true),
+                28,
+                Some(29),
+            ),
+            (
+                "ipc-bridge",
+                "bash",
+                json!({"command":"cargo test -p lain-ipc"}),
+                "",
+                None,
+                30,
+                None,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.tools.push(ToolBlock {
+                node: lane.into(),
+                call_id: format!("demo-lane-{index}"),
+                name: name.into(),
+                arguments: arguments.to_string(),
+                output: output.into(),
+                ok,
+                expanded: false,
+                started: at(started),
+                ended: ended.map(at),
+            });
+        }
     }
 }

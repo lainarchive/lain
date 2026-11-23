@@ -308,6 +308,61 @@ impl State {
         })
     }
 
+    /// Tokens per second over the last `seconds`, oldest first.
+    pub fn rate_history(&self, now: Duration, seconds: u64) -> Vec<u64> {
+        (0..seconds)
+            .rev()
+            .map(|ago| {
+                if self.demo {
+                    // shortcut: canned demo wobble, real runs read samples below.
+                    let t = now.as_secs().saturating_sub(ago);
+                    return 24 + (t * 7919 % 29);
+                }
+                let to = now.saturating_sub(Duration::from_secs(ago));
+                let from = to.saturating_sub(Duration::from_secs(1));
+                self.samples
+                    .iter()
+                    .filter(|(at, _)| *at > from && *at <= to)
+                    .map(|(_, count)| *count)
+                    .sum()
+            })
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_lane(
+        &mut self,
+        id: &str,
+        deps: &[&str],
+        model: &str,
+        phase: Phase,
+        started: Duration,
+        ended: Option<Duration>,
+        tokens: u64,
+    ) -> Result<(), Error> {
+        self.tasks.insert(
+            id.into(),
+            Task {
+                // An empty prompt marks a planner lane rather than a chat turn.
+                prompt: String::new(),
+                node: Node {
+                    id: id.into(),
+                    deps: deps.iter().map(|d| (*d).into()).collect(),
+                    write_scope: self.scope.clone(),
+                },
+                title: id.into(),
+                model: model.into(),
+                phase,
+                started,
+                ended,
+                tokens,
+                text: String::new(),
+                stream_start: None,
+            },
+        );
+        self.rebuild()
+    }
+
     pub fn velocity(&self, now: Duration) -> f64 {
         if self.demo {
             return 38.6;
