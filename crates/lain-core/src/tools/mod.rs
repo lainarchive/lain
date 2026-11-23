@@ -346,9 +346,13 @@ impl Tool for BashTool {
                 command.env(key, value);
             }
         }
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .spawn()
             .map_err(|e| ToolError::Execution(e.to_string()))?;
+        #[cfg(unix)]
+        let mut tree_guard = ShellTreeGuard(child.id());
         let stdout = child
             .stdout
             .take()
@@ -366,19 +370,33 @@ impl Tool for BashTool {
         })
         .await;
         match result {
-            // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
-            // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
-            Ok(Ok((status, stdout, stderr))) => match status.code() {
-                Some(code) => Ok(ToolOutput {
-                    content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
-                    exit_code: Some(code),
-                }),
-                None => Err(ToolError::Execution(format!(
-                    "command ended without an exit code ({status}); stderr: {stderr}"
-                ))),
-            },
+            Ok(Ok((status, stdout, stderr))) => {
+                #[cfg(unix)]
+                {
+                    tree_guard.0 = None;
+                }
+                // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
+                // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
+                match status.code() {
+                    Some(code) => Ok(ToolOutput {
+                        content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
+                        exit_code: Some(code),
+                    }),
+                    None => Err(ToolError::Execution(format!(
+                        "command ended without an exit code ({status}); stderr: {stderr}"
+                    ))),
+                }
+            }
             Ok(Err(error)) => Err(ToolError::Execution(error.to_string())),
             Err(_) => {
+                #[cfg(unix)]
+                {
+                    kill_shell_tree(&mut child, tree_guard.0)
+                        .await
+                        .map_err(|e| ToolError::Execution(e.to_string()))?;
+                    tree_guard.0 = None;
+                }
+                #[cfg(not(unix))]
                 child
                     .kill()
                     .await
@@ -460,11 +478,11 @@ impl PowerShellTool {
     }
 }
 
-fn powershell_tree_killer(pid: u32) -> std::process::Command {
+fn shell_tree_killer(pid: u32) -> std::process::Command {
     #[cfg(unix)]
     let mut command = {
-        let mut command = std::process::Command::new("/bin/kill");
-        command.args(["-KILL", "--", &format!("-{pid}")]);
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "kill -KILL -\"$1\"", "sh", &pid.to_string()]);
         command
     };
     #[cfg(windows)]
@@ -483,15 +501,15 @@ fn powershell_tree_killer(pid: u32) -> std::process::Command {
     command
 }
 
-struct PowerShellTreeGuard(Option<u32>);
+struct ShellTreeGuard(Option<u32>);
 
-impl Drop for PowerShellTreeGuard {
+impl Drop for ShellTreeGuard {
     fn drop(&mut self) {
         let Some(pid) = self.0 else {
             return;
         };
         // I finish tree cleanup before Child drops; taskkill needs the interpreter alive to find descendants.
-        if let Ok(mut killer) = powershell_tree_killer(pid).spawn() {
+        if let Ok(mut killer) = shell_tree_killer(pid).spawn() {
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             loop {
                 match killer.try_wait() {
@@ -508,13 +526,16 @@ impl Drop for PowerShellTreeGuard {
     }
 }
 
-async fn kill_powershell_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
+async fn kill_shell_tree(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+) -> std::io::Result<()> {
     if let Some(pid) = pid {
         #[cfg(windows)]
         if child.id() != Some(pid) {
-            return;
+            return Ok(());
         }
-        let mut kill = tokio::process::Command::from(powershell_tree_killer(pid));
+        let mut kill = tokio::process::Command::from(shell_tree_killer(pid));
         let _ = tokio::time::timeout(
             Duration::from_secs(2),
             kill.stdin(Stdio::null())
@@ -525,7 +546,7 @@ async fn kill_powershell_tree(child: &mut tokio::process::Child, pid: Option<u32
         )
         .await;
     }
-    let _ = child.kill().await;
+    child.kill().await
 }
 
 #[async_trait]
@@ -597,7 +618,7 @@ impl Tool for PowerShellTool {
             .spawn()
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         let pid = child.id();
-        let mut tree_guard = PowerShellTreeGuard(pid);
+        let mut tree_guard = ShellTreeGuard(pid);
         let stdout = child
             .stdout
             .take()
@@ -629,7 +650,7 @@ impl Tool for PowerShellTool {
             }
             Ok(Err(error)) => Err(ToolError::Execution(error.to_string())),
             Err(_) => {
-                kill_powershell_tree(&mut child, pid).await;
+                let _ = kill_shell_tree(&mut child, pid).await;
                 tree_guard.0 = None;
                 Err(ToolError::Timeout)
             }

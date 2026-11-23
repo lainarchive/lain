@@ -437,6 +437,33 @@ fn vanished_process_errors() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn bash_timeout_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let tool = BashTool {
+        working_directory: directory.path().into(),
+        timeout: Duration::from_millis(500),
+        output_byte_cap: 1024,
+    };
+    assert!(matches!(
+        tool.execute(json!({"command":"sleep 30 & echo $! > child.pid; wait"}))
+            .await,
+        Err(ToolError::Timeout)
+    ));
+    let pid = std::fs::read_to_string(directory.path().join("child.pid"))?
+        .trim()
+        .parse::<u32>()?;
+    let result = wait_for_process_exit(pid).await;
+    if result.is_err() {
+        tokio::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .await?;
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let interpreter = directory.path().join("interpreter");
