@@ -822,7 +822,6 @@ impl AgentRunner {
                                 code: error.code().into(),
                                 message: error.to_string(),
                             },
-                            // Dropping the dispatch future drops the tool's child process, which BashTool spawns kill_on_drop.
                             Err(reason) => {
                                 let outcome = ToolOutcome::Interrupted {
                                     reason: format!("interrupted while running ({reason:?})"),

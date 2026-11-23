@@ -257,6 +257,20 @@ pub struct BashTool {
     pub output_byte_cap: usize,
 }
 
+const MAX_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn shell_timeout(args: &Value, default: Duration) -> Result<Duration, ToolError> {
+    let timeout = match args.get("timeout_ms") {
+        Some(value) => {
+            Duration::from_millis(value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                ToolError::Arguments("timeout_ms must be a positive integer".into())
+            })?)
+        }
+        None => default,
+    };
+    Ok(timeout.min(MAX_SHELL_TIMEOUT))
+}
+
 async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io::Result<String> {
     let mut stored = Vec::new();
     let mut buffer = [0; 8192];
@@ -287,16 +301,25 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a bash command with host permissions"
+        "Run a Bash command with host permissions. Each call starts a fresh shell; put directory changes and environment assignments inside command."
     }
     fn parameters_schema(&self) -> Value {
-        json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false})
+        json!({
+            "type":"object",
+            "properties":{
+                "command":{"type":"string"},
+                "timeout_ms":{"type":"integer","minimum":1,"description":"Optional deadline in milliseconds, capped at 300000."}
+            },
+            "required":["command"],
+            "additionalProperties":false
+        })
     }
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let script = args
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Arguments("command must be a string".into()))?;
+        let timeout = shell_timeout(&args, self.timeout)?;
         let mut command = tokio::process::Command::new("bash");
         command
             .arg("-c")
@@ -323,9 +346,13 @@ impl Tool for BashTool {
                 command.env(key, value);
             }
         }
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .spawn()
             .map_err(|e| ToolError::Execution(e.to_string()))?;
+        #[cfg(unix)]
+        let mut tree_guard = ShellTreeGuard(child.id());
         let stdout = child
             .stdout
             .take()
@@ -334,7 +361,7 @@ impl Tool for BashTool {
             .stderr
             .take()
             .ok_or_else(|| ToolError::Execution("missing stderr".into()))?;
-        let result = tokio::time::timeout(self.timeout, async {
+        let result = tokio::time::timeout(timeout, async {
             tokio::try_join!(
                 child.wait(),
                 read_capped(stdout, self.output_byte_cap),
@@ -343,19 +370,33 @@ impl Tool for BashTool {
         })
         .await;
         match result {
-            // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
-            // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
-            Ok(Ok((status, stdout, stderr))) => match status.code() {
-                Some(code) => Ok(ToolOutput {
-                    content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
-                    exit_code: Some(code),
-                }),
-                None => Err(ToolError::Execution(format!(
-                    "command ended without an exit code ({status}); stderr: {stderr}"
-                ))),
-            },
+            Ok(Ok((status, stdout, stderr))) => {
+                #[cfg(unix)]
+                {
+                    tree_guard.0 = None;
+                }
+                // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
+                // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
+                match status.code() {
+                    Some(code) => Ok(ToolOutput {
+                        content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
+                        exit_code: Some(code),
+                    }),
+                    None => Err(ToolError::Execution(format!(
+                        "command ended without an exit code ({status}); stderr: {stderr}"
+                    ))),
+                }
+            }
             Ok(Err(error)) => Err(ToolError::Execution(error.to_string())),
             Err(_) => {
+                #[cfg(unix)]
+                {
+                    kill_shell_tree(&mut child, tree_guard.0)
+                        .await
+                        .map_err(|e| ToolError::Execution(e.to_string()))?;
+                    tree_guard.0 = None;
+                }
+                #[cfg(not(unix))]
                 child
                     .kill()
                     .await
@@ -376,7 +417,7 @@ pub struct PowerShellTool {
 
 impl PowerShellTool {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-    pub const MAX_TIMEOUT: Duration = Duration::from_secs(300);
+    pub const MAX_TIMEOUT: Duration = MAX_SHELL_TIMEOUT;
 
     pub fn new(working_directory: impl Into<PathBuf>) -> Self {
         Self {
@@ -437,11 +478,11 @@ impl PowerShellTool {
     }
 }
 
-fn powershell_tree_killer(pid: u32) -> std::process::Command {
+fn shell_tree_killer(pid: u32) -> std::process::Command {
     #[cfg(unix)]
     let mut command = {
-        let mut command = std::process::Command::new("/bin/kill");
-        command.args(["-KILL", "--", &format!("-{pid}")]);
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "kill -KILL -\"$1\"", "sh", &pid.to_string()]);
         command
     };
     #[cfg(windows)]
@@ -460,15 +501,15 @@ fn powershell_tree_killer(pid: u32) -> std::process::Command {
     command
 }
 
-struct PowerShellTreeGuard(Option<u32>);
+struct ShellTreeGuard(Option<u32>);
 
-impl Drop for PowerShellTreeGuard {
+impl Drop for ShellTreeGuard {
     fn drop(&mut self) {
         let Some(pid) = self.0 else {
             return;
         };
         // I finish tree cleanup before Child drops; taskkill needs the interpreter alive to find descendants.
-        if let Ok(mut killer) = powershell_tree_killer(pid).spawn() {
+        if let Ok(mut killer) = shell_tree_killer(pid).spawn() {
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             loop {
                 match killer.try_wait() {
@@ -485,13 +526,16 @@ impl Drop for PowerShellTreeGuard {
     }
 }
 
-async fn kill_powershell_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
+async fn kill_shell_tree(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+) -> std::io::Result<()> {
     if let Some(pid) = pid {
         #[cfg(windows)]
         if child.id() != Some(pid) {
-            return;
+            return Ok(());
         }
-        let mut kill = tokio::process::Command::from(powershell_tree_killer(pid));
+        let mut kill = tokio::process::Command::from(shell_tree_killer(pid));
         let _ = tokio::time::timeout(
             Duration::from_secs(2),
             kill.stdin(Stdio::null())
@@ -502,7 +546,7 @@ async fn kill_powershell_tree(child: &mut tokio::process::Child, pid: Option<u32
         )
         .await;
     }
-    let _ = child.kill().await;
+    child.kill().await
 }
 
 #[async_trait]
@@ -529,15 +573,7 @@ impl Tool for PowerShellTool {
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Arguments("command must be a string".into()))?;
-        let timeout = match args.get("timeout_ms") {
-            Some(value) => {
-                Duration::from_millis(value.as_u64().filter(|value| *value > 0).ok_or_else(
-                    || ToolError::Arguments("timeout_ms must be a positive integer".into()),
-                )?)
-            }
-            None => self.timeout,
-        }
-        .min(Self::MAX_TIMEOUT);
+        let timeout = shell_timeout(&args, self.timeout)?;
         // I force UTF-8 for Windows PowerShell's legacy code page, then parse separately so param/using statements still work.
         let script = format!(
             "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ([scriptblock]::Create('{}'))",
@@ -582,7 +618,7 @@ impl Tool for PowerShellTool {
             .spawn()
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         let pid = child.id();
-        let mut tree_guard = PowerShellTreeGuard(pid);
+        let mut tree_guard = ShellTreeGuard(pid);
         let stdout = child
             .stdout
             .take()
@@ -614,7 +650,7 @@ impl Tool for PowerShellTool {
             }
             Ok(Err(error)) => Err(ToolError::Execution(error.to_string())),
             Err(_) => {
-                kill_powershell_tree(&mut child, pid).await;
+                let _ = kill_shell_tree(&mut child, pid).await;
                 tree_guard.0 = None;
                 Err(ToolError::Timeout)
             }
