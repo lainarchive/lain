@@ -469,7 +469,6 @@ impl AgentRunner {
             }
             let truncated = response.finish_reason.as_deref() == Some("length");
             if truncated
-                && message.content.as_deref().is_none_or(str::is_empty)
                 && completion_retry_turn != Some(run_turn)
                 && run_turn < self.config.max_turns
             {
@@ -2413,10 +2412,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_length_limited_completion_reports_partial_output_and_does_not_run_tools() {
-        let mut response = calls(Some("Partial answer"), &["read"]).unwrap();
-        response.finish_reason = Some("length".into());
-        let provider = ScriptedProvider::new(vec![Ok(response)]);
+    async fn a_length_limited_completion_retries_once_then_reports_partial_output() {
+        let mut truncated = calls(Some("Partial answer"), &["read"]).unwrap();
+        truncated.finish_reason = Some("length".into());
+        let provider = ScriptedProvider::new(vec![Ok(truncated.clone()), Ok(truncated)]);
         let (mut agent, _) = runner(config(), provider.clone());
         let outcome = agent.run("Please investigate").await.unwrap();
         assert_eq!(outcome.output.as_deref(), Some("Partial answer"));
@@ -2426,8 +2425,22 @@ mod tests {
                 budget: BudgetKind::CompletionTokens,
             }),
         );
-        assert_eq!(provider.requests().len(), 1);
+        assert_eq!(provider.requests().len(), 2);
         assert!(agent.state().messages.last().unwrap().tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_length_limited_completion_with_content_keeps_the_run_going() {
+        let mut truncated = calls(Some("mid-task reasoning"), &["read"]).unwrap();
+        truncated.finish_reason = Some("length".into());
+        let provider =
+            ScriptedProvider::new(vec![Ok(truncated), calls(None, &["ok"]), text("Done")]);
+        let (mut agent, _) = runner(config(), provider.clone());
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("Done"));
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        assert_eq!(provider.requests().len(), 3);
+        assert_eq!(agent.state().tool_calls, 1);
     }
 
     #[tokio::test]
