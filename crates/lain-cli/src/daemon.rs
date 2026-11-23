@@ -1,5 +1,4 @@
 #[cfg(unix)]
-use std::time::Duration;
 use std::{
     collections::HashMap,
     future::Future,
@@ -20,7 +19,7 @@ use lain_core::plugin::PluginManager;
 use lain_core::tools::BashTool;
 #[cfg(windows)]
 use lain_core::tools::PowerShellTool;
-use lain_core::tools::{MemoryReadTool, RepoMapTool, ToolRegistry};
+use lain_core::tools::{MemoryReadTool, RepoMapTool, ToolRegistry, MAX_SHELL_TIMEOUT};
 use lain_ipc::{Command, CommandHandler, Event, EventSink, PROTOCOL_VERSION};
 use lain_memory::MemoryStore;
 use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
@@ -66,7 +65,7 @@ impl ConfigFactory {
             #[cfg(unix)]
             tools.register(Arc::new(BashTool {
                 working_directory: self.working_directory.clone(),
-                timeout: Duration::from_secs(30),
+                timeout: MAX_SHELL_TIMEOUT,
                 output_byte_cap: 64 * 1024,
             }))?;
             #[cfg(windows)]
