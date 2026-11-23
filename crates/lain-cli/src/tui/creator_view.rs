@@ -36,7 +36,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State, scroll: &mut Scroll) {
             }
             spans.push(Span::styled(
                 step.name(),
-                Style::default().fg(if creator.step == step { CYAN } else { MUTED }),
+                Style::default().fg(if creator.step == step { ACCENT } else { MUTED }),
             ));
         }
         frame.render_widget(
@@ -65,7 +65,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State, scroll: &mut Scroll) {
         } else {
             "Tab/Shift+Tab or Ctrl+←/→ steps · Alt+←/→ screens · draft kept · F1 help".into()
         };
-        lines.push(Line::styled(clean(&status), Style::default().fg(AMBER)));
+        lines.push(Line::styled(clean(&status), Style::default().fg(HI)));
         if let Some(error) = &creator.error {
             lines.push(Line::styled(clean(error), Style::default().fg(RED)));
         }
@@ -120,7 +120,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State, scroll: &mut Scroll) {
                         interpreter.extension()
                     ),
                     Style::default().fg(if creator.interpreter == interpreter {
-                        CYAN
+                        ACCENT
                     } else {
                         TEXT
                     }),
@@ -173,7 +173,7 @@ fn output(frame: &mut Frame, area: Rect, creator: &Creator, scroll: &mut Scroll)
                     ""
                 }
             ),
-            Style::default().fg(CYAN),
+            Style::default().fg(ACCENT),
         ));
         lines.push(Line::from(format!(
             "Exit: {} · Duration: {} ms",
@@ -197,7 +197,7 @@ fn output(frame: &mut Frame, area: Rect, creator: &Creator, scroll: &mut Scroll)
                     .unwrap_or_else(|| "<none>".into()),
             ),
         ] {
-            lines.push(Line::styled(title, Style::default().fg(CYAN)));
+            lines.push(Line::styled(title, Style::default().fg(ACCENT)));
             lines.extend(clean(&text).lines().map(|line| Line::from(line.to_owned())));
             if text.is_empty() {
                 lines.push(Line::from("<empty>"));
@@ -259,7 +259,7 @@ pub fn confirm(frame: &mut Frame, state: &State, typed: &str) {
     );
     let mut lines = vec![Line::styled(
         "Publish executes the script again before writing these exact workspace-relative files:",
-        Style::default().fg(AMBER),
+        Style::default().fg(HI),
     )];
     for path in state.creator.paths() {
         lines.push(Line::from(clean(&path.display().to_string())));

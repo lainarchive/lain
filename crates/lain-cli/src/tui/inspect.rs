@@ -684,11 +684,11 @@ pub fn sessions(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration) {
                             Cell::from(s)
                         }
                     }))
-                    .style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+                    .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
                 )
                 .block(panel(" Session catalog "))
                 .column_spacing(1)
-                .row_highlight_style(Style::default().bg(PANEL).fg(CYAN))
+                .row_highlight_style(Style::default().bg(PANEL).fg(ACCENT))
                 .highlight_symbol("› "),
             *table,
             &mut selection,
@@ -786,7 +786,7 @@ pub fn memory(frame: &mut Frame, area: Rect, view: &Inspect, now: Duration, scro
             frame.render_stateful_widget(
                 List::new(items)
                     .block(panel(format!(" {} entries ", rows.len())))
-                    .highlight_style(Style::default().fg(CYAN).bg(PANEL))
+                    .highlight_style(Style::default().fg(ACCENT).bg(PANEL))
                     .highlight_symbol("› "),
                 *left,
                 &mut selected,
@@ -890,7 +890,7 @@ pub fn models(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         for model in &view.config.data {
             lines.push(Line::styled(
                 format!("{} · {}", model.model, model.provider),
-                Style::default().fg(CYAN),
+                Style::default().fg(ACCENT),
             ));
             if let Some(window) = model.window {
                 lines.push(line(format!("  configured context window: {window}")));

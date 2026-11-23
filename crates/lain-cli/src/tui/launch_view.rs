@@ -98,7 +98,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
                             } else {
                                 format!("{} · {}", state.model_chain, state.mode.name())
                             },
-                            Style::default().fg(CYAN),
+                            Style::default().fg(ACCENT),
                         ),
                         Line::from(format!(
                             "session {}",
@@ -114,19 +114,19 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
                 frame.render_widget(
                     Paragraph::new(vec![
                         Line::from(vec![
-                            Span::styled("/creator", Style::default().fg(CYAN)),
+                            Span::styled("/creator", Style::default().fg(ACCENT)),
                             Span::raw("   build a tool"),
                         ]),
                         Line::from(vec![
-                            Span::styled("/plugins", Style::default().fg(CYAN)),
+                            Span::styled("/plugins", Style::default().fg(ACCENT)),
                             Span::raw("   browse tools"),
                         ]),
                         Line::from(vec![
-                            Span::styled("/theme", Style::default().fg(CYAN)),
+                            Span::styled("/theme", Style::default().fg(ACCENT)),
                             Span::raw("     switch look"),
                         ]),
                         Line::from(vec![
-                            Span::styled("?", Style::default().fg(CYAN)),
+                            Span::styled("?", Style::default().fg(ACCENT)),
                             Span::raw("          every shortcut"),
                         ]),
                     ])
@@ -137,7 +137,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State) {
         } else {
             frame.render_widget(
                 Paragraph::new("/creator build · /plugins tools · /theme look · ? help")
-                    .style(Style::default().fg(CYAN)),
+                    .style(Style::default().fg(ACCENT)),
                 *area,
             );
         }
@@ -189,7 +189,7 @@ fn wordmark(frame: &mut Frame, area: Rect, theme: Theme) {
                     if let Some(cell) = frame.buffer_mut().cell_mut(point) {
                         cell.set_symbol(&c.to_string())
                             .set_style(Style::default().fg(if shadow {
-                                SHADOW
+                                LINE
                             } else {
                                 theme.gradient(x as u16, width)
                             }));
@@ -254,7 +254,7 @@ fn grid(frame: &mut Frame, area: Rect, state: &State) {
         names.sort();
         let mut spans = vec![Span::styled(
             format!("{:<24}", fit(&label, 23)),
-            Style::default().fg(if plugin { VIOLET } else { CYAN }),
+            Style::default().fg(if plugin { HI } else { ACCENT }),
         )];
         let shown = if names.len() > columns {
             columns.saturating_sub(1)
@@ -302,7 +302,7 @@ fn grid(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-fn count(n: usize) -> String {
+pub(super) fn count(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{}M", n / 1_000_000)
     } else if n >= 1000 {
@@ -312,17 +312,27 @@ fn count(n: usize) -> String {
     }
 }
 
-pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
+pub fn footer(frame: &mut Frame, area: Rect, state: &State, now: std::time::Duration) {
     let mut right = if state.model_chain == "model unknown" {
         String::new()
     } else {
         state.model_chain.clone()
     };
+    let rate = state
+        .token_rate(now)
+        .filter(|rate| *rate > 0.0)
+        .map(|rate| {
+            format!(
+                "{} {rate:.1} tok/s",
+                super::view::sparkline(&state.rate_history(now, 16))
+            )
+        });
     if state.context_window > 0 {
         let percent = (state.context as f64 / state.context_window as f64 * 100.0) as usize;
         let filled = (percent / 10).max(usize::from(state.context > 0)).min(10);
         let context = format!(
-            "ctx {}{} {percent}% {}/{}",
+            "{}ctx {}{} {percent}% {}/{}",
+            rate.as_ref().map(|r| format!("{r} · ")).unwrap_or_default(),
             "━".repeat(filled),
             "─".repeat(10 - filled),
             count(state.context),
@@ -332,9 +342,15 @@ pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
             right.push_str(" · ");
         }
         right.push_str(&context);
-        if Line::raw(&right).width() > usize::from(area.width) / 2 {
+        // The left side is short, so the meter strip may take two thirds before the model goes.
+        if Line::raw(&right).width() > usize::from(area.width) * 2 / 3 {
             right = context;
         }
+    } else if let Some(rate) = rate {
+        if !right.is_empty() {
+            right.push_str(" · ");
+        }
+        right.push_str(&rate);
     }
     if state.reconnecting {
         right = "reconnecting…".into();
@@ -348,7 +364,7 @@ pub fn footer(frame: &mut Frame, area: Rect, state: &State) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    format!("[λ lain v{}] ", env!("CARGO_PKG_VERSION")),
+                    format!("lain v{}  ", env!("CARGO_PKG_VERSION")),
                     Style::default().fg(TEXT),
                 ),
                 Span::styled(

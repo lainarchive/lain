@@ -233,9 +233,9 @@ impl Plugins {
                                     "{} · v{} · {}",
                                     manifest.name, manifest.version, manifest.author
                                 ),
-                                CYAN,
+                                ACCENT,
                             ));
-                            lines.push(line("Permissions", CYAN));
+                            lines.push(line("Permissions", ACCENT));
                             for capability in &manifest.permissions {
                                 let grant = self.tools.iter().filter(|tool| matches!(&tool.source,
                                 ToolSource::Plugin {manifest_name, manifest_path:Some(path)} if manifest_name == &manifest.name && path == &entry.path))
@@ -243,7 +243,7 @@ impl Plugins {
                                 lines.push(permission(*capability, grant));
                             }
                             for export in &manifest.tools {
-                                lines.push(line(format!("Export: {}", export.name), AMBER));
+                                lines.push(line(format!("Export: {}", export.name), HI));
                                 push(&mut lines, &export.description, TEXT);
                                 lines.push(line(backend(&export.backend), MUTED));
                                 schema(&mut lines, &export.parameters);
@@ -254,7 +254,7 @@ impl Plugins {
             }
             Some(Row::Tool(index)) => {
                 if let Some(tool) = self.tools.get(index) {
-                    lines.push(line(&tool.name, CYAN));
+                    lines.push(line(&tool.name, ACCENT));
                     push(&mut lines, &tool.description, TEXT);
                     lines.push(line(format!("Source: {}", source(&tool.source)), MUTED));
                     match &tool.source {
@@ -294,7 +294,7 @@ impl Plugins {
                             ));
                         }
                     }
-                    lines.push(line("Permissions", CYAN));
+                    lines.push(line("Permissions", ACCENT));
                     if tool.permissions.is_empty() {
                         lines.push(line("No workspace capabilities required", MUTED));
                     }
@@ -358,7 +358,7 @@ fn permission(capability: Capability, granted: Option<bool>) -> Line<'static> {
 }
 
 fn schema(lines: &mut Vec<Line<'static>>, parameters: &serde_json::Value) {
-    lines.push(line("Input schema", CYAN));
+    lines.push(line("Input schema", ACCENT));
     if let Ok(json) = serde_json::to_string_pretty(parameters) {
         push(lines, &json, TEXT);
     }
@@ -379,7 +379,7 @@ pub fn draw(frame: &mut Frame, area: Rect, plugins: &Plugins, scroll: &mut Scrol
         MUTED,
     )];
     if plugins.inventory_loading || plugins.tools_loading {
-        status.push(line("Loading plugin inventory…", CYAN));
+        status.push(line("Loading plugin inventory…", ACCENT));
     }
     if let Some(error) = &plugins.inventory_error {
         status.push(line(error_summary(error), RED));
@@ -406,7 +406,7 @@ pub fn draw(frame: &mut Frame, area: Rect, plugins: &Plugins, scroll: &mut Scrol
                         " Filter · / edit "
                     })
                     .border_style(Style::default().fg(if plugins.filtering {
-                        CYAN
+                        ACCENT
                     } else {
                         MUTED
                     })),
@@ -447,8 +447,8 @@ pub fn draw(frame: &mut Frame, area: Rect, plugins: &Plugins, scroll: &mut Scrol
                             {
                                 RED
                             }
-                            Row::Manifest(_) => CYAN,
-                            Row::Tool(_) => AMBER,
+                            Row::Manifest(_) => ACCENT,
+                            Row::Tool(_) => HI,
                         },
                     ))
                 })

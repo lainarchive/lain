@@ -89,7 +89,7 @@ pub fn inline(text: &str) -> Vec<Span<'static>> {
                     if marker == "**" {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(CYAN).bg(PANEL)
+                        Style::default().fg(ACCENT).bg(PANEL)
                     },
                 ));
                 rest = tail;
@@ -162,7 +162,7 @@ pub fn markdown(text: &str, width: u16) -> Vec<Line<'static>> {
         } else if code {
             lines.extend(code_lines(line, width - 4));
         } else if let Some(bullet) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            let mut spans = vec![Span::styled("• ", Style::default().fg(CYAN))];
+            let mut spans = vec![Span::styled("• ", Style::default().fg(ACCENT))];
             spans.extend(inline(bullet));
             lines.push(Line::from(spans));
         } else {
@@ -197,7 +197,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
             continue;
         }
         for node in nodes {
-            let Some(task) = state.tasks.get(&node.id) else {
+            let Some(task) = state.tasks.get(&node.id).filter(|t| !t.prompt.is_empty()) else {
                 continue;
             };
             for (index, line) in task.prompt.lines().enumerate() {
@@ -238,7 +238,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                 let color = match tool.ok {
                     Some(true) => GREEN,
                     Some(false) => RED,
-                    None if running => BLUE,
+                    None if running => ACCENT,
                     None => MUTED,
                 };
                 let elapsed = tool
@@ -250,7 +250,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                 rows.push((
                     Some(Selection::Tool(index)),
                     Line::from(vec![
-                        Span::styled("▎ ", Style::default().fg(CYAN)),
+                        Span::styled("▎ ", Style::default().fg(ACCENT)),
                         Span::styled(status, Style::default().fg(color)),
                         Span::raw(format!(
                             " {}({})",
@@ -310,7 +310,7 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
                         } else {
                             format!("λ lain · {}", task.model)
                         },
-                        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                     ),
                 ));
                 rows.extend(
@@ -322,8 +322,8 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
             let turn = node.id.trim_start_matches("turn-").parse::<u64>().ok();
             for note in state.notes.iter().filter(|note| Some(note.turn) == turn) {
                 let (kind, color) = match note.kind {
-                    AdvisorKind::Aside => ("aside", VIOLET),
-                    AdvisorKind::Warning => ("warning", AMBER),
+                    AdvisorKind::Aside => ("aside", HI),
+                    AdvisorKind::Warning => ("warning", HI),
                     AdvisorKind::Blocker => ("blocker", RED),
                 };
                 rows.push((
@@ -351,6 +351,92 @@ fn rows(state: &State, width: u16, now: Duration) -> Vec<Row> {
             rows.push((None, Line::raw("")));
         }
     }
+    rows.extend(events(state, width, now));
+    rows
+}
+
+/// Planner lanes show up as one time-ordered event table instead of a turn each.
+fn events(state: &State, width: u16, now: Duration) -> Vec<Row> {
+    use super::state::Phase;
+    use lain_harness::evidence::Status;
+    let lane = |id: &str| state.tasks.get(id).filter(|t| t.prompt.is_empty());
+    let mut events: Vec<(Duration, &str, Span<'static>, String)> = state
+        .tools
+        .iter()
+        .filter_map(|tool| {
+            let task = lane(&tool.node)?;
+            let status = match tool.ok {
+                Some(true) => Span::styled("● done     ", Style::default().fg(MUTED)),
+                Some(false) => Span::styled("✕ failed   ", Style::default().fg(RED)),
+                None => Span::styled(
+                    format!("{} running  ", spinner(now)),
+                    Style::default().fg(ACCENT),
+                ),
+            };
+            let detail = format!(
+                "{} {}  {}",
+                tool.name,
+                arguments(&tool.arguments),
+                tool.output.lines().next().unwrap_or_default()
+            );
+            Some((tool.started, task.title.as_str(), status, detail))
+        })
+        .collect();
+    events.extend(state.tasks.iter().filter_map(|(id, task)| {
+        let ended = task.ended?;
+        (lane(id).is_some() && task.phase == Phase::Evidence(Status::ObservedVerified)).then(|| {
+            (
+                ended,
+                task.title.as_str(),
+                Span::styled("● verified ", Style::default().fg(GREEN)),
+                "own check passed".to_string(),
+            )
+        })
+    }));
+    if events.is_empty() {
+        return vec![];
+    }
+    events.sort_by_key(|(at, ..)| *at);
+    let rule = "─".repeat(usize::from(width).saturating_sub(1));
+    let mut rows = vec![
+        (
+            None,
+            Line::from(vec![
+                Span::styled(
+                    "EVENTS",
+                    Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:>w$}", "live", w = usize::from(width).saturating_sub(7)),
+                    Style::default().fg(ACCENT),
+                ),
+            ]),
+        ),
+        (None, Line::styled(rule, Style::default().fg(LINE))),
+    ];
+    let newest = events.len().saturating_sub(1);
+    for (index, (at, title, status, detail)) in events.into_iter().enumerate() {
+        let secs = at.as_secs();
+        let name = Style::default().fg(if index == newest { HI } else { TEXT });
+        rows.push((
+            None,
+            Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{}{:02}:{:02}  ",
+                        if index == newest { "▎" } else { " " },
+                        secs / 60,
+                        secs % 60
+                    ),
+                    Style::default().fg(FAINT),
+                ),
+                Span::styled(format!("{title:<14}"), name),
+                status,
+                Span::styled(detail, Style::default().fg(MUTED)),
+            ]),
+        ));
+    }
+    rows.push((None, Line::raw("")));
     rows
 }
 
@@ -427,7 +513,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &State, now: Duration, scroll:
     if !state.follow && state.unseen {
         frame.render_widget(
             Paragraph::new(" ↓ new output · PgDn to follow ")
-                .style(Style::default().bg(PANEL).fg(CYAN)),
+                .style(Style::default().bg(PANEL).fg(ACCENT)),
             Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
         );
     }
@@ -453,7 +539,7 @@ pub fn working(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
                 now.saturating_sub(task.started).as_secs(),
                 count(task.tokens)
             ),
-            Style::default().fg(CYAN),
+            Style::default().fg(ACCENT),
         ),
         Line::styled(format!("└ Tip: {tip}"), Style::default().fg(MUTED)),
     ];

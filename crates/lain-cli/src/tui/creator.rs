@@ -97,7 +97,7 @@ pub fn editor(text: &str, title: &'static str) -> TextArea<'static> {
     area.set_cursor_style(
         Style::default()
             .fg(BACKGROUND)
-            .bg(CYAN)
+            .bg(ACCENT)
             .add_modifier(Modifier::BOLD),
     );
     area.set_block(Block::default().borders(Borders::ALL).title(title));

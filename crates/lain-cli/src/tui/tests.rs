@@ -229,7 +229,7 @@ fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
     ));
     state.seed_demo_turn(Duration::from_secs(2));
     assert!(!state.launch());
-    assert_eq!(state.tools.len(), 3);
+    assert_eq!(state.tools.len(), 8);
     let task = state
         .active
         .as_ref()
@@ -237,7 +237,11 @@ fn demo_starts_at_launch_and_the_first_submit_seeds_a_labelled_turn(
         .ok_or("missing turn")?;
     assert_eq!(task.prompt, "my own prompt");
     assert!(task.text.contains("Canned demo turn"));
-    assert!(state.tools.iter().all(|tool| tool.node == task.node.id));
+    assert!(state
+        .tools
+        .iter()
+        .filter(|tool| !tool.call_id.starts_with("demo-lane"))
+        .all(|tool| tool.node == task.node.id));
     Ok(())
 }
 
@@ -610,8 +614,8 @@ fn shell_help_and_tab_highlight_fit_minimum_size() -> Result<(), Box<dyn std::er
         .buffer()
         .cell((x as u16, 0))
         .ok_or("missing cell")?;
-    assert_eq!(cell.fg, super::theme::CYAN);
-    assert_eq!(cell.bg, super::theme::PANEL);
+    assert_eq!(cell.fg, super::theme::TEXT);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
     state.key(
         KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
         Duration::ZERO,
@@ -1227,7 +1231,12 @@ fn transcript_polish_uses_compact_arguments_and_useful_tips(
     );
     assert_eq!(super::transcript::arguments("invalid"), "invalid");
     let state = State::demo_turn()?;
-    let text = render(&state)?;
+    // Tall enough that the demo's lane events don't push the turn's tools out of view.
+    let mut terminal = Terminal::new(TestBackend::new(140, 70))?;
+    terminal.draw(|frame| {
+        view::draw(frame, &state, Duration::from_secs(2));
+    })?;
+    let text = contents(&terminal);
     assert!(!text.contains("● running"));
     assert!(text.contains("repo_map()"));
     assert!(text.contains("memory_read(Creator publishing workflow)"));
@@ -1346,7 +1355,7 @@ fn markdown_styles_fences_and_drawer_defaults() -> Result<(), Box<dyn std::error
             .contains(ratatui::style::Modifier::BOLD)));
     assert!(spans
         .iter()
-        .any(|span| span.content == "code" && span.style.fg == Some(super::theme::CYAN)));
+        .any(|span| span.content == "code" && span.style.fg == Some(super::theme::ACCENT)));
     assert!(spans
         .iter()
         .any(|span| span.content.contains("**unfinished")));
@@ -1680,8 +1689,8 @@ fn banner_lanes_and_sticky_plan() -> Result<(), Box<dyn std::error::Error>> {
         "32%",
         "42k/128k",
         "feat/frontier",
-        "layer 1",
-        "3 nodes",
+        "LAYER 1",
+        "/3",
         "✓",
         "×",
         "○",
@@ -1832,8 +1841,10 @@ fn viewport_paging_reaches_every_line_with_one_line_of_overlap(
                 .skip_while(|line| !line.contains(title))
                 .skip(1)
                 .map_while(|line| {
-                    line.split_once('│')
-                        .and_then(|(_, right)| right.rsplit_once('│').map(|(content, _)| content))
+                    // Panels only draw a left rule, so a closing │ is optional.
+                    line.split_once('│').map(|(_, right)| {
+                        right.rsplit_once('│').map_or(right, |(content, _)| content)
+                    })
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -2000,9 +2011,9 @@ fn sticky_panels_scroll_independently_and_do_not_overshoot(
     draw_scrolled(&mut terminal, &mut state)?;
     assert!(contents(&terminal).contains("No scratchpad yet"));
     assert!(contents(&terminal).contains("No procedural rules recalled"));
-    assert!(contents(&terminal).contains("Alt-PgUp/PgDn plan"));
-    assert!(contents(&terminal).contains("Shift alias"));
-    assert!(contents(&terminal).contains("Ctrl-PgUp/PgDn rules"));
+    // The run view keeps only the two hints that lead to the rest (F1 lists every key).
+    assert!(contents(&terminal).contains("Ctrl+K commands · F1 help"));
+    assert!(!contents(&terminal).contains("Alt-PgUp/PgDn plan"));
     Ok(())
 }
 
@@ -2076,7 +2087,7 @@ fn small_terminals_show_a_resize_message_and_recover_at_minimum_size(
     })?;
     let text = contents(&terminal);
     assert!(!text.contains("terminal too small"));
-    for expected in ["ctx", "Verify integration", "Ask Lain anything", "Tab mode"] {
+    for expected in ["ctx", "Verify integration", "Ask Lain anything", "F1 help"] {
         assert!(text.contains(expected), "missing {expected}");
     }
     let mut tiny = Terminal::new(TestBackend::new(1, 1))?;

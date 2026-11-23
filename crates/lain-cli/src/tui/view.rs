@@ -18,7 +18,7 @@ use super::{
 
 pub(super) fn color(phase: Phase) -> Color {
     match phase {
-        Phase::Running => BLUE,
+        Phase::Running => ACCENT,
         Phase::Failed => RED,
         Phase::Evidence(Status::ObservedVerified) => GREEN,
         _ => MUTED,
@@ -27,16 +27,29 @@ pub(super) fn color(phase: Phase) -> Color {
 
 fn panel<'a>(title: impl Into<Cow<'a, str>>) -> Block<'a> {
     Block::default()
-        .title(Span::styled(title, Style::default().fg(CYAN)))
+        .title(Span::styled(
+            title,
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(MUTED))
+        // Open panels: one left rule, same box geometry the scroll maths assumes.
+        .border_set(ratatui::symbols::border::Set {
+            top_left: " ",
+            top_right: " ",
+            bottom_left: " ",
+            bottom_right: " ",
+            vertical_left: "│",
+            vertical_right: " ",
+            horizontal_top: " ",
+            horizontal_bottom: " ",
+        })
+        .border_style(Style::default().fg(LINE))
         .style(Style::default().bg(PANEL).fg(TEXT))
 }
 
 fn has_banner(state: &State, now: Duration) -> bool {
     let notice = state.toast_text(now).unwrap_or(&state.notice);
-    state.velocity(now) > 0.0
-        || state.cost.is_some_and(|c| c.is_finite() && c >= 0.0)
+    state.cost.is_some_and(|c| c.is_finite() && c >= 0.0)
         || (!notice.is_empty() && !notice.starts_with("Ready") && notice != "New session")
 }
 
@@ -46,9 +59,6 @@ fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
         .map(|cost| format!("cost ${cost:.4}"));
     let mut telemetry = vec![];
-    if let Some(rate) = state.token_rate(now).filter(|rate| *rate > 0.0) {
-        telemetry.push(format!("{rate:.1} tok/s"));
-    }
     if let Some(cost) = cost {
         telemetry.push(cost);
     }
@@ -70,6 +80,7 @@ fn banner(frame: &mut Frame, area: Rect, state: &State, now: Duration) {
 
 fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>, Line<'static>)> {
     let mut rows = vec![];
+    let has_lanes = state.tasks.values().any(|t| t.prompt.is_empty());
     for (layer, nodes) in state.dag.layers().iter().enumerate() {
         let collapsed = state.collapsed_layers.contains(&layer);
         let done = nodes
@@ -81,18 +92,22 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                     .is_some_and(|t| t.phase == Phase::Evidence(Status::ObservedVerified))
             })
             .count();
+        let label = format!(
+            "{} LAYER {}  {done}/{} ",
+            if collapsed { "▸" } else { "▾" },
+            layer + 1,
+            nodes.len()
+        );
+        let rule = "─".repeat(usize::from(width).saturating_sub(Line::raw(&label).width()));
         rows.push((
             Some(Selection::Layer(layer)),
-            Line::styled(
-                format!(
-                    "{} layer {} · {} nodes · {} done",
-                    if collapsed { "▸" } else { "▾" },
-                    layer + 1,
-                    nodes.len(),
-                    done
+            Line::from(vec![
+                Span::styled(
+                    label,
+                    Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
                 ),
-                Style::default().fg(CYAN),
-            ),
+                Span::styled(rule, Style::default().fg(LINE)),
+            ]),
         ));
         if collapsed {
             continue;
@@ -105,7 +120,11 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
             let left = format!(
                 "  {} {} {}",
                 if collapsed { "▸" } else { "▾" },
-                task.phase.glyph(),
+                if task.phase == Phase::Running {
+                    Theme::spinner(now).to_string()
+                } else {
+                    task.phase.glyph().to_string()
+                },
                 task.title
             );
             let elapsed = task
@@ -114,11 +133,11 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                 .saturating_sub(task.started)
                 .as_secs();
             let right = format!(
-                "{} · {} {}s · ↓{}",
+                "{}  {}  {}s  ↓{}",
                 task.model,
                 task.phase.label(),
                 elapsed,
-                task.tokens
+                super::launch_view::count(usize::try_from(task.tokens).unwrap_or(usize::MAX))
             );
             let room = usize::from(width).saturating_sub(Line::from(right.clone()).width() + 1);
             let mut title = String::new();
@@ -138,7 +157,7 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                         title,
                         Style::default()
                             .fg(if task.title.starts_with('↻') {
-                                VIOLET
+                                HI
                             } else {
                                 color(task.phase)
                             })
@@ -148,7 +167,8 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                     Span::styled(right, Style::default().fg(MUTED)),
                 ]),
             ));
-            if collapsed {
+            // With planner lanes running, the chat turn's detail already lives in the transcript.
+            if collapsed || (has_lanes && !task.prompt.is_empty()) {
                 continue;
             }
             for (index, tool) in state
@@ -158,16 +178,19 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                 .filter(|(_, t)| t.node == node.id)
             {
                 let tool_color = if tool.name.contains("file") || tool.name == "repo_map" {
-                    PEACH
+                    MUTED
                 } else {
-                    AMBER
+                    HI
                 };
                 rows.push((
                     Some(Selection::Tool(index)),
                     Line::from(vec![
                         Span::raw(format!("    {} › ", if tool.expanded { "▾" } else { "▸" })),
                         Span::styled(tool.name.clone(), Style::default().fg(tool_color)),
-                        Span::styled(format!("({})", tool.arguments), Style::default().fg(MUTED)),
+                        Span::styled(
+                            format!("({})", super::transcript::arguments(&tool.arguments)),
+                            Style::default().fg(MUTED),
+                        ),
                         Span::styled(
                             match tool.ok {
                                 Some(true) => " ✓",
@@ -177,12 +200,25 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
                             Style::default().fg(match tool.ok {
                                 Some(true) => GREEN,
                                 Some(false) => RED,
-                                None => BLUE,
+                                None => ACCENT,
                             }),
+                        ),
+                        Span::styled(
+                            match tool.output.lines().count() {
+                                1 => format!("  {}", tool.output.trim()),
+                                _ => String::new(),
+                            },
+                            Style::default().fg(MUTED),
                         ),
                     ]),
                 ));
-                for line in tool.output.lines().take(10) {
+                // A one-line result already sits on the tool row.
+                for line in tool
+                    .output
+                    .lines()
+                    .take(10)
+                    .filter(|_| tool.output.lines().count() > 1)
+                {
                     rows.push((
                         None,
                         Line::styled(format!("      {line}"), Style::default().fg(MUTED)),
@@ -205,8 +241,8 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
             let turn = node.id.trim_start_matches("turn-").parse::<u64>().ok();
             for note in state.notes.iter().filter(|n| Some(n.turn) == turn) {
                 let (kind, color) = match note.kind {
-                    AdvisorKind::Aside => ("aside", VIOLET),
-                    AdvisorKind::Warning => ("warning", AMBER),
+                    AdvisorKind::Aside => ("aside", HI),
+                    AdvisorKind::Warning => ("warning", ACCENT),
                     AdvisorKind::Blocker => ("blocker", RED),
                 };
                 rows.push((
@@ -223,6 +259,150 @@ fn lane_rows(state: &State, width: u16, now: Duration) -> Vec<(Option<Selection>
     rows
 }
 
+type Row = (Option<Selection>, Line<'static>);
+
+pub(super) fn sparkline(values: &[u64]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = values.iter().copied().max().unwrap_or(0).max(1);
+    values
+        .iter()
+        .map(|v| BARS.get((v * 7 / max) as usize).copied().unwrap_or('▁'))
+        .collect()
+}
+
+/// Segmented bar, one segment per lane, then the evidence counts.
+fn run_header(state: &State, width: u16) -> Vec<Row> {
+    let phases: Vec<Phase> = state
+        .dag
+        .layers()
+        .iter()
+        .flatten()
+        .filter_map(|n| state.tasks.get(&n.id).map(|t| t.phase))
+        .collect();
+    if phases.is_empty() {
+        return vec![];
+    }
+    let total = phases.len();
+    let verified = phases
+        .iter()
+        .filter(|p| **p == Phase::Evidence(Status::ObservedVerified))
+        .count();
+    let running = phases.iter().filter(|p| **p == Phase::Running).count();
+    let failed = phases.iter().filter(|p| **p == Phase::Failed).count();
+    let segment = (usize::from(width) / total).clamp(1, 10);
+    let bar = phases
+        .iter()
+        .map(|p| {
+            let fg = match p {
+                Phase::Evidence(Status::ObservedVerified) => GREEN,
+                Phase::Running => ACCENT,
+                Phase::Failed => RED,
+                _ => LINE,
+            };
+            Span::styled(
+                "▄".repeat(segment.saturating_sub(1)) + " ",
+                Style::default().fg(fg),
+            )
+        })
+        .collect::<Vec<_>>();
+    vec![
+        (None, Line::from(bar)),
+        (
+            None,
+            Line::from(vec![
+                Span::styled(
+                    format!("{verified}/{total} verified"),
+                    Style::default().fg(GREEN),
+                ),
+                Span::styled(format!("   {running} running"), Style::default().fg(ACCENT)),
+                Span::styled(
+                    format!("   {failed} failed"),
+                    Style::default().fg(if failed > 0 { RED } else { FAINT }),
+                ),
+            ]),
+        ),
+        (None, Line::raw("")),
+    ]
+}
+
+/// One bar per lane on a shared clock, so overlap and stragglers show at a glance.
+fn timeline(state: &State, width: u16, now: Duration) -> Vec<Row> {
+    let tasks: Vec<_> = state
+        .dag
+        .layers()
+        .iter()
+        .flatten()
+        .filter_map(|n| state.tasks.get(&n.id))
+        .collect();
+    let Some(start) = tasks.iter().map(|t| t.started).min() else {
+        return vec![];
+    };
+    let label = tasks
+        .iter()
+        .map(|t| Line::raw(&t.title).width())
+        .max()
+        .unwrap_or(0)
+        .min(16);
+    let track = usize::from(width).saturating_sub(label + 2);
+    if track < 8 {
+        return vec![];
+    }
+    let span = now.saturating_sub(start).as_secs_f64().max(1.0);
+    let col = |at: Duration| {
+        ((at.saturating_sub(start).as_secs_f64() / span) * (track - 1) as f64).round() as usize
+    };
+    let mut rows = vec![(
+        None,
+        Line::from(vec![
+            Span::styled(
+                "TIMELINE",
+                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "{:>w$}",
+                    format!("{}s ▼", span.round()),
+                    w = usize::from(width) - 8
+                ),
+                Style::default().fg(FAINT),
+            ),
+        ]),
+    )];
+    for task in tasks {
+        let from = col(task.started).min(track - 1);
+        let to = if matches!(
+            task.phase,
+            Phase::Evidence(Status::Planned) | Phase::NotSent
+        ) {
+            from
+        } else {
+            col(task.ended.unwrap_or(now)).clamp(from, track - 1)
+        };
+        let fg = color(task.phase);
+        let name: String = task.title.chars().take(label).collect();
+        let mut spans = vec![
+            Span::styled(format!("{name:<label$}  "), Style::default().fg(MUTED)),
+            Span::styled("·".repeat(from), Style::default().fg(LINE)),
+            Span::styled("━".repeat(to - from), Style::default().fg(fg)),
+        ];
+        let head = match task.phase {
+            Phase::Running => Span::styled("▸", Style::default().fg(HI)),
+            Phase::Evidence(Status::ObservedVerified) => {
+                Span::styled("✓", Style::default().fg(GREEN))
+            }
+            Phase::Failed => Span::styled("✕", Style::default().fg(RED)),
+            _ => Span::styled("·", Style::default().fg(LINE)),
+        };
+        spans.push(head);
+        spans.push(Span::styled(
+            "·".repeat(track.saturating_sub(to + 1)),
+            Style::default().fg(LINE),
+        ));
+        rows.push((None, Line::from(spans)));
+    }
+    rows
+}
+
 fn page_height(area: Rect) -> u16 {
     area.height.saturating_sub(3).max(1)
 }
@@ -232,6 +412,12 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> (usize,
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut rows = lane_rows(state, inner.width, now);
+    if !rows.is_empty() {
+        let mut top = run_header(state, inner.width);
+        top.append(&mut rows);
+        rows = top;
+        rows.extend(timeline(state, inner.width, now));
+    }
     if rows.is_empty() {
         rows.push((
             None,
@@ -255,7 +441,7 @@ fn lanes(frame: &mut Frame, area: Rect, state: &State, now: Duration) -> (usize,
         .skip(offset)
         .map(|(i, (_, line))| {
             if Some(i) == selected {
-                line.style(Style::default().bg(BACKGROUND).add_modifier(Modifier::BOLD))
+                line.style(Style::default().bg(SELECT).add_modifier(Modifier::BOLD))
             } else {
                 line
             }
@@ -315,7 +501,7 @@ fn drawer(frame: &mut Frame, area: Rect, state: &State) -> Scroll {
         .count();
     let mut plan = vec![Line::styled(
         format!("[Plan] {done}/{}", plan_lines.len()),
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
     )];
     if plan_lines.is_empty() {
         plan.push(Line::styled(
@@ -477,7 +663,12 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                     let sections = Layout::vertical([
                         Constraint::Percentage(if dag {
                             if plan {
-                                40
+                                // The full-output drawer needs the room back when a tool is open.
+                                if matches!(state.selected, Some(Selection::Tool(i)) if state.tools.get(i).is_some_and(|t| t.expanded)) {
+                                    40
+                                } else {
+                                    70
+                                }
                             } else {
                                 100
                             }
@@ -544,12 +735,14 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
                         .borders(Borders::TOP | Borders::BOTTOM)
                         .border_style(Style::default().fg(MUTED))
                         .title_bottom(
-                            Line::from(if draft.len()>1 {" ↑/↓ scroll draft · Enter submit · Ctrl+K commands · F1 help "}
-                            else if state.launch() {" Tab mode · Ctrl+K commands · F1 help "}
-                            else if state.plan_drawer.unwrap_or(state.scroll.plan_visible) {
-                                " Alt-PgUp/PgDn plan · Shift alias · Ctrl-PgUp/PgDn rules · Ctrl+G DAG · Ctrl+P close · Ctrl+K commands · F1 help "
-                            } else {" Tab mode · Ctrl+O output · Ctrl+G DAG · Ctrl+P plan/rules · Ctrl+K commands · F1 help "})
-                                .alignment(ratatui::layout::Alignment::Right),
+                            Line::from(if draft.len() > 1 {
+                                " ↑/↓ scroll draft · Enter submit · Ctrl+K commands · F1 help "
+                            } else if state.launch() {
+                                " Tab mode · Ctrl+K commands · F1 help "
+                            } else {
+                                " Ctrl+K commands · F1 help "
+                            })
+                            .alignment(ratatui::layout::Alignment::Right),
                         ),
                 ),
             *area,
@@ -578,7 +771,7 @@ pub fn draw(frame: &mut Frame, state: &State, now: Duration) -> Scroll {
         }
     }
     if let Some(area) = vertical.get(4) {
-        super::launch_view::footer(frame, *area, state);
+        super::launch_view::footer(frame, *area, state, now);
     }
     if !matches!(state.screen, Screen::Session | Screen::Bots) {
         if let Some(area) = vertical.get(3) {
