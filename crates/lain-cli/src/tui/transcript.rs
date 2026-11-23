@@ -369,7 +369,7 @@ fn events(state: &State, width: u16, now: Duration) -> Vec<Row> {
                 Some(true) => Span::styled("● done     ", Style::default().fg(MUTED)),
                 Some(false) => Span::styled("✕ failed   ", Style::default().fg(RED)),
                 None => Span::styled(
-                    format!("{} {:<9}", spinner(now), tool.name),
+                    format!("{} running  ", spinner(now)),
                     Style::default().fg(ACCENT),
                 ),
             };
