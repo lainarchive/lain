@@ -28,7 +28,7 @@ fn tool_error_reason_codes() {
             ToolError::Execution("failed".into()),
             "TOOL_EXECUTION_FAILED",
         ),
-        (ToolError::Timeout, "TOOL_TIMEOUT"),
+        (ToolError::Timeout(String::new()), "TOOL_TIMEOUT"),
     ] {
         assert_eq!(error.code(), code);
     }
@@ -141,7 +141,7 @@ async fn bash_accepts_a_per_command_timeout() {
     let command = "exec sleep 0.1";
     assert!(matches!(
         registry.dispatch("bash", json!({"command":command})).await,
-        Err(ToolError::Timeout)
+        Err(ToolError::Timeout(_))
     ));
     assert_eq!(
         registry
@@ -203,7 +203,7 @@ async fn bash_output_limits_exit_environment_and_timeout() {
     tool.timeout = Duration::from_millis(30);
     assert!(matches!(
         tool.execute(json!({"command":"exec sleep 10"})).await,
-        Err(ToolError::Timeout)
+        Err(ToolError::Timeout(_))
     ));
     tool.working_directory = directory.path().join("missing");
     assert!(matches!(
@@ -408,13 +408,13 @@ async fn powershell_concurrent_capture_and_timeout() -> Result<(), Box<dyn std::
     assert!(matches!(
         tool.execute(json!({"command":"Start-Sleep -Seconds 10"}))
             .await,
-        Err(ToolError::Timeout)
+        Err(ToolError::Timeout(_))
     ));
     tool.timeout = PowerShellTool::DEFAULT_TIMEOUT;
     assert!(matches!(
         tool.execute(json!({"command":"Start-Sleep -Seconds 10", "timeout_ms":100}))
             .await,
-        Err(ToolError::Timeout)
+        Err(ToolError::Timeout(_))
     ));
     Ok(())
 }
@@ -447,7 +447,7 @@ async fn bash_timeout_kills_descendants() -> Result<(), Box<dyn std::error::Erro
     assert!(matches!(
         tool.execute(json!({"command":"sleep 30 & echo $! > child.pid; wait"}))
             .await,
-        Err(ToolError::Timeout)
+        Err(ToolError::Timeout(_))
     ));
     let pid = std::fs::read_to_string(directory.path().join("child.pid"))?
         .trim()
@@ -476,7 +476,7 @@ async fn powershell_timeout_kills_descendants() -> Result<(), Box<dyn std::error
     tool.timeout = Duration::from_millis(500);
     assert!(matches!(
         tool.execute(json!({"command":"ignored"})).await,
-        Err(ToolError::Timeout)
+        Err(ToolError::Timeout(_))
     ));
     let pid = std::fs::read_to_string(directory.path().join("child.pid"))?
         .trim()

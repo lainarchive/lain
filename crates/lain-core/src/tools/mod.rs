@@ -44,8 +44,48 @@ pub enum ToolError {
     Permission(String),
     #[error("tool execution: {0}")]
     Execution(String),
-    #[error("tool timed out")]
-    Timeout,
+    #[error("{0}")]
+    Timeout(String),
+}
+
+fn tail(text: &str, bytes: usize) -> &str {
+    let mut start = text.len().saturating_sub(bytes);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
+/// Once the tree is dead the pipes reach EOF quickly; the deadline only guards against a detached
+/// grandchild that inherited a pipe handle.
+async fn drain_after_kill(
+    stdout: &mut (impl AsyncRead + Unpin),
+    stderr: &mut (impl AsyncRead + Unpin),
+    cap: usize,
+    out: &mut Vec<u8>,
+    err: &mut Vec<u8>,
+) {
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(read_capped(stdout, cap, out), read_capped(stderr, cap, err))
+    })
+    .await;
+}
+
+/// A timed-out command reports what it emitted before it was killed, so the caller can tell slow
+/// progress from a hang instead of retrying blindly.
+fn timed_out_error(timeout: Duration, stdout: &str, stderr: &str) -> ToolError {
+    let mut message = format!(
+        "command timed out after {}ms and was killed",
+        timeout.as_millis()
+    );
+    message.push_str("; rerun with a larger timeout_ms if it needs more time");
+    if !stdout.is_empty() {
+        message.push_str(&format!("; stdout tail: {}", tail(stdout, 2048)));
+    }
+    if !stderr.is_empty() {
+        message.push_str(&format!("; stderr tail: {}", tail(stderr, 2048)));
+    }
+    ToolError::Timeout(message)
 }
 
 impl ToolError {
@@ -57,7 +97,7 @@ impl ToolError {
             Self::Arguments(_) => "TOOL_ARGUMENTS_INVALID",
             Self::Permission(_) => "TOOL_PERMISSION_DENIED",
             Self::Execution(_) => "TOOL_EXECUTION_FAILED",
-            Self::Timeout => "TOOL_TIMEOUT",
+            Self::Timeout(_) => "TOOL_TIMEOUT",
         }
     }
 }
@@ -257,7 +297,7 @@ pub struct BashTool {
     pub output_byte_cap: usize,
 }
 
-const MAX_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
+pub const MAX_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn shell_timeout(args: &Value, default: Duration) -> Result<Duration, ToolError> {
     let timeout = match args.get("timeout_ms") {
@@ -271,8 +311,13 @@ fn shell_timeout(args: &Value, default: Duration) -> Result<Duration, ToolError>
     Ok(timeout.min(MAX_SHELL_TIMEOUT))
 }
 
-async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io::Result<String> {
-    let mut stored = Vec::new();
+// Accumulates into `stored` instead of returning the text so bytes read before a timeout still
+// reach the caller after the read future is dropped. Returns whether output was cut by `cap`.
+async fn read_capped(
+    reader: &mut (impl AsyncRead + Unpin),
+    cap: usize,
+    stored: &mut Vec<u8>,
+) -> std::io::Result<bool> {
     let mut buffer = [0; 8192];
     let mut truncated = false;
     loop {
@@ -284,7 +329,11 @@ async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io:
         stored.extend(buffer.iter().take(take));
         truncated |= take < count;
     }
-    let mut text = String::from_utf8_lossy(&stored).into_owned();
+    Ok(truncated)
+}
+
+fn capped_text(stored: &[u8], mut truncated: bool, cap: usize) -> String {
+    let mut text = String::from_utf8_lossy(stored).into_owned();
     while text.len() > cap {
         text.pop();
         truncated = true;
@@ -292,7 +341,7 @@ async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> std::io:
     if truncated {
         text.push_str("\n[truncated]");
     }
-    Ok(text)
+    text
 }
 
 #[async_trait]
@@ -301,7 +350,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a Bash command with host permissions. Each call starts a fresh shell; put directory changes and environment assignments inside command."
+        "Run a Bash command with host permissions. Each call starts a fresh shell; put directory changes and environment assignments inside command. The command is killed when its deadline passes; for work that may outlive it, run it in the background writing output to a file, then poll that file."
     }
     fn parameters_schema(&self) -> Value {
         json!({
@@ -353,30 +402,34 @@ impl Tool for BashTool {
             .map_err(|e| ToolError::Execution(e.to_string()))?;
         #[cfg(unix)]
         let mut tree_guard = ShellTreeGuard(child.id());
-        let stdout = child
+        let mut stdout = child
             .stdout
             .take()
             .ok_or_else(|| ToolError::Execution("missing stdout".into()))?;
-        let stderr = child
+        let mut stderr = child
             .stderr
             .take()
             .ok_or_else(|| ToolError::Execution("missing stderr".into()))?;
+        let mut out_buf = Vec::new();
+        let mut err_buf = Vec::new();
         let result = tokio::time::timeout(timeout, async {
             tokio::try_join!(
                 child.wait(),
-                read_capped(stdout, self.output_byte_cap),
-                read_capped(stderr, self.output_byte_cap)
+                read_capped(&mut stdout, self.output_byte_cap, &mut out_buf),
+                read_capped(&mut stderr, self.output_byte_cap, &mut err_buf)
             )
         })
         .await;
         match result {
-            Ok(Ok((status, stdout, stderr))) => {
+            Ok(Ok((status, out_trunc, err_trunc))) => {
                 #[cfg(unix)]
                 {
                     tree_guard.0 = None;
                 }
                 // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
                 // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
+                let stdout = capped_text(&out_buf, out_trunc, self.output_byte_cap);
+                let stderr = capped_text(&err_buf, err_trunc, self.output_byte_cap);
                 match status.code() {
                     Some(code) => Ok(ToolOutput {
                         content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
@@ -401,7 +454,19 @@ impl Tool for BashTool {
                     .kill()
                     .await
                     .map_err(|e| ToolError::Execution(e.to_string()))?;
-                Err(ToolError::Timeout)
+                drain_after_kill(
+                    &mut stdout,
+                    &mut stderr,
+                    self.output_byte_cap,
+                    &mut out_buf,
+                    &mut err_buf,
+                )
+                .await;
+                Err(timed_out_error(
+                    timeout,
+                    &capped_text(&out_buf, false, self.output_byte_cap),
+                    &capped_text(&err_buf, false, self.output_byte_cap),
+                ))
             }
         }
     }
@@ -416,7 +481,7 @@ pub struct PowerShellTool {
 }
 
 impl PowerShellTool {
-    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
     pub const MAX_TIMEOUT: Duration = MAX_SHELL_TIMEOUT;
 
     pub fn new(working_directory: impl Into<PathBuf>) -> Self {
@@ -619,25 +684,29 @@ impl Tool for PowerShellTool {
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         let pid = child.id();
         let mut tree_guard = ShellTreeGuard(pid);
-        let stdout = child
+        let mut stdout = child
             .stdout
             .take()
             .ok_or_else(|| ToolError::Execution("missing stdout".into()))?;
-        let stderr = child
+        let mut stderr = child
             .stderr
             .take()
             .ok_or_else(|| ToolError::Execution("missing stderr".into()))?;
+        let mut out_buf = Vec::new();
+        let mut err_buf = Vec::new();
         let result = tokio::time::timeout(timeout, async {
             tokio::try_join!(
                 child.wait(),
-                read_capped(stdout, self.output_byte_cap),
-                read_capped(stderr, self.output_byte_cap)
+                read_capped(&mut stdout, self.output_byte_cap, &mut out_buf),
+                read_capped(&mut stderr, self.output_byte_cap, &mut err_buf)
             )
         })
         .await;
         match result {
-            Ok(Ok((status, stdout, stderr))) => {
+            Ok(Ok((status, out_trunc, err_trunc))) => {
                 tree_guard.0 = None;
+                let stdout = capped_text(&out_buf, out_trunc, self.output_byte_cap);
+                let stderr = capped_text(&err_buf, err_trunc, self.output_byte_cap);
                 match status.code() {
                     Some(code) => Ok(ToolOutput {
                         content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
@@ -652,7 +721,19 @@ impl Tool for PowerShellTool {
             Err(_) => {
                 let _ = kill_shell_tree(&mut child, pid).await;
                 tree_guard.0 = None;
-                Err(ToolError::Timeout)
+                drain_after_kill(
+                    &mut stdout,
+                    &mut stderr,
+                    self.output_byte_cap,
+                    &mut out_buf,
+                    &mut err_buf,
+                )
+                .await;
+                Err(timed_out_error(
+                    timeout,
+                    &capped_text(&out_buf, false, self.output_byte_cap),
+                    &capped_text(&err_buf, false, self.output_byte_cap),
+                ))
             }
         }
     }

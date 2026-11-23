@@ -78,7 +78,7 @@ impl ToolRegistry {
 impl From<PluginError> for ToolError {
     fn from(error: PluginError) -> Self {
         match error {
-            PluginError::Timeout => Self::Timeout,
+            PluginError::Timeout => Self::Timeout(error.to_string()),
             PluginError::Permission(..) => Self::Permission(error.to_string()),
             PluginError::Invalid(message) => Self::Arguments(message),
             error => Self::Execution(error.to_string()),
