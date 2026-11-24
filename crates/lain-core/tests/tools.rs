@@ -180,7 +180,10 @@ async fn bash_output_limits_exit_environment_and_timeout() {
         .unwrap();
     assert_eq!(output.exit_code, Some(7));
     let content: Value = serde_json::from_str(&output.content).unwrap();
-    assert_eq!(content.get("stdout").unwrap(), "éé\n[truncated]");
+    let stdout = content.get("stdout").unwrap().as_str().unwrap();
+    assert!(stdout.starts_with("éé�\n[... "), "{stdout}");
+    assert!(stdout.contains("full output written to"), "{stdout}");
+    assert!(stdout.ends_with(" ...]\n�é"), "{stdout}");
     assert_eq!(content.get("stderr").unwrap(), "error");
     let output = tool.execute(json!({"command":"true"})).await.unwrap();
     assert_eq!(
@@ -229,8 +232,36 @@ async fn bash_marks_truncation_after_lossy_utf8_expansion() {
         .unwrap();
     assert_eq!(output.exit_code, Some(0));
     let content: Value = serde_json::from_str(&output.content).unwrap();
-    assert_eq!(content.get("stdout").unwrap(), "�\n[truncated]");
+    assert_eq!(content.get("stdout").unwrap(), "����");
     assert_eq!(content.get("stderr").unwrap(), "");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_spill_writes_full_output_and_points_to_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let tool = BashTool {
+        working_directory: directory.path().into(),
+        timeout: Duration::from_secs(5),
+        output_byte_cap: 64,
+    };
+    let output = tool.execute(json!({"command":"seq 1 300"})).await.unwrap();
+    assert_eq!(output.exit_code, Some(0));
+    let content: Value = serde_json::from_str(&output.content).unwrap();
+    let stdout = content.get("stdout").unwrap().as_str().unwrap();
+    let marker = "full output written to ";
+    let start = stdout.find(marker).expect(stdout) + marker.len();
+    let end = stdout[start..].find(" ...]").expect(stdout) + start;
+    let path = std::path::Path::new(&stdout[start..end]);
+    assert!(
+        path.starts_with(directory.path().join(".lain-tool-output")),
+        "{stdout}"
+    );
+    let spilled = std::fs::read_to_string(path).expect(stdout);
+    let expected: String = (1..=300).map(|n| format!("{n}\n")).collect();
+    assert_eq!(spilled, expected);
+    assert!(stdout.starts_with(&expected[..64]), "{stdout}");
+    assert!(stdout.ends_with("300\n"), "{stdout}");
 }
 
 #[test]
@@ -344,10 +375,12 @@ async fn powershell_output_exit_code_and_override() -> Result<(), Box<dyn std::e
     tool.output_byte_cap = 5;
     let output = tool.execute(json!({"command":"[Console]::Out.Write('éééé'); [Console]::Error.Write('error'); exit 7"})).await?;
     assert_eq!(output.exit_code, Some(7));
-    assert_eq!(
-        serde_json::from_str::<Value>(&output.content)?,
-        json!({"stdout":"éé\n[truncated]","stderr":"error"})
-    );
+    let content: Value = serde_json::from_str(&output.content)?;
+    let stdout = content.get("stdout").unwrap().as_str().unwrap();
+    assert!(stdout.starts_with("éé�\n[... "), "{stdout}");
+    assert!(stdout.contains("full output written to"), "{stdout}");
+    assert!(stdout.ends_with(" ...]\n�é"), "{stdout}");
+    assert_eq!(content.get("stderr").unwrap(), "error");
     let mut explicit = PowerShellTool::with_interpreter(directory.path(), interpreter);
     explicit.timeout = Duration::from_millis(1);
     let output = explicit
@@ -398,14 +431,14 @@ async fn powershell_concurrent_capture_and_timeout() -> Result<(), Box<dyn std::
     let output = tool.execute(json!({"command":"[Console]::Out.Write(('o' * 131072)); [Console]::Error.Write(('e' * 131072)); exit 3"})).await?;
     assert_eq!(output.exit_code, Some(3));
     let content: Value = serde_json::from_str(&output.content)?;
-    assert_eq!(
-        content.get("stdout"),
-        Some(&json!(format!("{}\n[truncated]", "o".repeat(128))))
-    );
-    assert_eq!(
-        content.get("stderr"),
-        Some(&json!(format!("{}\n[truncated]", "e".repeat(128))))
-    );
+    let stdout = content.get("stdout").unwrap().as_str().unwrap();
+    assert!(stdout.starts_with(&"o".repeat(128)), "{stdout}");
+    assert!(stdout.contains("full output written to"), "{stdout}");
+    assert!(stdout.ends_with(&"o".repeat(4096)), "{stdout}");
+    let stderr = content.get("stderr").unwrap().as_str().unwrap();
+    assert!(stderr.starts_with(&"e".repeat(128)), "{stderr}");
+    assert!(stderr.contains("full output written to"), "{stderr}");
+    assert!(stderr.ends_with(&"e".repeat(4096)), "{stderr}");
     tool.timeout = Duration::from_millis(100);
     assert!(matches!(
         tool.execute(json!({"command":"Start-Sleep -Seconds 10"}))

@@ -1,10 +1,13 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
     process::Stdio,
-    sync::{Arc, Mutex, PoisonError, RwLock},
+    sync::{
+        Arc, Mutex, PoisonError, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -13,7 +16,7 @@ use lain_memory::{MemoryStore, SearchOptions};
 use lain_plugin::manifest::Capability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::provider::{CompletionResponse, Message, Role, ToolDefinition};
 
@@ -345,6 +348,105 @@ fn capped_text(stored: &[u8], mut truncated: bool, cap: usize) -> String {
     text
 }
 
+/// Bytes kept from the end of an overflowing stream; the head keeps the rest of the cap.
+const TAIL_KEEP: usize = 4096;
+
+static SPILL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+struct Spill {
+    file: tokio::fs::File,
+    path: PathBuf,
+    written: u64,
+}
+
+/// Names the file a stream's full output spills into, under the tool's working directory so the
+/// model can read it back with its ordinary file tools.
+fn spill_path(working_directory: &std::path::Path, stream: &str, pid: Option<u32>) -> PathBuf {
+    let seq = SPILL_SEQ.fetch_add(1, Ordering::Relaxed);
+    working_directory
+        .join(".lain-tool-output")
+        .join(format!("{stream}-{}-{seq}.log", pid.unwrap_or(0)))
+}
+
+/// Reads the whole stream, keeping the first `cap` bytes in `head` and the last `TAIL_KEEP` in
+/// `tail`. Once the head is full the output spills to `path` so a truncation marker can point the
+/// caller at the complete output instead of silently losing the middle — the failure mode where a
+/// weak model hallucinates what it never saw.
+/// Spill failures degrade to the old head-only marker: a missing file must not lose a run.
+async fn read_spilled(
+    reader: &mut (impl AsyncRead + Unpin),
+    cap: usize,
+    head: &mut Vec<u8>,
+    tail: &mut VecDeque<u8>,
+    spill: &mut Option<Spill>,
+    path: &std::path::Path,
+) -> std::io::Result<bool> {
+    let mut buffer = [0; 8192];
+    let mut truncated = false;
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        let take = count.min(cap.saturating_sub(head.len()));
+        head.extend(buffer.iter().take(take));
+        if take < count {
+            truncated = true;
+            let Some(overflow) = buffer.get(take..count) else {
+                continue;
+            };
+            tail.extend(overflow.iter().copied());
+            while tail.len() > TAIL_KEEP {
+                tail.pop_front();
+            }
+            if let Some(s) = spill {
+                if s.file.write_all(overflow).await.is_ok() {
+                    s.written += overflow.len() as u64;
+                }
+            } else if let Some(dir) = path.parent()
+                && tokio::fs::create_dir_all(dir).await.is_ok()
+                && let Ok(mut file) = tokio::fs::File::create(path).await
+                && file.write_all(head).await.is_ok()
+                && file.write_all(overflow).await.is_ok()
+            {
+                *spill = Some(Spill {
+                    file,
+                    path: path.to_path_buf(),
+                    written: (head.len() + overflow.len()) as u64,
+                });
+            }
+        }
+    }
+    Ok(truncated)
+}
+
+/// Renders a spilled stream: head, a marker naming the byte count cut and the file holding the
+/// full output, then the tail. Without a spill file the marker falls back to `[truncated]` but
+/// the tail still prints, since the end of a long output is usually where the answer is.
+fn spilled_text(
+    head: &[u8],
+    tail: &VecDeque<u8>,
+    truncated: bool,
+    spill: Option<&Spill>,
+) -> String {
+    let mut text = String::from_utf8_lossy(head).into_owned();
+    if truncated {
+        match spill {
+            Some(s) => {
+                let omitted = s.written.saturating_sub((head.len() + tail.len()) as u64);
+                text.push_str(&format!(
+                    "\n[... {omitted} bytes omitted; full output written to {} ...]\n",
+                    s.path.display()
+                ));
+            }
+            None => text.push_str("\n[truncated]\n"),
+        }
+        let tail_bytes: Vec<u8> = tail.iter().copied().collect();
+        text.push_str(&String::from_utf8_lossy(&tail_bytes));
+    }
+    text
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -413,11 +515,31 @@ impl Tool for BashTool {
             .ok_or_else(|| ToolError::Execution("missing stderr".into()))?;
         let mut out_buf = Vec::new();
         let mut err_buf = Vec::new();
+        let mut out_tail = VecDeque::new();
+        let mut err_tail = VecDeque::new();
+        let mut out_spill = None;
+        let mut err_spill = None;
+        let out_spill_path = spill_path(&self.working_directory, "stdout", child.id());
+        let err_spill_path = spill_path(&self.working_directory, "stderr", child.id());
         let result = tokio::time::timeout(timeout, async {
             tokio::try_join!(
                 child.wait(),
-                read_capped(&mut stdout, self.output_byte_cap, &mut out_buf),
-                read_capped(&mut stderr, self.output_byte_cap, &mut err_buf)
+                read_spilled(
+                    &mut stdout,
+                    self.output_byte_cap,
+                    &mut out_buf,
+                    &mut out_tail,
+                    &mut out_spill,
+                    &out_spill_path,
+                ),
+                read_spilled(
+                    &mut stderr,
+                    self.output_byte_cap,
+                    &mut err_buf,
+                    &mut err_tail,
+                    &mut err_spill,
+                    &err_spill_path,
+                )
             )
         })
         .await;
@@ -429,8 +551,8 @@ impl Tool for BashTool {
                 }
                 // No exit code means a signal ended the command. As `Ok` with `exit_code: None` it would read as success,
                 // the same as a tool that has no exit code at all, so a caller counting failures would miss it.
-                let stdout = capped_text(&out_buf, out_trunc, self.output_byte_cap);
-                let stderr = capped_text(&err_buf, err_trunc, self.output_byte_cap);
+                let stdout = spilled_text(&out_buf, &out_tail, out_trunc, out_spill.as_ref());
+                let stderr = spilled_text(&err_buf, &err_tail, err_trunc, err_spill.as_ref());
                 match status.code() {
                     Some(code) => Ok(ToolOutput {
                         content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
@@ -695,19 +817,39 @@ impl Tool for PowerShellTool {
             .ok_or_else(|| ToolError::Execution("missing stderr".into()))?;
         let mut out_buf = Vec::new();
         let mut err_buf = Vec::new();
+        let mut out_tail = VecDeque::new();
+        let mut err_tail = VecDeque::new();
+        let mut out_spill = None;
+        let mut err_spill = None;
+        let out_spill_path = spill_path(&self.working_directory, "stdout", child.id());
+        let err_spill_path = spill_path(&self.working_directory, "stderr", child.id());
         let result = tokio::time::timeout(timeout, async {
             tokio::try_join!(
                 child.wait(),
-                read_capped(&mut stdout, self.output_byte_cap, &mut out_buf),
-                read_capped(&mut stderr, self.output_byte_cap, &mut err_buf)
+                read_spilled(
+                    &mut stdout,
+                    self.output_byte_cap,
+                    &mut out_buf,
+                    &mut out_tail,
+                    &mut out_spill,
+                    &out_spill_path,
+                ),
+                read_spilled(
+                    &mut stderr,
+                    self.output_byte_cap,
+                    &mut err_buf,
+                    &mut err_tail,
+                    &mut err_spill,
+                    &err_spill_path,
+                )
             )
         })
         .await;
         match result {
             Ok(Ok((status, out_trunc, err_trunc))) => {
                 tree_guard.0 = None;
-                let stdout = capped_text(&out_buf, out_trunc, self.output_byte_cap);
-                let stderr = capped_text(&err_buf, err_trunc, self.output_byte_cap);
+                let stdout = spilled_text(&out_buf, &out_tail, out_trunc, out_spill.as_ref());
+                let stderr = spilled_text(&err_buf, &err_tail, err_trunc, err_spill.as_ref());
                 match status.code() {
                     Some(code) => Ok(ToolOutput {
                         content: json!({"stdout":stdout,"stderr":stderr}).to_string(),
