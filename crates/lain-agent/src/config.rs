@@ -163,4 +163,13 @@ impl AgentConfig {
             .max_completion_tokens
             .unwrap_or_else(|| (self.context_window_tokens / 4).min(4_096) as u32)
     }
+
+    /// The one completion retry gets double the normal cap, bounded by half the window:
+    /// verbose models that spend the cap on reasoning before emitting need room to finish,
+    /// while the prompt still keeps at least half the window for itself.
+    pub(crate) fn retry_completion_token_limit(&self) -> u32 {
+        self.completion_token_limit()
+            .saturating_mul(2)
+            .min(u32::try_from(self.context_window_tokens / 2).unwrap_or(u32::MAX))
+    }
 }
