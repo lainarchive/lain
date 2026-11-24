@@ -25,7 +25,7 @@ use lain_memory::{
     MemoryInput, MemoryRecord, MemoryStore, SearchOptions, StoreError, SCRATCHPAD_MAX_UTF16,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::{broadcast, Notify};
 
 use crate::{
@@ -73,6 +73,59 @@ const REQUIREMENT_TEXT_MAX_UTF16: usize = 16_000;
 // Rejection feedback is a second chance, not a loop of its own: past this many refused answers
 // the check reports the miss and lets the run finish on the last output it produced.
 const MAX_REQUIREMENT_REJECTIONS: u32 = 2;
+
+// A finish claim only needs a fresh verification when the run changed something through a
+// shell; a pure-question run would otherwise be nagged to verify nothing. The block count
+// bounds the nudges the same way requirement rejections are bounded.
+const VERIFY_LOOKBACK_TURNS: u32 = 8;
+const MAX_VERIFY_BLOCKS: u32 = 3;
+
+/// Commands that count as verifying the result: tests, comparisons, probes.
+/// Indicator list carried over from NexAU AHE (Apache-2.0),
+/// agents/evolve_agent/middleware/ralph_loop.py.
+fn is_verification_command(command: &str) -> bool {
+    const INDICATORS: &[&str] = &[
+        "pytest",
+        "python -m pytest",
+        "python3 -m pytest",
+        "unittest",
+        "python -m unittest",
+        "python3 -m unittest",
+        "jest ",
+        "mocha ",
+        "vitest",
+        "make check",
+        "make test",
+        "npm test",
+        "npm run test",
+        "yarn test",
+        "cargo test",
+        "go test ./",
+        "go test .",
+        "rspec",
+        "phpunit",
+        "python3 -c",
+        "python -c",
+        "python3 test_",
+        "python test_",
+        "python3 -m test",
+        "python -m test",
+        "bash test_",
+        "./test_",
+        "sh test_",
+        "diff ",
+        "cmp ",
+        "curl ",
+        "wget ",
+        "node -e",
+        "ruby -e",
+        "gradle test",
+        "mvn test",
+    ];
+    INDICATORS
+        .iter()
+        .any(|indicator| command.contains(indicator))
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum RequirementCheck {
@@ -153,6 +206,9 @@ pub struct AgentRunner {
     feedback: Option<UserFeedback>,
     requirements: Vec<String>,
     requirement_rejections: u32,
+    last_shell_turn: Option<u32>,
+    last_verified_turn: Option<u32>,
+    verify_blocks: u32,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -233,6 +289,9 @@ impl AgentRunner {
             feedback: None,
             requirements: Vec::new(),
             requirement_rejections: 0,
+            last_shell_turn: None,
+            last_verified_turn: None,
+            verify_blocks: 0,
         })
     }
 
@@ -630,6 +689,28 @@ impl AgentRunner {
 
             if calls.is_empty() {
                 let text = message.content.unwrap_or_default();
+                // Verification gate: a run that changed things through a shell but never ran a
+                // check that exited 0 is sent back to verify before its answer counts. The
+                // block bound mirrors the requirement rejections so the nudge cannot loop.
+                if !truncated
+                    && self.last_shell_turn.is_some()
+                    && self.last_verified_turn.is_none_or(|verified| {
+                        turn.saturating_sub(verified) > VERIFY_LOOKBACK_TURNS
+                    })
+                    && self.verify_blocks < MAX_VERIFY_BLOCKS
+                {
+                    self.verify_blocks += 1;
+                    self.state.messages.push(Message::text(
+                        Role::User,
+                        "Before finishing, run a command that checks the result (a test suite, a diff, a direct check) and confirm it exits 0, or say why no verification applies.".to_string(),
+                    ));
+                    self.emit(AgentEvent::TurnCompleted {
+                        turn,
+                        tool_calls: 0,
+                        tokens_used: self.state.tokens_used,
+                    });
+                    continue;
+                }
                 // The pre-finish gate: the model's claim of done is checked against the
                 // requirements extracted at run start. A miss goes back as feedback; only a
                 // satisfied or unverifiable answer may end the run.
@@ -1159,7 +1240,23 @@ impl AgentRunner {
                             .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
                             .await
                         {
-                            Ok(Ok(output)) => ToolOutcome::Succeeded(output),
+                            Ok(Ok(output)) => {
+                                // Shell calls mark the run as verification-relevant, and a
+                                // zero-exit check command counts as the run having verified.
+                                if matches!(call.name.as_str(), "bash" | "powershell") {
+                                    self.last_shell_turn = Some(turn);
+                                    if output.exit_code == Some(0)
+                                        && call
+                                            .arguments
+                                            .get("command")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(is_verification_command)
+                                    {
+                                        self.last_verified_turn = Some(turn);
+                                    }
+                                }
+                                ToolOutcome::Succeeded(output)
+                            }
                             Ok(Err(error)) => ToolOutcome::Failed {
                                 code: error.code().into(),
                                 message: error.to_string(),
@@ -2506,6 +2603,64 @@ mod tests {
         };
         assert!(has(0, "3 turns remain"));
         assert!(has(2, "last turn"));
+    }
+
+    #[cfg(unix)]
+    fn shell_registry() -> Arc<ToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Arc::new(lain_core::tools::BashTool {
+                working_directory: std::env::temp_dir(),
+                timeout: Duration::from_secs(5),
+                output_byte_cap: 4096,
+            }))
+            .unwrap();
+        Arc::new(registry)
+    }
+
+    fn shell_call(command: &str) -> Result<CompletionResponse, CoreError> {
+        let mut response = calls(None, &["bash"])?;
+        for call in &mut response.message.tool_calls {
+            call.arguments = json!({"command": command});
+        }
+        Ok(response)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn finish_after_verified_check_is_not_nudged() {
+        let provider = ScriptedProvider::new(vec![shell_call("cargo test --help"), text("done")]);
+        let mut agent =
+            AgentRunner::new(config(), provider.clone(), shell_registry(), memory(), "s1").unwrap();
+        let outcome = agent.run("task").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        let nudged = provider.requests().iter().any(|r| {
+            r.messages
+                .iter()
+                .any(|m| m.content.as_deref().is_some_and(|t| t.contains("exits 0")))
+        });
+        assert!(!nudged);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn finish_without_verification_is_nudged_when_shell_was_used() {
+        let provider = ScriptedProvider::new(vec![
+            shell_call("echo wrote it"),
+            text("done"),
+            shell_call("cargo test --help"),
+            text("verified, done"),
+        ]);
+        let mut agent =
+            AgentRunner::new(config(), provider.clone(), shell_registry(), memory(), "s1").unwrap();
+        let outcome = agent.run("task").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        let nudged = provider.requests().iter().any(|r| {
+            r.messages
+                .iter()
+                .any(|m| m.content.as_deref().is_some_and(|t| t.contains("exits 0")))
+        });
+        assert!(nudged);
     }
 
     #[tokio::test]
