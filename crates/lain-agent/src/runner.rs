@@ -149,6 +149,7 @@ pub struct AgentRunner {
     started: Option<Instant>,
     procedural_rules: Vec<String>,
     scratchpad_notice: Option<String>,
+    token_notice_stage: u8,
     feedback: Option<UserFeedback>,
     requirements: Vec<String>,
     requirement_rejections: u32,
@@ -228,6 +229,7 @@ impl AgentRunner {
             cancel: Canceller::default(),
             procedural_rules: Vec::new(),
             scratchpad_notice: None,
+            token_notice_stage: 0,
             feedback: None,
             requirements: Vec::new(),
             requirement_rejections: 0,
@@ -506,6 +508,31 @@ impl AgentRunner {
                     "This is your last turn. Write any required output files and give your final answer now.".to_string(),
                 )),
                 _ => {}
+            }
+            // Same warning for the token budget: the model cannot see its own
+            // usage, so a run that burns through the cap without finishing
+            // needs the notice early enough to still write its outputs.
+            // Escalating stages mirror the turn warnings above.
+            if let Some(max_tokens) = self.config.budget.max_total_tokens {
+                let used = self.state.tokens_used;
+                let stage = if used.saturating_mul(20) >= max_tokens.saturating_mul(19) {
+                    2
+                } else if used.saturating_mul(5) >= max_tokens.saturating_mul(4) {
+                    1
+                } else {
+                    0
+                };
+                if stage > self.token_notice_stage {
+                    self.token_notice_stage = stage;
+                    let text = if stage == 2 {
+                        "Token budget is nearly exhausted. Write any required output files and give your final answer now."
+                    } else {
+                        "Token budget is 80% spent. Work toward a conclusion: write any required output files and prepare your final answer."
+                    };
+                    self.state
+                        .messages
+                        .push(Message::text(Role::User, text.to_string()));
+                }
             }
             if let Some(reason) = self.interrupted() {
                 return Ok(self.stop(reason, run_turn - 1));
@@ -2479,6 +2506,32 @@ mod tests {
         };
         assert!(has(0, "3 turns remain"));
         assert!(has(2, "last turn"));
+    }
+
+    #[tokio::test]
+    async fn token_budget_warning_escalates_as_cap_approaches() {
+        // calls() reports 100 tokens per turn.
+        for (max_tokens, needle) in [
+            (250, "Token budget is 80% spent"),
+            (210, "Token budget is nearly exhausted"),
+        ] {
+            let mut config = config();
+            config.max_turns = 6;
+            config.budget = BudgetLimits {
+                max_total_tokens: Some(max_tokens),
+                max_completion_tokens: Some(64),
+                ..BudgetLimits::default()
+            };
+            let provider = ScriptedProvider::new((0..6).map(|_| calls(None, &["ok"])).collect());
+            let (mut agent, _) = runner(config, provider.clone());
+            let _ = agent.run("spend").await.unwrap();
+            let warned = provider.requests().iter().any(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.as_deref().is_some_and(|t| t.contains(needle)))
+            });
+            assert!(warned, "missing notice '{needle}'");
+        }
     }
 
     #[tokio::test]
