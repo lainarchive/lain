@@ -82,6 +82,9 @@ const REQUIREMENT_TEXT_MAX_UTF16: usize = 16_000;
 const FAILED_ACTIONS_MAX: usize = 6;
 const FAILED_ACTION_ARGS_UTF16: usize = 120;
 const FAILED_ACTION_TEXT_UTF16: usize = 160;
+// Enough of a cut-off reply to show the retry where it stopped; bounded so a giant
+// discarded draft cannot leak back past the context budget it just exhausted.
+const RETRY_TAIL_UTF16: usize = 400;
 // Rejection feedback is a second chance, not a loop of its own: past this many refused answers
 // the check reports the miss and lets the run finish on the last output it produced.
 const MAX_REQUIREMENT_REJECTIONS: u32 = 2;
@@ -215,6 +218,8 @@ pub struct AgentRunner {
     procedural_rules: Vec<String>,
     scratchpad_notice: Option<String>,
     token_notice_stage: u8,
+    /// Tail of a length-truncated reply, shown to the retry so it continues instead of restarting.
+    retry_tail: Option<String>,
     feedback: Option<UserFeedback>,
     requirements: Vec<String>,
     requirement_rejections: u32,
@@ -299,6 +304,7 @@ impl AgentRunner {
             procedural_rules: Vec::new(),
             scratchpad_notice: None,
             token_notice_stage: 0,
+            retry_tail: None,
             feedback: None,
             requirements: Vec::new(),
             requirement_rejections: 0,
@@ -654,6 +660,11 @@ impl AgentRunner {
             {
                 completion_retry_turn = Some(run_turn + 1);
                 self.scratchpad_notice = scratchpad_notice;
+                self.retry_tail = message
+                    .content
+                    .as_deref()
+                    .map(|text| tail_utf16(text, RETRY_TAIL_UTF16))
+                    .filter(|tail| !tail.is_empty());
                 self.emit(AgentEvent::TurnCompleted {
                     turn,
                     tool_calls: 0,
@@ -1087,17 +1098,24 @@ impl AgentRunner {
             prefix.push(work_state);
         }
         if retry_completion {
-            prefix.push(
-                "Your previous response exceeded the completion length limit and was discarded. Continue from the last completed action. Keep the response concise; if using a tool, send one small, complete call."
-                    .into(),
-            );
+            let mut hint = "Your previous response exceeded the completion length limit and was discarded. Continue from the last completed action. Keep the response concise; if using a tool, send one small, complete call.".to_string();
+            if let Some(tail) = self.retry_tail.take() {
+                hint.push_str(&format!(
+                    " The discarded response ended with: \"{tail}\". Resume from that point instead of rewriting it."
+                ));
+            }
+            prefix.push(hint);
         }
         let mut request = CompletionRequest {
             model: self.config.model.clone(),
             messages: Vec::new(),
             tools: if hermes { Vec::new() } else { tool_definitions },
             temperature: self.config.temperature,
-            max_tokens: Some(self.config.completion_token_limit()),
+            max_tokens: Some(if retry_completion {
+                self.config.retry_completion_token_limit()
+            } else {
+                self.config.completion_token_limit()
+            }),
         };
         prompt::fill(
             &mut request,
@@ -1644,6 +1662,22 @@ pub(crate) fn clip_utf16(text: &str, max: usize) -> String {
             units <= max
         })
         .collect()
+}
+
+fn tail_utf16(text: &str, max: usize) -> String {
+    if text.encode_utf16().count() <= max {
+        return text.to_owned();
+    }
+    let mut units = 0usize;
+    let mut cut = text.len();
+    for (index, ch) in text.char_indices().rev() {
+        units += ch.len_utf16();
+        if units > max {
+            break;
+        }
+        cut = index;
+    }
+    format!("…{}", text.get(cut..).unwrap_or_default())
 }
 
 /// SQLite work runs on a blocking worker so the std mutex never spans an await.
@@ -3177,6 +3211,19 @@ mod tests {
         assert_eq!(outcome.status, AgentStatus::AwaitingInput);
         assert_eq!(provider.requests().len(), 3);
         assert_eq!(agent.state().tool_calls, 1);
+        let requests = provider.requests();
+        let retry = requests.get(1).unwrap();
+        assert_eq!(
+            retry.max_tokens,
+            Some(requests.first().unwrap().max_tokens.unwrap() * 2)
+        );
+        let prefix = retry
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::System)
+            .filter_map(|m| m.content.as_deref())
+            .collect::<String>();
+        assert!(prefix.contains("mid-task reasoning") && prefix.contains("ended with"));
     }
 
     #[tokio::test]
@@ -3194,9 +3241,8 @@ mod tests {
         assert_eq!(agent.state().tool_calls, 0);
         let requests = provider.requests();
         assert_eq!(requests.len(), 2);
-        assert!(requests
-            .iter()
-            .all(|request| request.max_tokens == Some(64)));
+        assert_eq!(requests.first().unwrap().max_tokens, Some(64));
+        assert_eq!(requests.last().unwrap().max_tokens, Some(128));
         assert!(requests.last().unwrap().messages.iter().any(|message| {
             message.role == Role::System
                 && message
