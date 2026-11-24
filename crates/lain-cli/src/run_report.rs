@@ -254,7 +254,7 @@ mod tests {
         flush_report(&report, &path);
         let first: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(first["completed"], json!(false));
+        assert_eq!(first.get("completed"), Some(&json!(false)));
         report.event(&Event::SessionCompleted {
             session_id: "s".into(),
             reason: "completed".into(),
@@ -263,7 +263,7 @@ mod tests {
         flush_report(&report, &path);
         let second: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(second["completed"], json!(true));
+        assert_eq!(second.get("completed"), Some(&json!(true)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
