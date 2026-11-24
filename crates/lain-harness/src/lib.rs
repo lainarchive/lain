@@ -4,5 +4,6 @@ pub mod cache;
 pub mod dag;
 pub mod evidence;
 pub mod scope;
+pub mod sensitive;
 pub mod verify;
 pub mod worktree;
