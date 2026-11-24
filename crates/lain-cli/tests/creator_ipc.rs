@@ -60,6 +60,7 @@ async fn serve(
         "inventory-test",
     );
     config.allow_creator_mode = enabled;
+    config.requirements_gate = false;
     config.coding_session = true;
     if grants {
         config.plugin_permissions = HOST_PROCESS_PERMISSIONS.into_iter().collect();

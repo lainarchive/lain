@@ -632,9 +632,10 @@ mod tests {
                 let _=provider_shutdown.changed().await;
             }).await});
             let directory=tempfile::tempdir()?;
-            let config=lain_agent::AgentConfig::new(lain_agent::ProviderSelection::OpenAiCompatible {
+            let mut config=lain_agent::AgentConfig::new(lain_agent::ProviderSelection::OpenAiCompatible {
                 base_url:format!("http://{address}/v1"),api_key_env:None,
             },"test");
+            config.requirements_gate=false;
             let config_path=directory.path().join("agent.json");
             std::fs::write(&config_path,serde_json::to_vec(&config)?)?;
             let handler=Arc::new(DaemonHandler::new(Arc::new(Mutex::new(lain_memory::MemoryStore::open(":memory:")?)),
@@ -756,6 +757,13 @@ mod tests {
                 reason: lain_agent::TerminationReason::Cancelled,
             },
             AgentEvent::ReflectionFailed { code: "X".into() },
+            AgentEvent::RequirementsExtracted {
+                items: vec!["r".into()],
+            },
+            AgentEvent::RequirementsChecked {
+                satisfied: false,
+                missing: vec!["r".into()],
+            },
         ];
         let event_tags = [
             "thinking_token",
@@ -774,6 +782,8 @@ mod tests {
             "turn_completed",
             "terminated",
             "reflection_failed",
+            "requirements_extracted",
+            "requirements_checked",
         ];
         let declaration = AgentEvent::decl();
         assert_eq!(declaration.matches("\"type\":").count(), events.len());

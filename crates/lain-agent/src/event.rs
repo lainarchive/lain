@@ -107,4 +107,13 @@ pub enum AgentEvent {
     ReflectionFailed {
         code: String,
     },
+    /// The task's exact requirements, extracted before the first turn ran.
+    RequirementsExtracted {
+        items: Vec<String>,
+    },
+    /// The pre-finish check's verdict on the proposed output.
+    RequirementsChecked {
+        satisfied: bool,
+        missing: Vec<String>,
+    },
 }

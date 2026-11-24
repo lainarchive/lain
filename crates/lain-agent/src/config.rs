@@ -18,6 +18,10 @@ fn default_creator_mode() -> bool {
     cfg!(debug_assertions)
 }
 
+fn default_requirements_gate() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -92,6 +96,11 @@ pub struct AgentConfig {
     pub allow_creator_mode: bool,
     #[serde(default)]
     pub plugin_permissions: BTreeSet<Capability>,
+    /// Extract the task's exact requirements at run start and check the final output against
+    /// them before the run may finish. The side calls cost extra model calls, so tests and
+    /// runs that cannot spend them can opt out.
+    #[serde(default = "default_requirements_gate")]
+    pub requirements_gate: bool,
     pub budget: BudgetLimits,
 }
 
@@ -110,6 +119,7 @@ impl AgentConfig {
             coding_session: false,
             allow_creator_mode: default_creator_mode(),
             plugin_permissions: BTreeSet::new(),
+            requirements_gate: true,
             budget: BudgetLimits::default(),
         }
     }
