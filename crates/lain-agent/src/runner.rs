@@ -221,6 +221,7 @@ pub struct AgentRunner {
     last_shell_turn: Option<u32>,
     last_verified_turn: Option<u32>,
     verify_blocks: u32,
+    last_error_signature: Option<String>,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -304,6 +305,7 @@ impl AgentRunner {
             last_shell_turn: None,
             last_verified_turn: None,
             verify_blocks: 0,
+            last_error_signature: None,
         })
     }
 
@@ -1344,14 +1346,25 @@ impl AgentRunner {
                     }
                 };
                 if outcome.is_error() {
-                    self.state.consecutive_tool_errors += 1;
                     self.state.tool_errors = self.state.tool_errors.saturating_add(1);
                     if !scratchpad {
                         self.record_failed_action(turn, call, &outcome);
+                        // The breaker exists for a model retrying the same
+                        // failing call. Distinct probes that each fail once
+                        // are exploration, so a new call signature restarts
+                        // the count rather than adding to it.
+                        let signature = format!("{}:{}", call.name, call.arguments);
+                        if self.last_error_signature.as_deref() == Some(signature.as_str()) {
+                            self.state.consecutive_tool_errors += 1;
+                        } else {
+                            self.state.consecutive_tool_errors = 1;
+                            self.last_error_signature = Some(signature);
+                        }
                     }
                 } else if !scratchpad {
                     // A plan edit cannot reset the breaker between repeated failures of real tools.
                     self.state.consecutive_tool_errors = 0;
+                    self.last_error_signature = None;
                 }
                 if self.state.consecutive_tool_errors >= self.config.max_consecutive_tool_errors {
                     halt = Some(TerminationReason::ToolErrorLimit);
@@ -2455,6 +2468,11 @@ mod tests {
     #[tokio::test]
     async fn scratchpad_in_a_tool_batch_preserves_native_call_pairing_and_the_breaker() {
         let mut response = calls(None, &["fail", "fail"]).unwrap();
+        // The breaker counts retries of the same failing call, so both
+        // invocations need identical arguments.
+        for call in &mut response.message.tool_calls {
+            call.arguments = json!({"n": 0});
+        }
         response.message.tool_calls.insert(
             1,
             ToolCall {
@@ -2578,9 +2596,14 @@ mod tests {
         let provider = ScriptedProvider::new(vec![
             calls(None, &["fail", "fail"]),
             calls(None, &["ok"]),
-            calls(None, &["fail", "exit2"]),
+            calls(None, &["fail", "fail"]),
             text("recovered"),
         ]);
+        for response in provider.script.lock().unwrap().iter_mut().flatten() {
+            for call in &mut response.message.tool_calls {
+                call.arguments = json!({"n": 0});
+            }
+        }
         let (mut agent, _) = runner(config(), provider);
         let outcome = agent.run("flaky").await.unwrap();
         assert_eq!(outcome.output.as_deref(), Some("recovered"));
@@ -2589,9 +2612,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn breaker_counts_retries_of_one_call_not_distinct_failing_probes() {
+        // Probing different commands that each fail is exploration; only a
+        // repeat of the same failing call is the runaway the breaker stops.
+        let provider = ScriptedProvider::new(vec![
+            calls(None, &["fail"]),
+            calls(None, &["exit2"]),
+            calls(None, &["missing"]),
+            calls(None, &["fail"]),
+            calls(None, &["fail"]),
+            calls(None, &["fail"]),
+        ]);
+        let (mut agent, _) = runner(config(), provider.clone());
+        let outcome = agent.run("probe").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::ToolErrorLimit)
+        );
+        // The three distinct probes never stacked: the run lived to turn 6
+        // and died on the third identical "fail" retry.
+        assert_eq!((outcome.turns, outcome.output), (6, None));
+        assert_eq!(provider.requests().len(), 6);
+        assert_eq!(agent.state().tool_errors, 6);
+    }
+
+    #[tokio::test]
     async fn breaker_mid_turn_answers_remaining_calls_as_skipped() {
-        let provider =
-            ScriptedProvider::new(vec![calls(None, &["fail", "missing", "exit2", "ok"])]);
+        let mut response = calls(None, &["fail", "fail", "fail", "ok"]).unwrap();
+        for call in &mut response.message.tool_calls {
+            call.arguments = json!({"n": 0});
+        }
+        let provider = ScriptedProvider::new(vec![Ok(response)]);
         let (mut agent, _) = runner(config(), provider);
         let mut rx = agent.subscribe();
         let outcome = agent.run("burst").await.unwrap();
@@ -2602,10 +2653,7 @@ mod tests {
         let events = drain(&mut rx);
         let outcomes = outcomes(&events);
         assert!(
-            matches!(outcomes.get(1), Some(ToolOutcome::Failed { code, .. }) if code == "TOOL_NOT_FOUND")
-        );
-        assert!(
-            matches!(outcomes.get(2), Some(ToolOutcome::Succeeded(o)) if o.exit_code == Some(2))
+            matches!(outcomes.get(2), Some(ToolOutcome::Failed { code, .. }) if code == "TOOL_EXECUTION_FAILED")
         );
         assert!(matches!(outcomes.get(3), Some(ToolOutcome::Skipped { .. })));
         assert_eq!(
