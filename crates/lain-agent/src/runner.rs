@@ -827,8 +827,7 @@ impl AgentRunner {
                     let Some(retry_after) = error.retry_delay() else {
                         return Err(error);
                     };
-                    if self.deadline().is_none() && retry_after > MAX_RETRY_DELAY_WITHOUT_DEADLINE
-                    {
+                    if self.deadline().is_none() && retry_after > MAX_RETRY_DELAY_WITHOUT_DEADLINE {
                         return Err(error);
                     }
                     tokio::time::sleep(delay.max(retry_after)).await;
@@ -844,10 +843,7 @@ impl AgentRunner {
     fn account_usage(&mut self, usage: &Option<Usage>) -> Result<(), TerminationReason> {
         match usage {
             Some(usage) => {
-                self.state.tokens_used = self
-                    .state
-                    .tokens_used
-                    .saturating_add(usage.total_tokens);
+                self.state.tokens_used = self.state.tokens_used.saturating_add(usage.total_tokens);
                 Ok(())
             }
             None if self.config.budget.max_total_tokens.is_some() => {
@@ -2428,10 +2424,11 @@ mod tests {
         );
         let requests = provider.requests();
         let has = |i: usize, needle: &str| {
-            requests
-                .get(i)
-                .is_some_and(|r| r.messages.iter()
-                    .any(|m| m.content.as_deref().is_some_and(|t| t.contains(needle))))
+            requests.get(i).is_some_and(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.as_deref().is_some_and(|t| t.contains(needle)))
+            })
         };
         assert!(has(0, "3 turns remain"));
         assert!(has(2, "last turn"));
@@ -3144,7 +3141,10 @@ mod tests {
         assert!(check.contains("63841") && check.contains("sum all deepseek_* fields"));
         assert!(drain(&mut events).iter().any(|event| matches!(
             event,
-            AgentEvent::RequirementsChecked { satisfied: true, .. }
+            AgentEvent::RequirementsChecked {
+                satisfied: true,
+                ..
+            }
         )));
     }
 
@@ -3161,8 +3161,7 @@ mod tests {
         let outcome = agent.run("count").await.unwrap();
         assert_eq!(outcome.output.as_deref(), Some("79586"));
         assert!(agent.state().messages.iter().any(|m| {
-            m.role == Role::User
-                && m.content.as_deref().is_some_and(|c| c.contains("Unmet"))
+            m.role == Role::User && m.content.as_deref().is_some_and(|c| c.contains("Unmet"))
         }));
     }
 
@@ -3186,10 +3185,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_extraction_failure_leaves_the_run_ungated() {
-        let provider = ScriptedProvider::new(vec![
-            Err(CoreError::Protocol("down".into())),
-            text("done"),
-        ]);
+        let provider =
+            ScriptedProvider::new(vec![Err(CoreError::Protocol("down".into())), text("done")]);
         let (mut agent, _) = runner(gated(), provider.clone());
         let outcome = agent.run("task").await.unwrap();
         assert_eq!(outcome.output.as_deref(), Some("done"));

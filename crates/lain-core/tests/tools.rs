@@ -520,7 +520,8 @@ async fn powershell_dropped_future_kills_descendants() -> Result<(), Box<dyn std
     let execution = tokio::spawn(async move {
         tool.execute(json!({"command": "$p = Start-Process /bin/sleep -ArgumentList '30' -PassThru; Set-Content child.pid $p.Id; Start-Sleep -Seconds 30"})).await
     });
-    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+    // cold pwsh on a shared runner can take far longer than 5s to start
+    let pid = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let pid = std::fs::read_to_string(directory.path().join("child.pid"))
                 .ok()
