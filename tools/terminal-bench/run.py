@@ -60,6 +60,12 @@ class ModelProxy(BaseHTTPRequestHandler):
     served_mismatch = 0
     served_seen = set()
     served_lock = threading.Lock()
+    # Per-arm access tokens and observed usage: which agent asked, how many
+    # replies failed upstream, and the tokens it consumed — evidence records in
+    # the style of oh-my-hermes' routing_observation (MIT), never verdicts.
+    access_tokens = {}
+    arm_stats = {}
+    stats_lock = threading.Lock()
 
     def log_message(self, *args):
         pass
@@ -77,12 +83,41 @@ class ModelProxy(BaseHTTPRequestHandler):
                 type(self).served_seen.add(served)
             print(f"served model {served!r} != pinned {self.model}", flush=True)
 
+    @classmethod
+    def access_arm(cls, header):
+        for arm, token in cls.access_tokens.items():
+            if secrets.compare_digest(header, f"Bearer {token}"):
+                return arm
+        return None
+
+    def record_result(self, arm, code, content_type, body):
+        with type(self).stats_lock:
+            stats = type(self).arm_stats.setdefault(
+                arm, {"requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0}
+            )
+            stats["requests"] += 1
+            if code != 200:
+                stats["errors"] += 1
+        self.check_served_model(code, content_type, body)
+        if code != 200 or "json" not in content_type:
+            return
+        try:
+            usage = json.loads(body).get("usage") or {}
+        except (json.JSONDecodeError, AttributeError):
+            return
+        prompt = usage.get("prompt_tokens") or 0
+        completion = usage.get("completion_tokens") or 0
+        if isinstance(prompt, int) and isinstance(completion, int) and (prompt or completion):
+            with type(self).stats_lock:
+                stats["prompt_tokens"] += prompt
+                stats["completion_tokens"] += completion
+
     def do_POST(self):
-        if self.path != "/v1/chat/completions" or not secrets.compare_digest(
-            self.headers.get("Authorization", ""), f"Bearer {self.access}"
-        ):
+        arm = self.access_arm(self.headers.get("Authorization", ""))
+        if self.path != "/v1/chat/completions" or arm is None:
             self.send_error(403)
             return
+        self.arm = arm
         try:
             length = int(self.headers["Content-Length"])
             if not 0 < length <= MAX_BYTES:
@@ -139,7 +174,7 @@ class ModelProxy(BaseHTTPRequestHandler):
                 remaining = deadline - started
                 result = POOL.submit(fetch, upstream, remaining).result(timeout=remaining)
                 print(f"upstream {result[0]} {time.monotonic() - started:.3f}s", flush=True)
-                self.check_served_model(*result)
+                self.record_result(self.arm, *result)
                 return result
             except urllib.error.HTTPError as error:
                 code, content_type, body = error.code, error.headers.get("Content-Type", "application/json"), error.read()
@@ -235,9 +270,13 @@ def write_table(args, tasks, lain, terminus, out_path):
         "ok" if not ModelProxy.served_mismatch
         else f"{ModelProxy.served_mismatch} replies from {', '.join(sorted(ModelProxy.served_seen))}"
     )
+    usage = "; ".join(
+        f"{arm} {s['requests']}req/{s['errors']}err/{s['prompt_tokens']}+{s['completion_tokens']}tok"
+        for arm, s in sorted(ModelProxy.arm_stats.items())
+    ) or "none observed"
     lines = [
         f"<!-- {args.dataset_path or args.dataset} | model {ModelProxy.model} via {ModelProxy.upstream_url}",
-        f"     | lain revision {args.revision} | served-model check {served}",
+        f"     | lain revision {args.revision} | served-model check {served} | arm usage {usage}",
         f"     | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} -->",
         "",
         "| Task | Lain | Terminus-2 |",
@@ -291,7 +330,7 @@ def main(argv=None):
     ModelProxy.model = args.model
     ModelProxy.upstream_url = args.base_url
     ModelProxy.key_env = args.api_key_env
-    ModelProxy.access = secrets.token_hex(32)
+    ModelProxy.access_tokens = {arm: secrets.token_hex(32) for arm in ("lain", "terminus-2")}
 
     tasks = [line for line in (line.strip() for line in (args.tasks or args.tasks_file.read_text(encoding="utf-8")).replace(",", "\n").splitlines())
              if line and not line.startswith("#")]
@@ -319,15 +358,23 @@ def main(argv=None):
             LAIN_BENCH_REVISION=args.revision,
             LAIN_BENCH_BINARY=str(binary or ""),
             LAIN_BENCH_PROXY_URL=proxy_url,
-            LAIN_BENCH_ACCESS=ModelProxy.access,
         )
         failures = []
         try:
             for which in ("lain", "terminus-2"):
-                if which in selected and run_agent(args, proxy_url, which, tasks, env):
+                if which not in selected:
+                    continue
+                arm_env = dict(env, LAIN_BENCH_ACCESS=ModelProxy.access_tokens[which])
+                if run_agent(args, proxy_url, which, tasks, arm_env):
                     failures.append(which)
         finally:
             proxy.shutdown()
+        for arm, stats in sorted(ModelProxy.arm_stats.items()):
+            print(
+                f"{arm}: {stats['requests']} requests, {stats['errors']} upstream errors, "
+                f"{stats['prompt_tokens']} prompt + {stats['completion_tokens']} completion tokens",
+                flush=True,
+            )
         if ModelProxy.served_mismatch:
             print(
                 f"WARNING: upstream served {ModelProxy.served_mismatch} replies from "
