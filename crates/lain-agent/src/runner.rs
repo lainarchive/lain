@@ -238,6 +238,7 @@ pub struct AgentRunner {
     readonly_streak: u32,
     stall_nudges: u32,
     recent_signatures: VecDeque<String>,
+    rejected_unmet: Vec<Vec<String>>,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -326,6 +327,7 @@ impl AgentRunner {
             readonly_streak: 0,
             stall_nudges: 0,
             recent_signatures: VecDeque::new(),
+            rejected_unmet: Vec::new(),
         })
     }
 
@@ -543,6 +545,7 @@ impl AgentRunner {
         self.emit(AgentEvent::IntentReceived { text: redacted });
         self.requirements.clear();
         self.requirement_rejections = 0;
+        self.rejected_unmet.clear();
         if self.config.requirements_gate {
             match self.extract_requirements(&input).await {
                 Ok(items) => {
@@ -767,13 +770,38 @@ impl AgentRunner {
                             });
                             if self.requirement_rejections < MAX_REQUIREMENT_REJECTIONS {
                                 self.requirement_rejections += 1;
-                                self.state.messages.push(Message::text(
-                                    Role::User,
+                                self.rejected_unmet.push(missing.clone());
+                                let feedback = if self.requirement_rejections
+                                    == MAX_REQUIREMENT_REJECTIONS
+                                {
+                                    // The last correction re-plans instead of
+                                    // retrying, carried over from oh-my-hermes
+                                    // (MIT): src/plugin_bundle/omh/dag_run.py
+                                    // lists the failed approaches on the final
+                                    // repair cycle and asks for an approach
+                                    // that differs in kind.
+                                    let attempts = self
+                                        .rejected_unmet
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, unmet)| {
+                                            format!("{}. Unmet: {}", i + 1, json!(unmet))
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    format!(
+                                        "That answer does not satisfy the task's requirements, and every fix so far missed the same gate:\n{}\nThis is the last correction the run will take, so do not retry the same approach. Before editing, write two or three approaches that differ in kind, rule out the ones the rejections above refute, and take the one that remains. Then fix the work and give a corrected final answer.",
+                                        attempts
+                                    )
+                                } else {
                                     format!(
                                         "That answer does not satisfy the task's requirements. Unmet: {}. Fix the work and give a corrected final answer.",
                                         json!(missing)
-                                    ),
-                                ));
+                                    )
+                                };
+                                self.state
+                                    .messages
+                                    .push(Message::text(Role::User, feedback));
                                 self.emit(AgentEvent::TurnCompleted {
                                     turn,
                                     tool_calls: 0,
@@ -3990,6 +4018,37 @@ mod tests {
         let outcome = agent.run("task").await.unwrap();
         assert_eq!(outcome.status, AgentStatus::AwaitingInput);
         assert_eq!(outcome.output.as_deref(), Some("a3"));
+    }
+
+    #[tokio::test]
+    async fn the_last_rejection_replans_instead_of_retrying() {
+        let provider = ScriptedProvider::new(vec![
+            text("[\"req\"]"),
+            text("a1"),
+            text("{\"satisfied\": false, \"missing\": [\"alpha\"]}"),
+            text("a2"),
+            text("{\"satisfied\": false, \"missing\": [\"beta\"]}"),
+            text("a3"),
+            text("{\"satisfied\": true}"),
+        ]);
+        let (mut agent, _) = runner(gated(), provider);
+        let outcome = agent.run("task").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("a3"));
+        let feedback: Vec<&str> = agent
+            .state()
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .filter_map(|m| m.content.as_deref())
+            .filter(|c| c.contains("does not satisfy"))
+            .collect();
+        assert_eq!(feedback.len(), 2);
+        assert!(!feedback
+            .first()
+            .is_some_and(|c| c.contains("differ in kind")));
+        let last = feedback.last().copied().unwrap_or_default();
+        assert!(last.contains("alpha") && last.contains("beta"));
+        assert!(last.contains("last correction") && last.contains("differ in kind"));
     }
 
     #[tokio::test]
