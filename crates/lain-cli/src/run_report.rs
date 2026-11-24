@@ -144,6 +144,65 @@ impl RunReport {
     }
 }
 
+/// `output_tail` arrives JSON-encoded as `{"stderr":..,"stdout":..}` from the
+/// daemon; decode it so a human reads real output, and fall back to the raw
+/// text when it is not JSON.
+fn write_tail(out: &mut impl Write, tail: &str) -> io::Result<()> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(tail) {
+        let mut wrote = false;
+        for (name, key) in [("stdout", "stdout"), ("stderr", "stderr")] {
+            if let Some(text) = value
+                .get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                writeln!(out, "    {name}:")?;
+                for line in text.lines() {
+                    writeln!(out, "      {}", crate::render::clean(line))?;
+                }
+                wrote = true;
+            }
+        }
+        if wrote {
+            return Ok(());
+        }
+    }
+    writeln!(out, "    output_tail:")?;
+    for line in tail.lines() {
+        writeln!(out, "      {}", crate::render::clean(line))?;
+    }
+    Ok(())
+}
+
+fn write_evidence(out: &mut impl Write, evidence: &Evidence) -> io::Result<()> {
+    let (kind, command, exit_code, output_tail) = match evidence {
+        Evidence::TestRun {
+            command,
+            exit_code,
+            output_tail,
+        } => ("test_run", command, exit_code, output_tail),
+        Evidence::CompilerCheck {
+            command,
+            exit_code,
+            output_tail,
+        } => ("compiler_check", command, exit_code, output_tail),
+    };
+    writeln!(out, "  observed: {kind}")?;
+    if command.contains('\n') {
+        writeln!(out, "    command:")?;
+        for line in command.lines() {
+            writeln!(out, "      {}", crate::render::clean(line))?;
+        }
+    } else {
+        writeln!(out, "    command: {}", crate::render::clean(command))?;
+    }
+    writeln!(out, "    exit: {exit_code}")?;
+    if let Some(tail) = output_tail {
+        write_tail(out, tail)?;
+    }
+    Ok(())
+}
+
 pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u8, crate::Error> {
     let mut report = RunReport::default();
     let result=async {
@@ -204,7 +263,7 @@ pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u
                 writeln!(out, "  sensitive: {}", serde_json::to_string(mark)?)?;
             }
             for evidence in step.evidence() {
-                writeln!(out, "  observed: {}", serde_json::to_string(evidence)?)?;
+                write_evidence(&mut out, evidence)?;
             }
         }
         if let Some(failure) = &report.failure {
@@ -313,6 +372,29 @@ mod tests {
         });
         assert_eq!(report.reply, "hello");
         assert_eq!(report.exit_code(), 2);
+    }
+
+    #[test]
+    fn evidence_report_renders_decoded_output_for_a_human() {
+        let mut out = Vec::new();
+        write_evidence(
+            &mut out,
+            &Evidence::TestRun {
+                command: "pwd\nls -la".into(),
+                exit_code: 0,
+                output_tail: Some(
+                    serde_json::to_string(&json!({"stderr":"","stdout":"/tmp/demo\nnotes.txt\n"}))
+                        .unwrap(),
+                ),
+            },
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(
+            text,
+            "  observed: test_run\n    command:\n      pwd\n      ls -la\n    exit: 0\n    stdout:\n      /tmp/demo\n      notes.txt\n"
+        );
+        assert!(!text.contains("\\\""));
     }
 
     #[test]
