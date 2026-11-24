@@ -193,12 +193,28 @@ def harbor_bin(override):
     return found
 
 
+# Task images do not share the host's glibc: debian:bullseye images
+# (qemu-alpine-ssh, qemu-startup) ship 2.31 while the gnu-linked release
+# binary needs 2.32+, so it could not even start there. The musl target
+# links everything statically and runs on any Linux the bench uses.
+MUSL_TARGET = "x86_64-unknown-linux-musl"
+
+
 def build_lain(path):
     binary = Path(path).resolve()
     if binary.exists():
         return binary
-    print(f"building Lain: cargo build --release -> {binary}", flush=True)
-    subprocess.run(["cargo", "build", "--release"], cwd=REPO, check=True)
+    print(f"building Lain: cargo build --release --target {MUSL_TARGET} -> {binary}", flush=True)
+    try:
+        subprocess.run(
+            ["cargo", "build", "--release", "--target", MUSL_TARGET],
+            cwd=REPO, check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            f"musl build failed ({error.returncode}); needs "
+            f"`rustup target add {MUSL_TARGET}` and musl-tools"
+        ) from error
     if not binary.exists():
         raise SystemExit(f"cargo build finished but {binary} is missing")
     return binary
@@ -326,8 +342,8 @@ def parse_args(argv):
     parser.add_argument("--job-name", default="h2h", help="job name prefix; agents run as <prefix>-lain and <prefix>-terminus-2")
     parser.add_argument("--concurrency", type=int, default=3, help="concurrent trials per agent (default: 3; keep low on free tiers)")
     parser.add_argument("--timeout-multiplier", type=float, help="harbor timeout multiplier")
-    parser.add_argument("--lain-binary", default=str(REPO / "target" / "release" / "lain"),
-                        help="path to the Lain binary (built with cargo --release if missing)")
+    parser.add_argument("--lain-binary", default=str(REPO / "target" / MUSL_TARGET / "release" / "lain"),
+                        help="path to the Lain binary (built as a static musl release if missing)")
     parser.add_argument("--harbor", help="harbor executable (default: PATH, then ~/.local/bin/harbor)")
     parser.add_argument("--agents", default="lain,terminus-2", help="comma-separated subset for partial runs")
     parser.add_argument("--revision", help="recorded Lain revision (default: git HEAD)")
