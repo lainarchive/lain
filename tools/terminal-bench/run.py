@@ -243,16 +243,28 @@ def write_table(args, tasks, lain, terminus, out_path):
         "| Task | Lain | Terminus-2 |",
         "| --- | --- | --- |",
     ]
-    totals = {name: 0 for name, _ in agents}
+    totals = {name: {"pass": 0, "fail": 0, "error": 0, "unknown": 0} for name, _ in agents}
     for task in tasks:
         row = [task]
         for name, trials in agents:
             cell = status_cell(trials.get(task))
-            if cell == "pass":
-                totals[name] += 1
+            totals[name]["pass" if cell == "pass" else "fail" if cell == "fail"
+                        else "error" if cell.startswith("error") else "unknown"] += 1
             row.append(cell)
         lines.append("| " + " | ".join(row) + " |")
-    lines.append("| **Score** | " + " | ".join(f"**{totals[name]}/{len(tasks)}**" for name, _ in agents) + " |")
+    # Scores carry their basis, omh_reported_rate style (MIT): the numerator's
+    # bucket, what the denominator counted, and every excluded observation
+    # class; an arm with no observed trials is "no observations", never 0%.
+    def score(name):
+        t = totals[name]
+        observed = t["pass"] + t["fail"]
+        if observed == 0:
+            return "no trials observed" + (
+                f" ({t['error']} error, {t['unknown']} unknown)" if t["error"] or t["unknown"] else ""
+            )
+        excluded = f"{t['error']} error, {t['unknown']} unknown" if t["error"] or t["unknown"] else "none excluded"
+        return f"**{t['pass']}/{observed}** pass ({excluded})"
+    lines.append("| **Score** | " + " | ".join(score(name) for name, _ in agents) + " |")
     lines.append("")
     out_path.write_text("\n".join(lines), encoding="utf-8")
     return "\n".join(lines[3:])
