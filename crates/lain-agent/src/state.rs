@@ -41,6 +41,16 @@ pub struct Scratchpad {
     pub plan: String,
 }
 
+/// A tool call that ended in an error outcome, kept so context drops cannot hide that the
+/// attempt already failed. Arguments and failure text are clipped at recording time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FailedAction {
+    pub turn: u32,
+    pub name: String,
+    pub arguments: String,
+    pub failure: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentState {
     pub session_id: String,
@@ -55,6 +65,8 @@ pub struct AgentState {
     pub tool_errors: u32,
     #[serde(default)]
     pub scratchpad: Scratchpad,
+    #[serde(default)]
+    pub failed_actions: Vec<FailedAction>,
 }
 
 impl AgentState {
@@ -70,6 +82,7 @@ impl AgentState {
             consecutive_tool_errors: 0,
             tool_errors: 0,
             scratchpad: Scratchpad::default(),
+            failed_actions: Vec::new(),
         }
     }
 }

@@ -29,8 +29,9 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, Notify};
 
 use crate::{
-    hermes, prompt, AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, BudgetKind,
-    ReflectionSummary, TerminationReason, ToolCallMode, ToolOutcome, UserFeedback,
+    hermes, prompt, state::FailedAction, AgentConfig, AgentError, AgentEvent, AgentState,
+    AgentStatus, BudgetKind, ReflectionSummary, TerminationReason, ToolCallMode, ToolOutcome,
+    UserFeedback,
 };
 
 /// A receiver more than this many events behind gets `RecvError::Lagged`; the runner never waits on a slow UI.
@@ -70,6 +71,11 @@ assumed. Reply with JSON only: {\"satisfied\": true} when every requirement is m
 const MAX_REQUIREMENT_ITEMS: usize = 12;
 const REQUIREMENT_ITEM_MAX_UTF16: usize = 500;
 const REQUIREMENT_TEXT_MAX_UTF16: usize = 16_000;
+// The work-state note re-injects recorded truth on every request: context selection may
+// drop the tool output that showed a failure, but it must not drop that it failed.
+const FAILED_ACTIONS_MAX: usize = 6;
+const FAILED_ACTION_ARGS_UTF16: usize = 120;
+const FAILED_ACTION_TEXT_UTF16: usize = 160;
 // Rejection feedback is a second chance, not a loop of its own: past this many refused answers
 // the check reports the miss and lets the run finish on the last output it produced.
 const MAX_REQUIREMENT_REJECTIONS: u32 = 2;
@@ -1068,6 +1074,10 @@ impl AgentRunner {
         if let Some(notice) = self.scratchpad_notice.take() {
             prefix.push(notice);
         }
+        let work_state = self.work_state();
+        if !work_state.is_empty() {
+            prefix.push(work_state);
+        }
         if retry_completion {
             prefix.push(
                 "Your previous response exceeded the completion length limit and was discarded. Continue from the last completed action. Keep the response concise; if using a tool, send one small, complete call."
@@ -1154,6 +1164,62 @@ impl AgentRunner {
                 message: "Scratchpad update refused a residual secret shape".into(),
             }),
             Err(error) => Err(error),
+        }
+    }
+
+    fn record_failed_action(&mut self, turn: u32, call: &ToolCall, outcome: &ToolOutcome) {
+        let failure = match outcome {
+            ToolOutcome::Failed { code, message } => format!("{code}: {message}"),
+            // The diagnosis sits at the end of a failing command's output, so keep the last line.
+            ToolOutcome::Succeeded(output) => format!(
+                "exit {}: {}",
+                output.exit_code.unwrap_or_default(),
+                output
+                    .content
+                    .lines()
+                    .next_back()
+                    .unwrap_or_default()
+                    .trim_end()
+            ),
+            ToolOutcome::Skipped { reason } => format!("skipped: {reason}"),
+            ToolOutcome::Interrupted { reason } => format!("interrupted: {reason}"),
+        };
+        self.state.failed_actions.push(FailedAction {
+            turn,
+            name: call.name.clone(),
+            arguments: clip_utf16(&call.arguments.to_string(), FAILED_ACTION_ARGS_UTF16),
+            failure: clip_utf16(&failure, FAILED_ACTION_TEXT_UTF16),
+        });
+        if self.state.failed_actions.len() > FAILED_ACTIONS_MAX {
+            self.state
+                .failed_actions
+                .drain(..self.state.failed_actions.len() - FAILED_ACTIONS_MAX);
+        }
+    }
+
+    /// Recorded truth for the prefix, rebuilt every turn so context selection can drop raw
+    /// history without losing the checklist or which attempts already failed.
+    fn work_state(&self) -> String {
+        let mut lines = Vec::new();
+        if !self.requirements.is_empty() {
+            lines.push(format!(
+                "The task's required outputs (the final answer must satisfy every one): {}",
+                json!(self.requirements)
+            ));
+        }
+        for failed in &self.state.failed_actions {
+            lines.push(format!(
+                "- turn {}: {} {} failed: {}",
+                failed.turn, failed.name, failed.arguments, failed.failure
+            ));
+        }
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Work state from the run record; raw details may be dropped from context:\n{}",
+                lines.join("\n")
+            )
         }
     }
 
@@ -1274,6 +1340,9 @@ impl AgentRunner {
                 if outcome.is_error() {
                     self.state.consecutive_tool_errors += 1;
                     self.state.tool_errors = self.state.tool_errors.saturating_add(1);
+                    if !scratchpad {
+                        self.record_failed_action(turn, call, &outcome);
+                    }
                 } else if !scratchpad {
                     // A plan edit cannot reset the breaker between repeated failures of real tools.
                     self.state.consecutive_tool_errors = 0;
@@ -3087,6 +3156,32 @@ mod tests {
             .messages
             .iter()
             .all(|message| { message.role != Role::Assistant && message.tool_calls.is_empty() }));
+    }
+
+    #[tokio::test]
+    async fn work_state_keeps_failures_and_requirements_visible_after_context_drops() {
+        let provider = ScriptedProvider::new(vec![
+            calls(None, &["fail", "exit2"]),
+            calls(None, &["ok"]),
+            text("done"),
+        ]);
+        let (mut agent, _) = runner(config(), provider.clone());
+        let outcome = agent.run("Please investigate").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        agent.requirements = vec!["out.txt must exist".into()];
+        let request = agent.request(None, false).unwrap();
+        let prefix = request
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::System)
+            .filter_map(|m| m.content.as_deref())
+            .collect::<String>();
+        assert!(prefix.contains("out.txt must exist"));
+        assert!(
+            prefix.contains("boom") || prefix.contains("Execution"),
+            "{prefix}"
+        );
+        assert!(prefix.contains("exit 2"), "{prefix}");
     }
 
     #[tokio::test]
