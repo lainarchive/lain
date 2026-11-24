@@ -433,6 +433,19 @@ impl AgentRunner {
             for text in self.control.take_steering() {
                 self.state.messages.push(Message::text(Role::User, text));
             }
+            // Warn before the turn budget runs out so the run ends with the
+            // task's required outputs written instead of mid-investigation.
+            match self.config.max_turns - run_turn {
+                2 => self.state.messages.push(Message::text(
+                    Role::User,
+                    "3 turns remain. Wrap up now: write any required output files, then give your final answer.".to_string(),
+                )),
+                0 => self.state.messages.push(Message::text(
+                    Role::User,
+                    "This is your last turn. Write any required output files and give your final answer now.".to_string(),
+                )),
+                _ => {}
+            }
             if let Some(reason) = self.interrupted() {
                 return Ok(self.stop(reason, run_turn - 1));
             }
@@ -2104,6 +2117,28 @@ mod tests {
             AgentStatus::Terminated(TerminationReason::MaxTurns)
         );
         assert_eq!((outcome.turns, provider.requests().len()), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn turn_budget_warning_precedes_last_turns() {
+        let mut config = config();
+        config.max_turns = 3;
+        let provider = ScriptedProvider::new((0..5).map(|_| calls(None, &["ok"])).collect());
+        let (mut agent, _) = runner(config, provider.clone());
+        let outcome = agent.run("forever").await.unwrap();
+        assert_eq!(
+            outcome.status,
+            AgentStatus::Terminated(TerminationReason::MaxTurns)
+        );
+        let requests = provider.requests();
+        let has = |i: usize, needle: &str| {
+            requests[i]
+                .messages
+                .iter()
+                .any(|m| m.content.as_deref().is_some_and(|t| t.contains(needle)))
+        };
+        assert!(has(0, "3 turns remain"));
+        assert!(has(2, "last turn"));
     }
 
     #[tokio::test]
