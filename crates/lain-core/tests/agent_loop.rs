@@ -26,6 +26,7 @@ mod tests {
                     id: "call-1".into(),
                     name: if cfg!(windows) { "powershell" } else { "bash" }.into(),
                     arguments: json!({"command":"echo hello"}),
+                    extra_content: None,
                 }];
             } else {
                 let last = req.messages.last().unwrap();

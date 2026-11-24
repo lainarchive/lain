@@ -309,6 +309,7 @@ impl Projector<'_> {
             content: Some(clipped.to_string()),
             tool_calls: Vec::new(),
             tool_call_id: original.tool_call_id.clone(),
+            extra_content: None,
         };
         self.measure(result)
     }
@@ -367,6 +368,7 @@ mod tests {
                 id: (*id).into(),
                 name: "read".into(),
                 arguments: json!({}),
+                extra_content: None,
             })
             .collect();
         message

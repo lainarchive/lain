@@ -72,6 +72,7 @@ mod tests {
             id: id.into(),
             name: name.into(),
             arguments,
+            extra_content: None,
         }];
         message
     }

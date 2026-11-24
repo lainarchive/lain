@@ -36,6 +36,7 @@ pub(crate) fn extract(text: &str, turn: u32) -> Option<(Option<String>, Vec<Tool
             id: format!("hermes-{turn}-{}", calls.len()),
             name,
             arguments,
+            extra_content: None,
         });
     }
     if calls.is_empty() || rest.contains(CLOSE) {

@@ -200,6 +200,7 @@ async fn lain_fixes_lain_with_observed_evidence() -> Result<(), Box<dyn Error>> 
         id: id.into(),
         name: "write_file".into(),
         arguments: json!({"path":path,"content":content}),
+        extra_content: None,
     })
     .collect();
     let provider = Arc::new(ScriptedProvider(Mutex::new(VecDeque::from([
@@ -209,6 +210,7 @@ async fn lain_fixes_lain_with_observed_evidence() -> Result<(), Box<dyn Error>> 
                 content: None,
                 tool_calls: calls,
                 tool_call_id: None,
+                extra_content: None,
             },
             finish_reason: Some("tool_calls".into()),
             usage: None,
