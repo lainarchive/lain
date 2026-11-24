@@ -3271,6 +3271,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
     async fn finish_after_verified_check_is_not_nudged() {
         let provider = ScriptedProvider::new(vec![bash_call("cargo test --help"), text("done")]);
         let mut agent =
@@ -4116,9 +4117,10 @@ mod tests {
             RequirementCheck::Satisfied
         );
         let requests = provider.requests();
-        let check = requests[0].messages[1]
-            .content
-            .as_deref()
+        let check = requests
+            .first()
+            .and_then(|request| request.messages.get(1))
+            .and_then(|message| message.content.as_deref())
             .unwrap_or_default();
         assert!(check.contains("answer.txt (new)"), "{check}");
         assert!(check.contains("old.txt (modified)"), "{check}");
