@@ -1,20 +1,28 @@
 # lain
 
-![la.03: Lain, a folded silver knot on black](docs/cover.png)
+![A real `lain run`: the model plans a directory listing, calls bash, and the evidence report marks each command observed_verified](docs/lain-run.gif)
 
-Lain runs agents locally through a Rust daemon. The terminal UI streams replies and tool calls.
-For a single prompt, `lain run` reports what the tools could verify. Lain connects to a local or
-remote OpenAI-compatible endpoint and stores memory in SQLite.
+Lain runs agents locally through a Rust daemon. Point it at any OpenAI-compatible
+endpoint: a local model server, a free tier, or your own proxy. The daemon owns the
+model loop and tool dispatch, a terminal UI streams replies and tool calls, and
+memory stays in a local SQLite file.
 
-[Try the offline demo](#try-the-offline-demo) · [Connect a model](#connect-a-model) · [Browser dashboard](dashboard/README.md)
+What you get that a stock agent loop does not:
 
-![Lain's terminal UI showing an offline conversation and tool output](docs/ui/tui-demo.webp)
+- An evidence report at the end of every `lain run`. A step is marked
+  `observed_verified` only when the daemon saw a real command exit zero. A
+  reply-only claim exits 2, so an agent cannot call work done without showing it.
+- Shell access off by default. `LAIN_ALLOW_SHELL=1` turns it on, and plugin and
+  Creator tools each need their own explicit grants before they can run host code.
+- Memory in local SQLite with FTS5 search, readable from the TUI. Nothing leaves
+  the box except what goes to the endpoint you configured.
+- One `lain.json` picks the model and base URL, so a free tier and a local server
+  work the same way.
 
-*Offline demo. The conversation and tool activity are simulated.*
+## Try it in under a minute
 
-## Try the offline demo
-
-Build from source with a current Rust toolchain. The demo needs no model, credentials or running daemon.
+The offline demo needs no model, credentials or daemon. Build from source with a
+current Rust toolchain:
 
 ```sh
 git clone https://github.com/lainarchive/lain.git
@@ -23,14 +31,15 @@ cargo install --locked --path .
 lain tui demo
 ```
 
-Use a terminal at least 120 columns by 30 rows to see the sample turn after you type a prompt and
-press Enter. If another executable named `lain` is already on PATH, use
-`cargo run --locked -p lain -- tui demo` from this checkout.
+Use a terminal at least 120 columns by 30 rows to see the sample turn after you
+type a prompt and press Enter. If another executable named `lain` is already on
+PATH, use `cargo run --locked -p lain -- tui demo` from this checkout.
 
 ## Connect a model
 
-Start your model server, then save `lain.json` in the workspace you want Lain to use. Replace the model
-name and URL with values from your server:
+Start your model server or pick an endpoint, then save `lain.json` in the
+workspace you want Lain to use. Replace the model name and URL with values from
+your server:
 
 ```json
 {
@@ -51,12 +60,14 @@ name and URL with values from your server:
 }
 ```
 
-For a remote provider, set its `base_url` and put the name of an environment variable in `api_key_env`.
-Keep the key value out of JSON. Full configuration is in the [Rust CLI guide](crates/lain-cli/README.md).
+For a remote provider, set its `base_url` and put the name of an environment
+variable in `api_key_env`. Keep the key value out of JSON. Full configuration is
+in the [Rust CLI guide](crates/lain-cli/README.md).
 
-Run `lain doctor` from that workspace to check the toolchain, IPC endpoint, dashboard port and model
-connection. It returns 1 if any check fails and does not start a model server. Use `--json` for
-machine-readable diagnostics. Then start the daemon:
+Run `lain doctor` from that workspace to check the toolchain, IPC endpoint,
+dashboard port and model connection. It returns 1 if any check fails and does not
+start a model server. Use `--json` for machine-readable diagnostics. Then start
+the daemon:
 
 ```sh
 lain daemon
@@ -74,12 +85,14 @@ Or make one request:
 lain run "Say hello in one sentence."
 ```
 
-`tui` and `run` autospawn a daemon if needed. An existing daemon keeps its original cwd, config and
-environment; restart it to change those. `--config PATH` / `LAIN_CONFIG` override the config path;
-`--endpoint PATH` / `LAIN_IPC_ENDPOINT` override IPC. The database defaults to `.lain/memory.db`,
+`tui` and `run` autospawn a daemon if needed. An existing daemon keeps its
+original cwd, config and environment; restart it to change those. `--config
+PATH` / `LAIN_CONFIG` override the config path; `--endpoint PATH` /
+`LAIN_IPC_ENDPOINT` override IPC. The database defaults to `.lain/memory.db`,
 overrideable with `LAIN_MEMORY_DB`.
 
-`run` streams text, then prints an evidence report. `--json` emits one JSON report without streamed text.
+`run` streams text, then prints an evidence report. `--json` emits one JSON
+report without streamed text.
 
 | `run` exit | Meaning |
 | --- | --- |
@@ -87,11 +100,19 @@ overrideable with `LAIN_MEMORY_DB`.
 | 2 | Turn completed with unverified steps. A reply-only greeting normally lands here. |
 | 1 | Failure: provider/tool error, cancellation, disconnect or incomplete turn. |
 
-Shell tools are disabled by default. `LAIN_ALLOW_SHELL=1` in the daemon's environment enables Bash on
-Unix or PowerShell on Windows. Plugin/Creator grants are separate. Script and CLI backends run as the
-host user, without an OS sandbox. Release builds disable Creator unless `allow_creator_mode` is set;
-plugin discovery requires `read_fs` in `plugin_permissions`. Creator and script/CLI plugins require all
-four grants: `read_fs`, `write_fs`, `network`, `subprocess`. Review source before enabling them.
+Shell tools are disabled by default. `LAIN_ALLOW_SHELL=1` in the daemon's
+environment enables Bash on Unix or PowerShell on Windows. Plugin/Creator grants
+are separate. Script and CLI backends run as the host user, without an OS
+sandbox. Release builds disable Creator unless `allow_creator_mode` is set;
+plugin discovery requires `read_fs` in `plugin_permissions`. Creator and
+script/CLI plugins require all four grants: `read_fs`, `write_fs`, `network`,
+`subprocess`. Review source before enabling them.
+
+## The terminal UI
+
+![Lain's terminal UI showing an offline conversation and tool output](docs/ui/tui-demo.webp)
+
+*Offline demo. The conversation and tool activity are simulated.*
 
 ## Architecture
 
@@ -331,6 +352,9 @@ See [code style](docs/implementation/code-style.md) before editing.
 
 ## Benchmarks
 
+Latest score vs Terminus-2 on the full 89-task Terminal-Bench 2.0 set: **pending
+(first complete run in flight).**
+
 `tools/terminal-bench/` reruns the head to head against Terminal-Bench's stock
 agent, Terminus-2, on one pinned task list and one model. It needs Docker, the
 [harbor](https://github.com/harbor-framework/harbor) harness
@@ -356,7 +380,7 @@ and Terminus-2 runs as LiteLLM `openai/<model>` against the
 same proxy, so the comparison is the agent, not the model. Both get each task's
 own agent timeout from harbor; neither carries a second wall clock.
 
-The task list is `tools/terminal-bench/tasks.txt` — ten Terminal-Bench 2.0 tasks
+The task list is `tools/terminal-bench/tasks.txt`, ten Terminal-Bench 2.0 tasks
 picked by difficulty order after excluding exploit-style tasks; `--tasks` or
 `--tasks-file` overrides it, `--dataset-path` pins a local dataset checkout
 instead of the registry's `terminal-bench@2.0`. One task is enough for a smoke
