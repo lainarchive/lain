@@ -207,6 +207,76 @@ test('memoryCommand add, search, show, supersede, and link round-trip', () => {
   });
 });
 
+test('memoryCommand pending and approve walk a candidate through review', () => {
+  withTempDb((dbPath) => {
+    for (const [id, trust] of [['mem-p1', 'untrusted'], ['mem-p2', 'trusted']]) {
+      const add = makeIo();
+      assert.equal(
+        memoryCommand({
+          command: 'add',
+          positional: [],
+          flags: {
+            id,
+            title: `Note ${id}`,
+            content: 'review me',
+            source: 'user:test',
+            ...(trust === 'trusted' ? { trust: 'trusted' } : {}),
+          },
+          io: add.io,
+          dbPath,
+        }),
+        EXIT.ok,
+      );
+    }
+
+    const pend = makeIo();
+    assert.equal(
+      memoryCommand({ command: 'pending', positional: [], flags: { json: true }, io: pend.io, dbPath }),
+      EXIT.ok,
+    );
+    assert.deepEqual(JSON.parse(pend.out.join('\n')).map((r) => r.id), ['mem-p1']);
+
+    // approve requires both the id and who approved it.
+    const noApprover = makeIo();
+    assert.equal(
+      memoryCommand({ command: 'approve', positional: ['mem-p1'], flags: {}, io: noApprover.io, dbPath }),
+      EXIT.usage,
+    );
+
+    const approve = makeIo();
+    assert.equal(
+      memoryCommand({
+        command: 'approve',
+        positional: ['mem-p1'],
+        flags: { 'approved-by': 'operator:alice', json: true },
+        io: approve.io,
+        dbPath,
+      }),
+      EXIT.ok,
+    );
+    assert.equal(JSON.parse(approve.out.join('\n')).trust, 'trusted');
+
+    const pendAfter = makeIo();
+    assert.equal(
+      memoryCommand({ command: 'pending', positional: [], flags: { json: true }, io: pendAfter.io, dbPath }),
+      EXIT.ok,
+    );
+    assert.deepEqual(JSON.parse(pendAfter.out.join('\n')), []);
+
+    const missing = makeIo();
+    assert.equal(
+      memoryCommand({
+        command: 'approve',
+        positional: ['does-not-exist'],
+        flags: { 'approved-by': 'operator:alice' },
+        io: missing.io,
+        dbPath,
+      }),
+      EXIT.failed,
+    );
+  });
+});
+
 test('memoryCommand refuses secrets with exit 3', () => {
   withTempDb((dbPath) => {
     const res = makeIo();

@@ -13,6 +13,8 @@ const USAGE = `lain memory — local-first memory & knowledge graph
   lain memory show <id> [--json]
   lain memory supersede <oldId> --title <t> --content <c> --source <s> [--kind <k>] [--trust trusted|untrusted] [--json]
   lain memory link <fromId> <toId> <relation> --source <s> [--trust trusted|untrusted] [--json]
+  lain memory pending [--json]
+  lain memory approve <id> --approved-by <name> [--json]
 `;
 
 /**
@@ -251,6 +253,54 @@ export function memoryCommand({ command, positional, flags, io, dbPath }) {
         io.out(JSON.stringify(edge, null, 2));
       } else {
         io.out(`linked ${fromId} -[${relation}]-> ${toId} (${trust}, ${source})`);
+      }
+      return EXIT.ok;
+    } catch (err) {
+      return handleStoreError(io, err);
+    } finally {
+      store.close();
+    }
+  }
+
+  if (command === 'pending') {
+    if (targetPath !== ':memory:') mkdirSync(dirname(targetPath), { recursive: true });
+    const store = openMemoryStore({ path: targetPath });
+    try {
+      const results = store.pending();
+      if (asJson) {
+        io.out(JSON.stringify(results, null, 2));
+      } else if (results.length === 0) {
+        io.out('no memories pending review');
+      } else {
+        for (const r of results) {
+          io.out(`${r.id}  (${r.kind}) ${r.title} — ${r.source} (${r.created_at})`);
+        }
+      }
+      return EXIT.ok;
+    } catch (err) {
+      return handleStoreError(io, err);
+    } finally {
+      store.close();
+    }
+  }
+
+  if (command === 'approve') {
+    const id = positional[0];
+    const approvedBy = stringFlag(flags, 'approved-by');
+    if (typeof id !== 'string' || id.trim() === '' || !approvedBy) {
+      io.err(USAGE);
+      return EXIT.usage;
+    }
+
+    if (targetPath !== ':memory:') mkdirSync(dirname(targetPath), { recursive: true });
+    const store = openMemoryStore({ path: targetPath });
+    try {
+      const record = store.promote(id, { approvedBy });
+      if (asJson) {
+        io.out(JSON.stringify(record, null, 2));
+      } else {
+        io.out(`approved ${record.id} (${record.trust})`);
+        io.out(`title      ${record.title}`);
       }
       return EXIT.ok;
     } catch (err) {
