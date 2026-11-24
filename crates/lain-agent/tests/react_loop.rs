@@ -274,7 +274,7 @@ print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"doubled":2*reque
                     json!({"command": if cfg!(windows) {
                         concat!("[IO.File]::WriteAllText((Join-Path (Get-Location) 'name.txt'), ('NIGHTJAR'.ToLower() + \"`n\")); ",
                             "[Console]::Out.Write([IO.File]::ReadAllText((Join-Path (Get-Location) 'name.txt')))")
-                    } else { "echo NIGHTJAR | tr A-Z a-z > name.txt && cat name.txt" }}),
+                    } else { "echo NIGHTJAR | tr A-Z a-z > name.txt && cat name.txt && echo nightjar | diff - name.txt" }}),
                 ),
             ),
             (
