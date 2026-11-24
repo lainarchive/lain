@@ -242,6 +242,8 @@ async fn lain_fixes_lain_with_observed_evidence() -> Result<(), Box<dyn Error>> 
     config.max_turns = 4;
     config.memory_context_limit = 0;
     config.allow_creator_mode = false;
+    // the scripted provider feeds exactly the working calls; gate side calls would desync it
+    config.requirements_gate = false;
     let mut runner = AgentRunner::new(
         config,
         provider,
