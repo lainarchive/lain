@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     future::Future,
+    path::{Path, PathBuf},
     pin::pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -88,6 +89,75 @@ const RETRY_TAIL_UTF16: usize = 400;
 // Rejection feedback is a second chance, not a loop of its own: past this many refused answers
 // the check reports the miss and lets the run finish on the last output it produced.
 const MAX_REQUIREMENT_REJECTIONS: u32 = 2;
+// A workspace this large means indexing itself is the bottleneck; past the cap
+// the check still gets the first entries rather than nothing.
+const WORKSPACE_INDEX_MAX_FILES: usize = 100_000;
+const WORKSPACE_DIFF_MAX_SHOWN: usize = 200;
+
+/// The finish check should judge what is on disk, not what the model claims it
+/// wrote. The workspace is indexed at the first write-capable tool call and
+/// again when the check runs; mtime + size is enough signal for "touched"
+/// without reading file contents.
+#[derive(Debug)]
+struct WorkspaceSnapshot {
+    root: PathBuf,
+    files: BTreeMap<PathBuf, (u64, u64)>,
+}
+
+fn index_workspace(root: &Path) -> BTreeMap<PathBuf, (u64, u64)> {
+    let mut files = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            // entry.metadata does not follow links, so a symlinked tree neither
+            // loops the walk nor credits a file outside the workspace.
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else if meta.is_file() {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |age| age.as_secs());
+                files.insert(entry.path(), (mtime, meta.len()));
+                if files.len() >= WORKSPACE_INDEX_MAX_FILES {
+                    return files;
+                }
+            }
+        }
+    }
+    files
+}
+
+fn workspace_changes(snapshot: &WorkspaceSnapshot) -> Vec<String> {
+    let after = index_workspace(&snapshot.root);
+    let mut changed = Vec::new();
+    let label = |path: &Path| {
+        path.strip_prefix(&snapshot.root)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    };
+    for (path, mark) in &after {
+        match snapshot.files.get(path) {
+            None => changed.push(format!("{} (new)", label(path))),
+            Some(before) if *before != *mark => changed.push(format!("{} (modified)", label(path))),
+            _ => {}
+        }
+    }
+    for path in snapshot.files.keys() {
+        if !after.contains_key(path) {
+            changed.push(format!("{} (deleted)", label(path)));
+        }
+    }
+    changed
+}
 
 // A finish claim only needs a fresh verification when the run changed something through a
 // shell; a pure-question run would otherwise be nagged to verify nothing. The block count
@@ -239,6 +309,7 @@ pub struct AgentRunner {
     stall_nudges: u32,
     recent_signatures: VecDeque<String>,
     rejected_unmet: Vec<Vec<String>>,
+    workspace_snapshot: Option<WorkspaceSnapshot>,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -328,6 +399,7 @@ impl AgentRunner {
             stall_nudges: 0,
             recent_signatures: VecDeque::new(),
             rejected_unmet: Vec::new(),
+            workspace_snapshot: None,
         })
     }
 
@@ -1066,6 +1138,27 @@ impl AgentRunner {
         &mut self,
         answer: &str,
     ) -> Result<RequirementCheck, TerminationReason> {
+        // The claim under review is text; the workspace diff is the disk state
+        // behind it, so the verifier can see a file it was told about but the
+        // run never wrote.
+        let evidence = self.workspace_snapshot.as_ref().and_then(|snapshot| {
+            let changes = workspace_changes(snapshot);
+            if changes.is_empty() {
+                return None;
+            }
+            let shown = changes
+                .iter()
+                .take(WORKSPACE_DIFF_MAX_SHOWN)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rest = changes.len().saturating_sub(WORKSPACE_DIFF_MAX_SHOWN);
+            Some(if rest == 0 {
+                shown
+            } else {
+                format!("{shown}, and {rest} more")
+            })
+        });
         let request = CompletionRequest {
             model: self.config.model.clone(),
             messages: vec![
@@ -1073,9 +1166,14 @@ impl AgentRunner {
                 Message::text(
                     Role::User,
                     format!(
-                        "Requirements the output must satisfy: {}\n\nOutput under check:\n{}",
+                        "Requirements the output must satisfy: {}\n\nOutput under check:\n{}{}",
                         json!(self.requirements),
-                        clip_utf16(answer, REQUIREMENT_TEXT_MAX_UTF16)
+                        clip_utf16(answer, REQUIREMENT_TEXT_MAX_UTF16),
+                        evidence
+                            .map(|files| format!(
+                                "\n\nFiles changed in the workspace during the run (mtime/size on disk): {files}"
+                            ))
+                            .unwrap_or_default()
                     ),
                 ),
             ],
@@ -1370,6 +1468,17 @@ impl AgentRunner {
                         halt = self.interrupted();
                         outcome
                     } else {
+                        // The pre-work index must land before the first write-
+                        // capable call runs, or the diff would count its own
+                        // writes as pre-existing state.
+                        if guarded && self.workspace_snapshot.is_none() {
+                            let root =
+                                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                            self.workspace_snapshot = Some(WorkspaceSnapshot {
+                                files: index_workspace(&root),
+                                root,
+                            });
+                        }
                         match self
                             .bounded(self.tools.dispatch(&call.name, call.arguments.clone()))
                             .await
@@ -3983,6 +4092,37 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[tokio::test]
+    async fn the_check_sees_files_the_run_changed_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("old.txt"), "x").unwrap();
+        std::fs::write(root.join("gone.txt"), "x").unwrap();
+        let snapshot = WorkspaceSnapshot {
+            files: index_workspace(root),
+            root: root.to_path_buf(),
+        };
+        std::fs::write(root.join("old.txt"), "xy").unwrap();
+        std::fs::remove_file(root.join("gone.txt")).unwrap();
+        std::fs::write(root.join("answer.txt"), "79586").unwrap();
+        let provider = ScriptedProvider::new(vec![text("{\"satisfied\": true}")]);
+        let (mut agent, _) = runner(gated(), provider.clone());
+        agent.requirements = vec!["write the count".into()];
+        agent.workspace_snapshot = Some(snapshot);
+        assert_eq!(
+            agent.check_requirements("done").await.unwrap(),
+            RequirementCheck::Satisfied
+        );
+        let requests = provider.requests();
+        let check = requests[0].messages[1]
+            .content
+            .as_deref()
+            .unwrap_or_default();
+        assert!(check.contains("answer.txt (new)"), "{check}");
+        assert!(check.contains("old.txt (modified)"), "{check}");
+        assert!(check.contains("gone.txt (deleted)"), "{check}");
     }
 
     #[tokio::test]
