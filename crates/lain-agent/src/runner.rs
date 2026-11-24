@@ -11,7 +11,10 @@ use std::{
 
 use futures_util::StreamExt;
 use lain_core::{
-    provider::{CompletionRequest, Message, ModelProvider, Role, ToolCall, ToolDefinition},
+    provider::{
+        CompletionRequest, CompletionResponse, Message, ModelProvider, Role, ToolCall,
+        ToolDefinition, Usage,
+    },
     tools::{
         ToolOutput, ToolRegistry, REPO_MAP_TOOL_NAME,
         UPDATE_SCRATCHPAD_TOOL_NAME as UPDATE_SCRATCHPAD,
@@ -48,6 +51,36 @@ Before each tool call, state what the latest output shows and the smallest step 
 Do only what the request asks; do not expand scope, recover unrelated state, or install more than needed. \
 Before replying, verify the end state actually satisfies the request.";
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
+
+// A run ends when the model says it is done; the requirements gate exists because models are
+// wrong about that. Extraction asks for the task's exact demands up front, and the pre-finish
+// check rejects a final answer that does not satisfy them. Both are side calls — they never
+// appear in the transcript as the model's own words, and a provider that cannot serve them
+// leaves the run ungated rather than failing work over a bookkeeping call.
+const REQUIREMENTS_EXTRACT_PROMPT: &str = "\
+Extract the task's exact requirements: every quantity, field, file path, format and condition \
+the finished work must satisfy, worded precisely enough that compliance can be checked against \
+the final output alone. Stay verbatim-faithful; invent nothing. \
+Reply with a JSON array of requirement strings and nothing else.";
+const REQUIREMENTS_VERIFY_PROMPT: &str = "\
+You verify an agent's final output against requirements extracted from its task. Judge only \
+whether the output meets each requirement; work that is not visible in the output cannot be \
+assumed. Reply with JSON only: {\"satisfied\": true} when every requirement is met, or \
+{\"satisfied\": false, \"missing\": [\"<unmet requirement>\", ...]}.";
+const MAX_REQUIREMENT_ITEMS: usize = 12;
+const REQUIREMENT_ITEM_MAX_UTF16: usize = 500;
+const REQUIREMENT_TEXT_MAX_UTF16: usize = 16_000;
+// Rejection feedback is a second chance, not a loop of its own: past this many refused answers
+// the check reports the miss and lets the run finish on the last output it produced.
+const MAX_REQUIREMENT_REJECTIONS: u32 = 2;
+
+#[derive(Debug, Clone, PartialEq)]
+enum RequirementCheck {
+    Satisfied,
+    Unmet(Vec<String>),
+    /// The verifier could not answer; a broken check must not stall a finished run.
+    Unchecked,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +150,8 @@ pub struct AgentRunner {
     procedural_rules: Vec<String>,
     scratchpad_notice: Option<String>,
     feedback: Option<UserFeedback>,
+    requirements: Vec<String>,
+    requirement_rejections: u32,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -194,6 +229,8 @@ impl AgentRunner {
             procedural_rules: Vec::new(),
             scratchpad_notice: None,
             feedback: None,
+            requirements: Vec::new(),
+            requirement_rejections: 0,
         })
     }
 
@@ -409,6 +446,30 @@ impl AgentRunner {
             .await?;
         self.state.inputs = input_number;
         self.emit(AgentEvent::IntentReceived { text: redacted });
+        self.requirements.clear();
+        self.requirement_rejections = 0;
+        if self.config.requirements_gate {
+            match self.extract_requirements(&input).await {
+                Ok(items) => {
+                    if !items.is_empty() {
+                        self.emit(AgentEvent::RequirementsExtracted {
+                            items: items.clone(),
+                        });
+                        // The checklist sits in the transcript as a system note: the working
+                        // model sees the same requirements the verifier will judge it by.
+                        self.state.messages.push(Message::text(
+                            Role::System,
+                            format!(
+                                "The task's exact requirements, extracted before work began; the final output must satisfy every one: {}",
+                                json!(items)
+                            ),
+                        ));
+                        self.requirements = items;
+                    }
+                }
+                Err(reason) => return Ok(self.stop(reason, 0)),
+            }
+        }
         self.state.messages.push(Message::text(Role::User, input));
         let mut initial_repo_map = None;
         if input_number == 1
@@ -542,6 +603,48 @@ impl AgentRunner {
 
             if calls.is_empty() {
                 let text = message.content.unwrap_or_default();
+                // The pre-finish gate: the model's claim of done is checked against the
+                // requirements extracted at run start. A miss goes back as feedback; only a
+                // satisfied or unverifiable answer may end the run.
+                if !truncated && !self.requirements.is_empty() {
+                    match self.check_requirements(&text).await {
+                        Ok(RequirementCheck::Unmet(missing)) => {
+                            let missing = if missing.is_empty() {
+                                self.requirements.clone()
+                            } else {
+                                missing
+                            };
+                            self.emit(AgentEvent::RequirementsChecked {
+                                satisfied: false,
+                                missing: missing.clone(),
+                            });
+                            if self.requirement_rejections < MAX_REQUIREMENT_REJECTIONS {
+                                self.requirement_rejections += 1;
+                                self.state.messages.push(Message::text(
+                                    Role::User,
+                                    format!(
+                                        "That answer does not satisfy the task's requirements. Unmet: {}. Fix the work and give a corrected final answer.",
+                                        json!(missing)
+                                    ),
+                                ));
+                                self.emit(AgentEvent::TurnCompleted {
+                                    turn,
+                                    tool_calls: 0,
+                                    tokens_used: self.state.tokens_used,
+                                });
+                                continue;
+                            }
+                        }
+                        Ok(RequirementCheck::Satisfied) => {
+                            self.emit(AgentEvent::RequirementsChecked {
+                                satisfied: true,
+                                missing: Vec::new(),
+                            });
+                        }
+                        Ok(RequirementCheck::Unchecked) => {}
+                        Err(reason) => return Ok(self.stop(reason, run_turn)),
+                    }
+                }
                 self.emit(AgentEvent::OutputGenerated {
                     turn,
                     text: text.clone(),
@@ -709,6 +812,118 @@ impl AgentRunner {
             finish_reason,
             usage,
         })
+    }
+
+    /// Side calls (requirement extraction and the pre-finish check) reuse the provider retry
+    /// policy but never stream: their JSON must stay out of the ThinkingToken feed the UI
+    /// renders as the model's prose.
+    async fn complete_side(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, CoreError> {
+        for delay in PROVIDER_RETRY_DELAYS {
+            match self.provider.complete(request.clone()).await {
+                Err(error) => {
+                    let Some(retry_after) = error.retry_delay() else {
+                        return Err(error);
+                    };
+                    if self.deadline().is_none() && retry_after > MAX_RETRY_DELAY_WITHOUT_DEADLINE
+                    {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(delay.max(retry_after)).await;
+                }
+                ok => return ok,
+            }
+        }
+        self.provider.complete(request).await
+    }
+
+    /// Side calls spend the same budget the loop does; an unreported call under a cap fails
+    /// closed here for the same reason it does mid-turn.
+    fn account_usage(&mut self, usage: &Option<Usage>) -> Result<(), TerminationReason> {
+        match usage {
+            Some(usage) => {
+                self.state.tokens_used = self
+                    .state
+                    .tokens_used
+                    .saturating_add(usage.total_tokens);
+                Ok(())
+            }
+            None if self.config.budget.max_total_tokens.is_some() => {
+                Err(TerminationReason::UsageUnreported)
+            }
+            None => Ok(()),
+        }
+    }
+
+    async fn extract_requirements(
+        &mut self,
+        input: &str,
+    ) -> Result<Vec<String>, TerminationReason> {
+        let request = CompletionRequest {
+            model: self.config.model.clone(),
+            messages: vec![
+                Message::text(Role::System, REQUIREMENTS_EXTRACT_PROMPT),
+                Message::text(Role::User, clip_utf16(input, REQUIREMENT_TEXT_MAX_UTF16)),
+            ],
+            tools: Vec::new(),
+            temperature: Some(0.0),
+            max_tokens: Some(1024),
+        };
+        let response = match self.bounded(self.complete_side(request)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                self.emit(AgentEvent::ErrorTripped {
+                    code: "REQUIREMENTS_EXTRACTION_FAILED".into(),
+                    message: error.to_string(),
+                });
+                return Ok(Vec::new());
+            }
+            Err(reason) => return Err(reason),
+        };
+        self.account_usage(&response.usage)?;
+        Ok(parse_requirements(
+            response.message.content.as_deref().unwrap_or_default(),
+        ))
+    }
+
+    async fn check_requirements(
+        &mut self,
+        answer: &str,
+    ) -> Result<RequirementCheck, TerminationReason> {
+        let request = CompletionRequest {
+            model: self.config.model.clone(),
+            messages: vec![
+                Message::text(Role::System, REQUIREMENTS_VERIFY_PROMPT),
+                Message::text(
+                    Role::User,
+                    format!(
+                        "Requirements the output must satisfy: {}\n\nOutput under check:\n{}",
+                        json!(self.requirements),
+                        clip_utf16(answer, REQUIREMENT_TEXT_MAX_UTF16)
+                    ),
+                ),
+            ],
+            tools: Vec::new(),
+            temperature: Some(0.0),
+            max_tokens: Some(1024),
+        };
+        let response = match self.bounded(self.complete_side(request)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                self.emit(AgentEvent::ErrorTripped {
+                    code: "REQUIREMENTS_CHECK_FAILED".into(),
+                    message: error.to_string(),
+                });
+                return Ok(RequirementCheck::Unchecked);
+            }
+            Err(reason) => return Err(reason),
+        };
+        self.account_usage(&response.usage)?;
+        Ok(parse_requirement_check(
+            response.message.content.as_deref().unwrap_or_default(),
+        ))
     }
 
     fn request(
@@ -1127,6 +1342,83 @@ impl AgentRunner {
     }
 }
 
+/// Extraction and the check both ask for bare JSON, but models like to fence it; peel the
+/// fence before parsing.
+fn json_body(text: &str) -> &str {
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("```")
+        .and_then(|body| body.strip_suffix("```"))
+        .map(|body| {
+            body.trim_start_matches(|c: char| c.is_ascii_alphabetic())
+                .trim()
+        })
+        .unwrap_or(trimmed)
+}
+
+fn parse_requirements(text: &str) -> Vec<String> {
+    let body = json_body(text);
+    let parsed = serde_json::from_str::<Vec<String>>(body).ok().or_else(|| {
+        serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| value.get("requirements")?.as_array().cloned())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+    });
+    let items = parsed.unwrap_or_else(|| {
+        // A model that ignores the JSON shape still leaves a readable list.
+        text.lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                line.strip_prefix('-')
+                    .or_else(|| line.strip_prefix('*'))
+                    .or_else(|| {
+                        let (number, rest) = line.split_once(['.', ')'])?;
+                        number
+                            .trim()
+                            .chars()
+                            .all(|c| c.is_ascii_digit())
+                            .then_some(rest)
+                    })
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_owned)
+            })
+            .collect()
+    });
+    items
+        .into_iter()
+        .map(|item| clip_utf16(item.trim(), REQUIREMENT_ITEM_MAX_UTF16))
+        .filter(|item| !item.is_empty())
+        .take(MAX_REQUIREMENT_ITEMS)
+        .collect()
+}
+
+fn parse_requirement_check(text: &str) -> RequirementCheck {
+    #[derive(Deserialize)]
+    struct Verdict {
+        satisfied: bool,
+        #[serde(default)]
+        missing: Vec<String>,
+    }
+    match serde_json::from_str::<Verdict>(json_body(text)) {
+        Ok(verdict) if verdict.satisfied => RequirementCheck::Satisfied,
+        Ok(verdict) => RequirementCheck::Unmet(
+            verdict
+                .missing
+                .into_iter()
+                .map(|item| clip_utf16(item.trim(), REQUIREMENT_ITEM_MAX_UTF16))
+                .filter(|item| !item.is_empty())
+                .collect(),
+        ),
+        Err(_) => RequirementCheck::Unchecked,
+    }
+}
+
 fn skipped(reason: &TerminationReason) -> ToolOutcome {
     ToolOutcome::Skipped {
         reason: format!("not run: agent stopping ({reason:?})"),
@@ -1532,6 +1824,8 @@ mod tests {
             "mock",
         );
         config.system_prompt = "You are Lain.".into();
+        // Scripted responses play the turns in order; the gate's side calls would consume them.
+        config.requirements_gate = false;
         config
     }
 
@@ -1653,6 +1947,8 @@ mod tests {
                     | AgentEvent::ReflectionGenerated { .. }
                     | AgentEvent::ErrorTripped { .. }
                     | AgentEvent::SessionCompleted { .. }
+                    | AgentEvent::RequirementsExtracted { .. }
+                    | AgentEvent::RequirementsChecked { .. }
                     | AgentEvent::ContextMeasured { .. } => return None,
                 })
             })
@@ -2132,10 +2428,10 @@ mod tests {
         );
         let requests = provider.requests();
         let has = |i: usize, needle: &str| {
-            requests[i]
-                .messages
-                .iter()
-                .any(|m| m.content.as_deref().is_some_and(|t| t.contains(needle)))
+            requests
+                .get(i)
+                .is_some_and(|r| r.messages.iter()
+                    .any(|m| m.content.as_deref().is_some_and(|t| t.contains(needle))))
         };
         assert!(has(0, "3 turns remain"));
         assert!(has(2, "last turn"));
@@ -2810,6 +3106,94 @@ mod tests {
             outcome.status,
             AgentStatus::Terminated(TerminationReason::UsageUnreported)
         );
+    }
+
+    fn gated() -> AgentConfig {
+        let mut config = config();
+        config.requirements_gate = true;
+        config
+    }
+
+    #[tokio::test]
+    async fn requirements_gate_extracts_the_checklist_and_verifies_the_answer() {
+        let provider = ScriptedProvider::new(vec![
+            text("[\"sum all deepseek_* fields\",\"write total to tokens.txt\"]"),
+            text("63841"),
+            text("{\"satisfied\": true}"),
+        ]);
+        let (mut agent, _) = runner(gated(), provider.clone());
+        let mut events = agent.subscribe();
+        let outcome = agent.run("count the dataset tokens").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        assert_eq!(outcome.output.as_deref(), Some("63841"));
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 3);
+        assert!(requests.first().is_some_and(|r| r.tools.is_empty()));
+        // The checklist reaches the working model as a system note.
+        assert!(requests.get(1).is_some_and(|r| r.messages.iter().any(|m| {
+            m.role == Role::System
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("sum all deepseek_* fields"))
+        })));
+        let check = requests
+            .get(2)
+            .and_then(|r| r.messages.last())
+            .and_then(|m| m.content.as_deref())
+            .unwrap_or_default();
+        assert!(check.contains("63841") && check.contains("sum all deepseek_* fields"));
+        assert!(drain(&mut events).iter().any(|event| matches!(
+            event,
+            AgentEvent::RequirementsChecked { satisfied: true, .. }
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_answer_is_sent_back_with_the_unmet_requirements() {
+        let provider = ScriptedProvider::new(vec![
+            text("[\"report the summed deepseek_* total\"]"),
+            text("63841"),
+            text("{\"satisfied\": false, \"missing\": [\"report the summed deepseek_* total\"]}"),
+            text("79586"),
+            text("{\"satisfied\": true}"),
+        ]);
+        let (mut agent, _) = runner(gated(), provider);
+        let outcome = agent.run("count").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("79586"));
+        assert!(agent.state().messages.iter().any(|m| {
+            m.role == Role::User
+                && m.content.as_deref().is_some_and(|c| c.contains("Unmet"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn the_check_stops_rejecting_after_two_misses() {
+        let rejected = || text("{\"satisfied\": false, \"missing\": [\"req\"]}");
+        let provider = ScriptedProvider::new(vec![
+            text("[\"req\"]"),
+            text("a1"),
+            rejected(),
+            text("a2"),
+            rejected(),
+            text("a3"),
+            rejected(),
+        ]);
+        let (mut agent, _) = runner(gated(), provider);
+        let outcome = agent.run("task").await.unwrap();
+        assert_eq!(outcome.status, AgentStatus::AwaitingInput);
+        assert_eq!(outcome.output.as_deref(), Some("a3"));
+    }
+
+    #[tokio::test]
+    async fn an_extraction_failure_leaves_the_run_ungated() {
+        let provider = ScriptedProvider::new(vec![
+            Err(CoreError::Protocol("down".into())),
+            text("done"),
+        ]);
+        let (mut agent, _) = runner(gated(), provider.clone());
+        let outcome = agent.run("task").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("done"));
+        assert_eq!(provider.requests().len(), 2);
     }
 
     #[tokio::test]

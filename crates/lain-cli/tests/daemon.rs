@@ -378,13 +378,14 @@ impl RunnerFactory for ScriptedFactory {
             started: self.0.clone(),
             pending: id.starts_with("pending"),
         });
-        let config = AgentConfig::new(
+        let mut config = AgentConfig::new(
             ProviderSelection::OpenAiCompatible {
                 base_url: "http://127.0.0.1:9/v1".into(),
                 api_key_env: None,
             },
             "scripted",
         );
+        config.requirements_gate = false;
         Ok(AgentRunner::new(
             config,
             provider,

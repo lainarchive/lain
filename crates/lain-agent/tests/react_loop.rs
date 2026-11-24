@@ -93,6 +93,7 @@ mod tests {
             "planned",
         );
         config.system_prompt = "Use tools, then answer.".into();
+        config.requirements_gate = false;
         config
     }
 
