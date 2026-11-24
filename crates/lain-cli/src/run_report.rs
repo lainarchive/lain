@@ -144,8 +144,22 @@ impl RunReport {
     }
 }
 
+/// A killed run loses whatever only stdout held, so when `LAIN_REPORT_PATH`
+/// is set the in-flight report lands on disk after every event. The tmp +
+/// rename keeps a reader polling the file from catching a torn write.
+fn flush_report(report: &RunReport, path: &std::path::Path) {
+    let Ok(serialized) = serde_json::to_string_pretty(report) else {
+        return;
+    };
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, serialized).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u8, crate::Error> {
     let mut report = RunReport::default();
+    let flush_path = std::env::var_os("LAIN_REPORT_PATH").map(std::path::PathBuf::from);
     let result=async {
         let mut client=crate::ui::connect_or_spawn(options).await?;
         let session=crate::ui::start_session(&mut client,&mut crate::ui::Renderer::new(true)).await?;
@@ -176,6 +190,9 @@ pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u
                 out.flush()?;
             }
             report.event(&event);
+            if let Some(path) = &flush_path {
+                flush_report(&report, path);
+            }
             if matches!(event,Event::SessionCompleted {..}|Event::Error {..}) {break;}
         }
         client.close().await?;
@@ -186,6 +203,9 @@ pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u
     }
     if !report.streamed.is_empty() {
         report.reply.push_str(&report.streamed);
+    }
+    if let Some(path) = &flush_path {
+        flush_report(&report, path);
     }
     let mut out = io::stdout().lock();
     if options.json {
@@ -218,6 +238,34 @@ pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn flush_report_writes_parseable_partial_state() {
+        let dir = std::env::temp_dir().join(format!("lain-flush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lain-report.json");
+        let mut report = RunReport::default();
+        report.event(&Event::ToolStarted {
+            session_id: "s".into(),
+            call_id: "c".into(),
+            name: "bash".into(),
+            arguments: json!({"command":"sleep 60"}),
+        });
+        flush_report(&report, &path);
+        let first: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(first["completed"], json!(false));
+        report.event(&Event::SessionCompleted {
+            session_id: "s".into(),
+            reason: "completed".into(),
+            scratchpad: None,
+        });
+        flush_report(&report, &path);
+        let second: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(second["completed"], json!(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_observed_zero_exit_commands_verify_a_bounded_claim() {
