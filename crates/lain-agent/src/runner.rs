@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     future::Future,
     pin::pin,
     sync::{
@@ -142,6 +142,14 @@ fn is_verification_command(command: &str) -> bool {
         .any(|indicator| command.contains(indicator))
 }
 
+// Stall detection, carried over from oh-my-hermes (MIT):
+// src/plugin_bundle/omh/engagement_nudges.py. Behavior-triggered nudges
+// ride the tool result instead of spending a turn, are bounded per run,
+// and count only distinct read-only calls so a repeated read trips the
+// repeat rule, not the streak.
+const READONLY_STALL_THRESHOLD: u32 = 8;
+const MAX_STALL_NUDGES: u32 = 3;
+const RECENT_CALL_SIGNATURES: usize = 64;
 #[derive(Debug, Clone, PartialEq)]
 enum RequirementCheck {
     Satisfied,
@@ -227,6 +235,9 @@ pub struct AgentRunner {
     last_verified_turn: Option<u32>,
     verify_blocks: u32,
     last_error_signature: Option<String>,
+    readonly_streak: u32,
+    stall_nudges: u32,
+    recent_signatures: VecDeque<String>,
 }
 
 impl std::fmt::Debug for AgentRunner {
@@ -312,6 +323,9 @@ impl AgentRunner {
             last_verified_turn: None,
             verify_blocks: 0,
             last_error_signature: None,
+            readonly_streak: 0,
+            stall_nudges: 0,
+            recent_signatures: VecDeque::new(),
         })
     }
 
@@ -1402,13 +1416,18 @@ impl AgentRunner {
                 });
                 continue;
             }
-            let content = match &outcome {
+            let mut content = match &outcome {
                 ToolOutcome::Succeeded(output) => json!(output),
                 ToolOutcome::Failed { code, message } => json!({"error": message, "code": code}),
                 ToolOutcome::Skipped { reason } => json!({"skipped": reason}),
                 ToolOutcome::Interrupted { reason } => json!({"interrupted": reason}),
+            };
+            if let Some(nudge) = self.stall_nudge(call, &outcome) {
+                if let Some(map) = content.as_object_mut() {
+                    map.insert("notice".into(), Value::String(nudge));
+                }
             }
-            .to_string();
+            let content = content.to_string();
             self.commit(
                 &format!("{turn_id}/tool/{index}"),
                 format!("turn {turn} tool {}", call.name),
@@ -1432,6 +1451,45 @@ impl AgentRunner {
             });
         }
         Ok(halt)
+    }
+
+    /// A nudge that rides the tool result instead of spending a turn, fired
+    /// by observed behavior: the same call issued again, or a run of distinct
+    /// read-only shell commands with nothing mutated in between. Bounded per
+    /// run so a model that ignores it does not get nagged forever. Shape
+    /// carried over from oh-my-hermes (MIT): engagement_nudges.py.
+    fn stall_nudge(&mut self, call: &ToolCall, outcome: &ToolOutcome) -> Option<String> {
+        if self.stall_nudges >= MAX_STALL_NUDGES
+            || !matches!(call.name.as_str(), "bash" | "powershell")
+            || !matches!(outcome, ToolOutcome::Succeeded(_))
+        {
+            return None;
+        }
+        let command = call.arguments.get("command").and_then(Value::as_str)?;
+        let signature = format!("{}:{}", call.name, call.arguments);
+        let repeated = self.recent_signatures.contains(&signature);
+        self.recent_signatures.push_back(signature);
+        if self.recent_signatures.len() > RECENT_CALL_SIGNATURES {
+            self.recent_signatures.pop_front();
+        }
+        let read_only = is_read_only_command(command);
+        if !read_only {
+            self.readonly_streak = 0;
+        } else if !repeated {
+            self.readonly_streak += 1;
+        }
+        let nudge = if repeated {
+            "That exact call already ran and returned this result. Repeating it will not move the task: run a different command, write the required output, or say what is missing.".to_string()
+        } else if self.readonly_streak >= READONLY_STALL_THRESHOLD {
+            format!(
+                "The last {} commands only inspected; nothing changed. If inspection is done, write the required output now; if it is not, name what is still missing.",
+                self.readonly_streak
+            )
+        } else {
+            return None;
+        };
+        self.stall_nudges += 1;
+        Some(nudge)
     }
 
     fn interrupted(&self) -> Option<TerminationReason> {
@@ -1646,6 +1704,195 @@ fn parse_requirement_check(text: &str) -> RequirementCheck {
         ),
         Err(_) => RequirementCheck::Unchecked,
     }
+}
+
+// First words that can only inspect, checked per pipeline segment so
+// `grep x f | wc -l` counts as read-only. Anything unrecognized counts as a
+// possible mutation and resets the streak: under-nudging is safe, crying
+// stall on real work is not.
+const READ_ONLY_VERBS: &[&str] = &[
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "rg",
+    "find",
+    "pwd",
+    "echo",
+    "file",
+    "stat",
+    "wc",
+    "du",
+    "df",
+    "which",
+    "env",
+    "printenv",
+    "diff",
+    "sort",
+    "uniq",
+    "jq",
+    "xxd",
+    "od",
+    "strings",
+    "ps",
+    "date",
+    "uname",
+    "basename",
+    "dirname",
+    "readlink",
+    "realpath",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "b2sum",
+    "tree",
+    "less",
+    "more",
+    "man",
+    "id",
+    "whoami",
+    "hostname",
+    "nproc",
+    "lsblk",
+    "lscpu",
+    "free",
+    "uptime",
+    "tr",
+    "cut",
+    "awk",
+    "comm",
+    "paste",
+    "nl",
+    "rev",
+    "tac",
+    "fold",
+    "fmt",
+    "column",
+    "test",
+    "[",
+    "true",
+    "false",
+];
+const READ_ONLY_GIT_SUBVERBS: &[&str] = &[
+    "status",
+    "diff",
+    "log",
+    "show",
+    "branch",
+    "grep",
+    "ls-files",
+    "ls-tree",
+    "blame",
+    "rev-parse",
+    "rev-list",
+    "describe",
+    "shortlog",
+    "remote",
+];
+const READ_ONLY_PS_PREFIXES: &[&str] = &["get-"];
+const READ_ONLY_PS_VERBS: &[&str] = &[
+    "select-string",
+    "test-path",
+    "compare-object",
+    "measure-object",
+    "resolve-path",
+    "split-path",
+    "join-path",
+    "where-object",
+    "select-object",
+    "sort-object",
+    "convertto-json",
+    "convertfrom-json",
+];
+const WRITE_INDICATORS: &[&str] = &[
+    "tee",
+    "writeall",
+    "appendall",
+    "set-content",
+    "out-file",
+    "new-item",
+    "remove-item",
+    "copy-item",
+    "move-item",
+    "rename-item",
+    "::delete",
+    "::move",
+    "::copy",
+    "::create",
+];
+
+fn segment_first_words(segment: &str) -> (String, Vec<String>) {
+    let words: Vec<String> = segment.split_whitespace().map(String::from).collect();
+    let first = words
+        .first()
+        .map(|w| {
+            w.trim_start_matches(['(', '\'', '"'])
+                .trim_end_matches([')', '\'', '"'])
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let verb = first
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(".exe")
+        .to_string();
+    (verb, words)
+}
+
+/// `>` writes unless it dups a descriptor (`2>&1`); `>>` appends.
+fn segment_writes(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .any(|(i, &b)| b == b'>' && bytes.get(i + 1).is_some_and(|&next| next != b'&'))
+}
+
+fn is_read_only_command(command: &str) -> bool {
+    let mut saw_segment = false;
+    let lower = command.to_ascii_lowercase();
+    for segment in lower
+        .split("&&")
+        .flat_map(|s| s.split("||"))
+        .flat_map(|s| s.split(';'))
+        .flat_map(|s| s.split('|'))
+    {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        saw_segment = true;
+        if segment_writes(segment) || WRITE_INDICATORS.iter().any(|w| segment.contains(w)) {
+            return false;
+        }
+        let (verb, words) = segment_first_words(segment);
+        let second = words
+            .get(1)
+            .map(|w| w.trim_matches(['(', ')', '\'', '"']).to_ascii_lowercase());
+        let read_only = if READ_ONLY_VERBS.contains(&verb.as_str()) {
+            true
+        } else if verb == "sed" {
+            !words.iter().any(|w| w.starts_with("-i"))
+        } else if verb == "git" {
+            second.is_some_and(|s| READ_ONLY_GIT_SUBVERBS.contains(&s.as_str()))
+        } else if verb == "cargo" {
+            second.is_some_and(|s| {
+                s == "tree" || s == "metadata" || s == "pkgid" || s == "verify-project"
+            })
+        } else if verb.starts_with('[') {
+            segment.contains("readall") || segment.contains("::exists")
+        } else {
+            READ_ONLY_PS_PREFIXES.iter().any(|p| verb.starts_with(p))
+                || READ_ONLY_PS_VERBS.contains(&verb.as_str())
+        };
+        if !read_only {
+            return false;
+        }
+    }
+    saw_segment
 }
 
 fn skipped(reason: &TerminationReason) -> ToolOutcome {
@@ -2645,6 +2892,130 @@ mod tests {
         assert_eq!(agent.state().tool_calls, 5);
     }
 
+    #[cfg(unix)]
+    fn shell_registry() -> Arc<ToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Arc::new(lain_core::tools::BashTool {
+                working_directory: std::env::temp_dir(),
+                timeout: Duration::from_secs(5),
+                output_byte_cap: 4096,
+            }))
+            .unwrap();
+        Arc::new(registry)
+    }
+
+    #[cfg(unix)]
+    fn bash_call(command: &str) -> Result<CompletionResponse, CoreError> {
+        let mut response = calls(None, &["bash"])?;
+        for call in &mut response.message.tool_calls {
+            call.arguments = json!({"command": command});
+        }
+        Ok(response)
+    }
+
+    #[cfg(unix)]
+    fn tool_results(agent: &AgentRunner) -> Vec<String> {
+        agent
+            .state()
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.content.clone())
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_only_streak_nudges_inside_the_tool_result() {
+        let commands = [
+            "ls", "pwd", "date", "whoami", "hostname", "uname", "nproc", "id",
+        ];
+        let provider = ScriptedProvider::new(
+            commands
+                .iter()
+                .map(|command| bash_call(command))
+                // "done" first trips the verification gate: the streak only
+                // inspected, so a check must run before the run may finish.
+                .chain([text("done"), bash_call("python3 -c pass"), text("done")])
+                .collect(),
+        );
+        let store = memory();
+        let mut agent =
+            AgentRunner::new(config(), provider, shell_registry(), store, "stall").unwrap();
+        let outcome = agent.run("inspect then write").await.unwrap();
+        assert_eq!(outcome.output.as_deref(), Some("done"));
+        let results = tool_results(&agent);
+        assert!(results.iter().take(7).all(|r| !r.contains("notice")));
+        assert!(results.iter().any(|r| r.contains("only inspected")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_repeated_call_nudges_and_a_mutating_call_resets_the_streak() {
+        let mut script = vec![
+            bash_call("ls"),
+            bash_call("ls"),
+            bash_call("echo hi"),
+            bash_call("pwd"),
+            bash_call("date"),
+            bash_call("whoami"),
+            bash_call("hostname"),
+            bash_call("uname"),
+            bash_call("echo marker > wrote.txt"),
+        ];
+        for command in [
+            "ls -la",
+            "df",
+            "free",
+            "uptime",
+            "du .",
+            "file wrote.txt",
+            "ps",
+        ] {
+            script.push(bash_call(command));
+        }
+        script.push(text("done"));
+        let provider = ScriptedProvider::new(script);
+        let store = memory();
+        let mut agent =
+            AgentRunner::new(config(), provider, shell_registry(), store, "stall2").unwrap();
+        agent.run("inspect then write").await.unwrap();
+        let results = tool_results(&agent);
+        // Turn 2 is the repeat nudge. The write at position 7 resets the
+        // streak, and seven reads after it stay below the threshold.
+        assert!(results.get(1).is_some_and(|r| r.contains("already ran")));
+        assert_eq!(results.iter().filter(|r| r.contains("notice")).count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_classification() {
+        for read in [
+            "ls -la",
+            "cat foo.rs | grep fn | wc -l",
+            "git status && git diff --stat",
+            "sed -n '1,10p' f",
+            "echo hi 2>&1",
+            "cargo metadata --no-deps",
+            "test -f x",
+        ] {
+            assert!(is_read_only_command(read), "{read}");
+        }
+        for write in [
+            "echo hi > f",
+            "echo hi >> f",
+            "mkdir -p d && ls",
+            "sed -i 's/a/b/' f",
+            "cargo build",
+            "git add .",
+            "cat f | tee g",
+            "rm f",
+        ] {
+            assert!(!is_read_only_command(write), "{write}");
+        }
+    }
+
     #[tokio::test]
     async fn breaker_counts_retries_of_one_call_not_distinct_failing_probes() {
         // Probing different commands that each fail is exploration; only a
@@ -2763,30 +3134,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn shell_registry() -> Arc<ToolRegistry> {
-        let mut registry = ToolRegistry::new();
-        registry
-            .register(Arc::new(lain_core::tools::BashTool {
-                working_directory: std::env::temp_dir(),
-                timeout: Duration::from_secs(5),
-                output_byte_cap: 4096,
-            }))
-            .unwrap();
-        Arc::new(registry)
-    }
-
-    fn shell_call(command: &str) -> Result<CompletionResponse, CoreError> {
-        let mut response = calls(None, &["bash"])?;
-        for call in &mut response.message.tool_calls {
-            call.arguments = json!({"command": command});
-        }
-        Ok(response)
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
     async fn finish_after_verified_check_is_not_nudged() {
-        let provider = ScriptedProvider::new(vec![shell_call("cargo test --help"), text("done")]);
+        let provider = ScriptedProvider::new(vec![bash_call("cargo test --help"), text("done")]);
         let mut agent =
             AgentRunner::new(config(), provider.clone(), shell_registry(), memory(), "s1").unwrap();
         let outcome = agent.run("task").await.unwrap();
@@ -2803,9 +3152,9 @@ mod tests {
     #[tokio::test]
     async fn finish_without_verification_is_nudged_when_shell_was_used() {
         let provider = ScriptedProvider::new(vec![
-            shell_call("echo wrote it"),
+            bash_call("echo wrote it"),
             text("done"),
-            shell_call("cargo test --help"),
+            bash_call("cargo test --help"),
             text("verified, done"),
         ]);
         let mut agent =
