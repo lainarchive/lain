@@ -179,6 +179,49 @@ test('AT-P4-04: untrusted records are never auto-promoted and require explicit p
   });
 });
 
+test('pending() lists untrusted candidates until they are approved or superseded', () => {
+  withTempStore((store) => {
+    assert.deepEqual(store.pending(), []);
+
+    const candidate = store.remember({
+      title: 'Unverified fact',
+      content: 'Something a tool reported.',
+      source: 'tool:scrape',
+    });
+    const approved = store.remember({
+      title: 'Reviewed fact',
+      content: 'Something an operator verified.',
+      trust: 'trusted',
+      source: 'operator:review',
+    });
+
+    // Candidates are visible for review but stay out of default search.
+    assert.deepEqual(store.pending().map((r) => r.id), [candidate.id]);
+    assert.equal(store.search('reported').length, 0);
+
+    store.promote(candidate.id, { approvedBy: 'operator:alice' });
+    assert.deepEqual(store.pending(), []);
+
+    // An untrusted record superseded by a newer record stops being a candidate.
+    const stale = store.remember({
+      title: 'Draft note',
+      content: 'Will be replaced.',
+      source: 'agent:guess',
+    });
+    store.supersede(stale.id, {
+      title: 'Draft note',
+      content: 'Replaced.',
+      trust: 'trusted',
+      source: 'operator:review',
+    });
+    assert.deepEqual(
+      store.pending().map((r) => r.id),
+      [],
+    );
+    assert.equal(approved.trust, 'trusted');
+  });
+});
+
 test('AT-P4-05: secrets in title/content are redacted and residual secrets are refused', () => {
   withTempStore((store) => {
     const awsKey = ['AKIA', '1234567890ABCDEF'].join('');

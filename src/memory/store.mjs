@@ -264,6 +264,12 @@ export function openMemoryStore(options) {
   const markSuperseded = db.prepare('UPDATE memories SET superseded_by = ?, updated_at = ? WHERE id = ?');
   const promoteStmt = db.prepare("UPDATE memories SET trust = 'trusted', updated_at = ? WHERE id = ?");
   const selectSupersedes = db.prepare('SELECT id FROM memories WHERE superseded_by = ? ORDER BY created_at ASC, id ASC');
+  const selectPending = db.prepare(`
+    SELECT id, title, content, kind, trust, source, created_at, updated_at, superseded_by, content_hash
+    FROM memories
+    WHERE trust = 'untrusted' AND superseded_by IS NULL
+    ORDER BY created_at ASC, id ASC
+  `);
 
   const upsertEdge = db.prepare(`
     INSERT OR REPLACE INTO memory_edges (from_id, to_id, relation, source, trust, created_at)
@@ -429,6 +435,20 @@ export function openMemoryStore(options) {
   }
 
   /**
+   * Candidates awaiting review, ported from oh-my-hermes (MIT),
+   * src/plugin_bundle/omh/memory_admission.py: candidates stay separate
+   * from approved records until a reviewer approves. Untrusted records never
+   * reach search or neighbors, so this list is the only way to see what is
+   * still unapproved.
+   *
+   * @returns {MemoryRecord[]}
+   */
+  function pending() {
+    assertOpen();
+    return /** @type {MemoryRecord[]} */ (selectPending.all());
+  }
+
+  /**
    * @param {string} fromId
    * @param {string} toId
    * @param {string} relation
@@ -555,6 +575,7 @@ export function openMemoryStore(options) {
     search,
     supersede,
     promote,
+    pending,
     link,
     neighbors,
     provenance,
