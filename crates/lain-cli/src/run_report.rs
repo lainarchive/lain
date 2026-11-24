@@ -222,8 +222,9 @@ mod tests {
             });
             assert_eq!(report.exit_code(), expected);
             if exit.is_some() {
-                let evidence = serde_json::to_value(report.steps[0].evidence()).unwrap();
-                assert_eq!(evidence[0]["output_tail"], "cargo 1.100.0\n");
+                let evidence =
+                    serde_json::to_value(report.steps.first().unwrap().evidence()).unwrap();
+                assert_eq!(evidence.get(0).unwrap()["output_tail"], "cargo 1.100.0\n");
             }
         }
     }
