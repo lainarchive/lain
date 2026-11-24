@@ -46,9 +46,15 @@ const PROVIDER_RETRY_DELAYS: [Duration; 3] = [
 ];
 const MAX_RETRY_DELAY_WITHOUT_DEADLINE: Duration = Duration::from_secs(120);
 // Composed on every run so a thin caller-supplied system prompt still gets deliberate behavior:
-// name what the last output shows, act minimally, verify before finishing.
+// analyze the last output, plan before acting, deliver the artifact early, wait out slow
+// commands, verify before finishing.
 const OPERATING_GUIDANCE: &str = "\
-Before each tool call, state what the latest output shows and the smallest step that makes progress. \
+Before each tool call, state what the latest output shows and the smallest step that makes progress; \
+when several steps remain, state the plan first. \
+When a fact or choice is uncertain, check it with a probe or a read instead of guessing. \
+Produce the requested output as early as it can be correct and refine it after; \
+exploration without a deliverable does not finish the task. \
+A slow command is progress: give long-running commands time to finish instead of killing or repeating them. \
 Do only what the request asks; do not expand scope, recover unrelated state, or install more than needed. \
 Before replying, verify the end state actually satisfies the request.";
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
@@ -3156,6 +3162,16 @@ mod tests {
             .messages
             .iter()
             .all(|message| { message.role != Role::Assistant && message.tool_calls.is_empty() }));
+    }
+
+    #[test]
+    fn operating_guidance_carries_the_task_discipline_rules() {
+        for rule in ["plan", "guessing", "deliverable", "long-running", "verify"] {
+            assert!(
+                OPERATING_GUIDANCE.contains(rule),
+                "guidance lost its '{rule}' rule"
+            );
+        }
     }
 
     #[tokio::test]
