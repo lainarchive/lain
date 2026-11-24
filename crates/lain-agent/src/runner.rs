@@ -41,6 +41,12 @@ const PROVIDER_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(4),
 ];
 const MAX_RETRY_DELAY_WITHOUT_DEADLINE: Duration = Duration::from_secs(120);
+// Composed on every run so a thin caller-supplied system prompt still gets deliberate behavior:
+// name what the last output shows, act minimally, verify before finishing.
+const OPERATING_GUIDANCE: &str = "\
+Before each tool call, state what the latest output shows and the smallest step that makes progress. \
+Do only what the request asks; do not expand scope, recover unrelated state, or install more than needed. \
+Before replying, verify the end state actually satisfies the request.";
 const WITHHELD: &str = "[withheld: the memory store refused a residual secret shape]";
 
 #[derive(Deserialize)]
@@ -162,7 +168,7 @@ impl AgentRunner {
         }
         let scratchpad_definition = ToolDefinition {
             name: UPDATE_SCRATCHPAD.into(),
-            description: "Replace the active plan without adding a chat message. Use an empty plan to clear it.".into(),
+            description: "Replace the active plan without adding a chat message. Keep it current with what you have observed and the next step. Use an empty plan to clear it.".into(),
             parameters: json!({
                 "type":"object",
                 "properties":{"plan":{"type":"string","maxLength":SCRATCHPAD_MAX_UTF16}},
@@ -702,6 +708,7 @@ impl AgentRunner {
         if has_system_prompt {
             prefix.push(self.config.system_prompt.clone());
         }
+        prefix.push(OPERATING_GUIDANCE.into());
         let hermes = self.config.tool_call_mode == ToolCallMode::HermesTags;
         let mut tool_definitions = self.tools.definitions();
         if self.read_only {
@@ -1810,7 +1817,7 @@ mod tests {
         assert_eq!(request.tools.last().unwrap().name, UPDATE_SCRATCHPAD);
         assert_eq!(
             request.messages.first().unwrap().content.as_deref(),
-            Some("You are Lain.")
+            Some(format!("You are Lain.\n\n{OPERATING_GUIDANCE}").as_str())
         );
         let store = store.lock().unwrap();
         let input = store.get("s1/input/1").unwrap().unwrap();
@@ -1868,7 +1875,7 @@ mod tests {
         assert!(system(2).contains("check the fixtures"));
         assert!(system(2).contains("requires a plan string"));
         assert!(system(3).contains("verify the output"));
-        assert_eq!(system(4), "You are Lain.");
+        assert_eq!(system(4), format!("You are Lain.\n\n{OPERATING_GUIDANCE}"));
         let store = store.lock().unwrap();
         assert_eq!(store.scratchpad("s1").unwrap().as_deref(), Some(""));
         for turn in 1..=4 {
