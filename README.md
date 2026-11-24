@@ -329,6 +329,48 @@ See [code style](docs/implementation/code-style.md) before editing.
 [DECISIONS.md](DECISIONS.md) separates approved decisions from the
 [roadmap](IMPLEMENTATION_ROADMAP.md).
 
+## Benchmarks
+
+`tools/terminal-bench/` reruns the head to head against Terminal-Bench's stock
+agent, Terminus-2, on one pinned task list and one model. It needs Docker, the
+[harbor](https://github.com/harbor-framework/harbor) harness
+(`uv tool install harbor`, Python 3.12+ managed by uv) and a Rust toolchain; the
+run builds `target/release/lain` itself if the binary is missing.
+
+```sh
+CENTAI_API_KEY=... npm run bench
+```
+
+That is the free-tier default: cent-ai's `hy4-flash:free` behind
+`https://api.cent-ai.dev/v1`, three trials at a time. Keep `--concurrency` low on
+free tiers. The model and endpoint are one flag each:
+
+```sh
+npm run bench -- --model your-model --base-url https://example.com/v1 --api-key-env YOUR_KEY_ENV
+```
+
+Both agents are driven through a small proxy bound to the Docker bridge so task
+containers reach it and the real key never leaves the host; Lain runs through
+`lain_adapter.py` (80 turns, 8K completion tokens, 64K context, 120 tool calls)
+and Terminus-2 runs as LiteLLM `openai/<model>` against the
+same proxy, so the comparison is the agent, not the model. Both get each task's
+own agent timeout from harbor; neither carries a second wall clock.
+
+The task list is `tools/terminal-bench/tasks.txt` — ten Terminal-Bench 2.0 tasks
+picked by difficulty order after excluding exploit-style tasks; `--tasks` or
+`--tasks-file` overrides it, `--dataset-path` pins a local dataset checkout
+instead of the registry's `terminal-bench@2.0`. One task is enough for a smoke
+run:
+
+```sh
+npm run bench -- --tasks build-pmars
+```
+
+Results land outside the repository under `~/.cache/lain/terminal-bench/jobs/`:
+two harbor jobs (`<prefix>-lain`, `<prefix>-terminus-2`) plus
+`<prefix>-table.md`, a per-task pass/fail table with the score line and the
+model, endpoint and Lain revision it was measured on.
+
 ## Acknowledgments
 
 The Evidence Model and DAG architecture are inspired by [Oh My Hermes](https://github.com/rlaope/oh-my-hermes),
