@@ -762,15 +762,18 @@ impl AgentRunner {
                     if call_extra.is_some() {
                         entry.3 = call_extra;
                     }
-                    for (target, delta) in [
-                        (&mut entry.0, id),
-                        (&mut entry.1, name),
-                        (&mut entry.2, arguments),
-                    ] {
+                    // id and name arrive whole when present; some providers resend
+                    // them on every chunk, so appending would repeat them.
+                    // arguments stream as fragments and keep appending.
+                    for (target, delta) in [(&mut entry.0, id), (&mut entry.1, name)] {
                         if let Some(delta) = delta {
                             bytes = bytes.saturating_add(delta.len());
-                            target.push_str(&delta);
+                            *target = delta;
                         }
+                    }
+                    if let Some(delta) = arguments {
+                        bytes = bytes.saturating_add(delta.len());
+                        entry.2.push_str(&delta);
                     }
                 }
                 Token::ExtraContent(extra) => extra_content = Some(extra),
@@ -1590,6 +1593,50 @@ mod tests {
                     text: "lo".into()
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_sets_repeated_call_id_and_name_instead_of_appending() {
+        // Some providers resend the full id and name on every delta; they are
+        // whole values, so the last write wins while arguments still append.
+        let provider = Arc::new(StreamProvider(vec![
+            Token::ToolCall {
+                index: 0,
+                id: Some("chatcmpl-tool-1".into()),
+                name: Some("bash".into()),
+                arguments: Some("{\"n\":".into()),
+                extra_content: None,
+            },
+            Token::ToolCall {
+                index: 0,
+                id: Some("chatcmpl-tool-1".into()),
+                name: Some("bash".into()),
+                arguments: Some("1}".into()),
+                extra_content: None,
+            },
+            Token::ToolCall {
+                index: 0,
+                id: Some("chatcmpl-tool-1".into()),
+                name: Some("bash".into()),
+                arguments: None,
+                extra_content: None,
+            },
+            Token::Finished("tool_calls".into()),
+        ]));
+        let mut agent =
+            AgentRunner::new(config(), provider, registry(), memory(), "stream").unwrap();
+        agent.set_streaming(true);
+        let request = agent.request(None, false).unwrap();
+        let response = agent.complete(request, 1).await.unwrap();
+        assert_eq!(
+            response.message.tool_calls,
+            vec![ToolCall {
+                id: "chatcmpl-tool-1".into(),
+                name: "bash".into(),
+                arguments: json!({"n":1}),
+                extra_content: None,
+            }]
         );
     }
 
