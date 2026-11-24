@@ -3,9 +3,36 @@ use std::{
     io::{self, Write},
 };
 
-use lain_harness::evidence::{Evidence, StepReport};
+use lain_harness::{
+    evidence::{Evidence, StepReport},
+    sensitive::sensitive_path_escalation,
+};
 use lain_ipc::{Command, Event};
 use serde::Serialize;
+
+/// Every whitespace-separated token of every string argument is a path
+/// candidate: for a shell `command` that is how a path reaches the step, and
+/// for a declared `path`-style argument the single token is the path itself.
+/// The matcher only fires on whole components, so a token merely containing
+/// a sensitive word cannot mark the step.
+fn declared_paths(arguments: &serde_json::Value) -> Vec<String> {
+    arguments
+        .as_object()
+        .map(|args| {
+            args.values()
+                .filter_map(|value| value.as_str())
+                .flat_map(|value| {
+                    value.split_whitespace().map(|token| {
+                        token
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .trim_start_matches(['>', '<'])
+                            .to_owned()
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 #[derive(Debug, Serialize, Default)]
 pub struct RunReport {
@@ -58,7 +85,11 @@ impl RunReport {
                 };
                 self.calls
                     .insert(call_id.clone(), (self.steps.len(), command));
-                self.steps.push(StepReport::new(call_id,format!("Only the reported execution of {name}; not the assistant's broader correctness claims")));
+                let mut step = StepReport::new(call_id,format!("Only the reported execution of {name}; not the assistant's broader correctness claims"));
+                if let Some(mark) = sensitive_path_escalation(&declared_paths(arguments)) {
+                    step.mark_sensitive(mark);
+                }
+                self.steps.push(step);
             }
             Event::ToolFinished {
                 call_id,
@@ -169,6 +200,9 @@ pub async fn execute(options: &crate::args::Options, prompt: String) -> Result<u
                 serde_json::to_value(step.status())?,
                 crate::render::clean(step.claim_boundary())
             )?;
+            if let Some(mark) = step.sensitive() {
+                writeln!(out, "  sensitive: {}", serde_json::to_string(mark)?)?;
+            }
             for evidence in step.evidence() {
                 writeln!(out, "  observed: {}", serde_json::to_string(evidence)?)?;
             }
@@ -226,6 +260,37 @@ mod tests {
                     serde_json::to_value(report.steps.first().unwrap().evidence()).unwrap();
                 assert_eq!(evidence.get(0).unwrap()["output_tail"], "cargo 1.100.0\n");
             }
+        }
+    }
+
+    #[test]
+    fn a_step_touching_a_sensitive_path_is_marked() {
+        for (command, category) in [
+            ("cat src/auth/login.py", Some("auth")),
+            ("cat docs/environment.md", None),
+            ("cp data /srv/secrets/prod.env.bak", Some("secrets_config")),
+        ] {
+            let mut report = RunReport::default();
+            report.event(&Event::Tools {
+                session_id: "s".into(),
+                allow_creator_mode: false,
+                tools: vec![lain_ipc::ActiveTool {
+                    name: "bash".into(),
+                    description: String::new(),
+                    parameters: json!({}),
+                    source: lain_ipc::ToolSource::Builtin,
+                    permissions: vec![],
+                }],
+            });
+            report.event(&Event::ToolStarted {
+                session_id: "s".into(),
+                call_id: "c".into(),
+                name: "bash".into(),
+                arguments: json!({"command": command}),
+            });
+            let step = serde_json::to_value(report.steps.first().unwrap()).unwrap();
+            let mark = step.get("sensitive").and_then(|m| m.get("category"));
+            assert_eq!(mark.and_then(|c| c.as_str()), category, "{command}");
         }
     }
 
