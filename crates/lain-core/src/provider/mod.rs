@@ -24,6 +24,10 @@ pub struct Message {
     pub tool_calls: Vec<ToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    // Gemini's OpenAI-compat layer puts thought_signature here and on each tool
+    // call, then refuses the next turn with 400 when it comes back missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<Value>,
 }
 
 impl Message {
@@ -33,6 +37,7 @@ impl Message {
             content: Some(content.into()),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            extra_content: None,
         }
     }
 }
@@ -92,6 +97,8 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +107,8 @@ struct WireCall {
     #[serde(rename = "type")]
     kind: String,
     function: CallFunction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra_content: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +126,7 @@ impl From<ToolCall> for WireCall {
                 name: value.name,
                 arguments: value.arguments.to_string(),
             },
+            extra_content: value.extra_content,
         }
     }
 }
@@ -132,6 +142,7 @@ impl TryFrom<WireCall> for ToolCall {
             name: value.function.name,
             arguments: serde_json::from_str(&value.function.arguments)
                 .map_err(|e| e.to_string())?,
+            extra_content: value.extra_content,
         })
     }
 }
@@ -171,7 +182,10 @@ pub enum Token {
         id: Option<String>,
         name: Option<String>,
         arguments: Option<String>,
+        extra_content: Option<Value>,
     },
+    // Message-level extras (e.g. Gemini thought_signature) that must round-trip.
+    ExtraContent(Value),
     Finished(String),
 }
 
@@ -294,12 +308,16 @@ struct Delta {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<CallDelta>,
+    extra_content: Option<Value>,
 }
 #[derive(Deserialize)]
 struct CallDelta {
+    // Gemini's stream omits index on the first call.
+    #[serde(default)]
     index: usize,
     id: Option<String>,
     function: Option<FunctionDelta>,
+    extra_content: Option<Value>,
 }
 #[derive(Deserialize)]
 struct FunctionDelta {
@@ -327,7 +345,11 @@ fn parse_event(data: &str) -> Result<Vec<Token>, CoreError> {
                 id: call.id,
                 name,
                 arguments,
+                extra_content: call.extra_content,
             });
+        }
+        if let Some(extra) = choice.delta.extra_content {
+            tokens.push(Token::ExtraContent(extra));
         }
         if let Some(reason) = choice.finish_reason {
             tokens.push(Token::Finished(reason));
@@ -439,6 +461,7 @@ mod tests {
             id: "c".into(),
             name: "f".into(),
             arguments: json!({"n": 1}),
+            extra_content: None,
         };
         let wire = serde_json::to_value(&call).unwrap();
         assert_eq!(wire.pointer("/function/arguments").unwrap(), r#"{"n":1}"#);
@@ -469,6 +492,62 @@ mod tests {
     }
 
     #[test]
+    fn extra_content_round_trips_on_wire_and_stream() {
+        // Gemini requires thought_signature echoed back verbatim on the next turn.
+        let signature = json!({"google": {"thought_signature": "sig"}});
+        let call: ToolCall = serde_json::from_value(
+            json!({"id":"c","type":"function","function":{"name":"f","arguments":"{}"},
+                   "extra_content": signature}),
+        )
+        .unwrap();
+        let wire = serde_json::to_value(&call).unwrap();
+        assert_eq!(
+            wire.pointer("/extra_content/google/thought_signature"),
+            Some(&json!("sig"))
+        );
+        let message = Message {
+            role: Role::Assistant,
+            content: None,
+            tool_calls: vec![call],
+            tool_call_id: None,
+            extra_content: Some(signature.clone()),
+        };
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(
+            wire.pointer("/tool_calls/0/extra_content/google/thought_signature"),
+            Some(&json!("sig"))
+        );
+        assert_eq!(
+            wire.pointer("/extra_content/google/thought_signature"),
+            Some(&json!("sig"))
+        );
+        assert_eq!(serde_json::from_value::<Message>(wire).unwrap(), message);
+        let event = json!({
+            "choices": [{
+                "delta": {
+                    "extra_content": {"google": {"thought_signature": "s"}},
+                    "tool_calls": [{"index": 0, "id": "c",
+                        "extra_content": {"google": {"thought_signature": "t"}}}],
+                }
+            }]
+        });
+        let tokens = parse_event(&event.to_string()).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::ToolCall {
+                    index: 0,
+                    id: Some("c".into()),
+                    name: None,
+                    arguments: None,
+                    extra_content: Some(json!({"google":{"thought_signature":"t"}})),
+                },
+                Token::ExtraContent(json!({"google":{"thought_signature":"s"}})),
+            ]
+        );
+    }
+
+    #[test]
     fn stream_event_empty_text_errors_and_finish() {
         assert!(parse_event(r#"{"choices":[]}"#).unwrap().is_empty());
         assert!(parse_event("bad JSON").is_err());
@@ -484,7 +563,8 @@ mod tests {
                     index: 0,
                     id: Some("c".into()),
                     name: None,
-                    arguments: None
+                    arguments: None,
+                    extra_content: None,
                 },
                 Token::Finished("stop".into())
             ]

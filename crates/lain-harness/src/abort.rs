@@ -97,7 +97,7 @@ pub async fn run_turn<P: ModelProvider + ?Sized>(
                 }
                 Token::ToolCall { .. } => return Err(TurnError::ToolCall),
                 Token::Finished(_) => break,
-                Token::Usage(_) => {}
+                Token::Usage(_) | Token::ExtraContent(_) => {}
             }
         }
         drop(stream);

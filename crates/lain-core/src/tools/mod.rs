@@ -243,6 +243,7 @@ impl ToolRegistry {
                 content: Some(content),
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call.id.clone()),
+                extra_content: None,
             });
         }
         messages

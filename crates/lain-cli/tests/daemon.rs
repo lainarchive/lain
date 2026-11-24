@@ -368,6 +368,7 @@ impl RunnerFactory for ScriptedFactory {
             id: "call-1".into(),
             name: "memory_read".into(),
             arguments: serde_json::json!({"query":"fruit"}),
+            extra_content: None,
         });
         let provider = Arc::new(ScriptedProvider {
             messages: Mutex::new(VecDeque::from([

@@ -83,6 +83,7 @@ mod tests {
             id: "c1".into(),
             name: "bash".into(),
             arguments: json!({"command":"echo hi"}),
+            extra_content: None,
         };
         let mut message = Message::text(Role::Assistant, "");
         message.content = None;
@@ -208,13 +209,15 @@ mod tests {
                     index: 0,
                     id: Some("c1".into()),
                     name: Some("bash".into()),
-                    arguments: Some("{".into())
+                    arguments: Some("{".into()),
+                    extra_content: None,
                 },
                 Token::ToolCall {
                     index: 0,
                     id: None,
                     name: None,
-                    arguments: Some("}".into())
+                    arguments: Some("}".into()),
+                    extra_content: None,
                 },
                 Token::Finished("tool_calls".into())
             ]

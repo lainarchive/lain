@@ -134,6 +134,7 @@ fn scope_guard_fails_closed_for_executors_and_unbounded_targets() -> TestResult 
         id: "1".into(),
         name: name.into(),
         arguments: args,
+        extra_content: None,
     };
     assert!(guard
         .check("a", &call("write_file", json!({"path":"src/a.rs"})))
@@ -355,6 +356,7 @@ fn frozen_prefix_survives_tool_completion_and_later_turns() -> TestResult {
         id: "tool-1".into(),
         name: "read".into(),
         arguments: json!({}),
+        extra_content: None,
     });
     transcript.push(assistant);
     assert_eq!(transcript.prefix_bytes(), prefix);

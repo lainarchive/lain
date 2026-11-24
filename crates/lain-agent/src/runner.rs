@@ -603,14 +603,17 @@ impl AgentRunner {
         emitted_delta: &mut bool,
     ) -> Result<lain_core::provider::CompletionResponse, CoreError> {
         use lain_core::provider::{CompletionResponse, Token};
+        use serde_json::Value;
         if !self.streaming {
             return self.provider.complete(request).await;
         }
         let mut source = self.provider.stream(request).await?;
         let mut text = String::new();
-        let mut calls = std::collections::BTreeMap::<usize, (String, String, String)>::new();
+        let mut calls =
+            std::collections::BTreeMap::<usize, (String, String, String, Option<Value>)>::new();
         let mut finish_reason = None;
         let mut usage = None;
+        let mut extra_content = None;
         let mut bytes = 0_usize;
         while let Some(token) = source.next().await {
             match token? {
@@ -628,11 +631,15 @@ impl AgentRunner {
                     id,
                     name,
                     arguments,
+                    extra_content: call_extra,
                 } => {
                     if index >= 128 {
                         return Err(CoreError::Protocol("too many streamed tool calls".into()));
                     }
                     let entry = calls.entry(index).or_default();
+                    if call_extra.is_some() {
+                        entry.3 = call_extra;
+                    }
                     for (target, delta) in [
                         (&mut entry.0, id),
                         (&mut entry.1, name),
@@ -644,6 +651,7 @@ impl AgentRunner {
                         }
                     }
                 }
+                Token::ExtraContent(extra) => extra_content = Some(extra),
             }
             if bytes > 4 * 1024 * 1024 {
                 return Err(CoreError::Protocol("stream exceeds 4 MiB".into()));
@@ -659,7 +667,7 @@ impl AgentRunner {
         }
         let tool_calls = calls
             .into_values()
-            .map(|(id, name, arguments)| {
+            .map(|(id, name, arguments, call_extra)| {
                 if id.is_empty() || name.is_empty() {
                     return Err(CoreError::Protocol("incomplete streamed tool call".into()));
                 }
@@ -667,6 +675,7 @@ impl AgentRunner {
                     id,
                     name,
                     arguments: serde_json::from_str(&arguments)?,
+                    extra_content: call_extra,
                 })
             })
             .collect::<Result<Vec<_>, CoreError>>()?;
@@ -676,6 +685,7 @@ impl AgentRunner {
                 content: (!text.is_empty()).then_some(text),
                 tool_calls,
                 tool_call_id: None,
+                extra_content,
             },
             finish_reason,
             usage,
@@ -954,6 +964,7 @@ impl AgentRunner {
                 content: Some(content),
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call.id.clone()),
+                extra_content: None,
             });
         }
         Ok(halt)
@@ -1209,12 +1220,14 @@ mod tests {
                 id: Some("b".into()),
                 name: Some("ok".into()),
                 arguments: Some("{\"n\":".into()),
+                extra_content: None,
             },
             Token::ToolCall {
                 index: 0,
                 id: Some("a".into()),
                 name: Some("ok".into()),
                 arguments: Some("{}".into()),
+                extra_content: None,
             },
             Token::Text("lo".into()),
             Token::ToolCall {
@@ -1222,6 +1235,7 @@ mod tests {
                 id: None,
                 name: None,
                 arguments: Some("1}".into()),
+                extra_content: None,
             },
             Token::Finished("tool_calls".into()),
             Token::Usage(Usage {
@@ -1243,12 +1257,14 @@ mod tests {
                 ToolCall {
                     id: "a".into(),
                     name: "ok".into(),
-                    arguments: json!({})
+                    arguments: json!({}),
+                    extra_content: None,
                 },
                 ToolCall {
                     id: "b".into(),
                     name: "ok".into(),
-                    arguments: json!({"n":1})
+                    arguments: json!({"n":1}),
+                    extra_content: None,
                 },
             ]
         );
@@ -1280,6 +1296,7 @@ mod tests {
                     id: None,
                     name: Some("ok".into()),
                     arguments: Some("{}".into()),
+                    extra_content: None,
                 },
                 Token::Finished("tool_calls".into()),
             ],
@@ -1289,6 +1306,7 @@ mod tests {
                     id: Some("c".into()),
                     name: Some("ok".into()),
                     arguments: Some("{".into()),
+                    extra_content: None,
                 },
                 Token::Finished("tool_calls".into()),
             ],
@@ -1297,6 +1315,7 @@ mod tests {
                 id: None,
                 name: None,
                 arguments: None,
+                extra_content: None,
             }],
             vec![Token::Text("x".repeat(4 * 1024 * 1024 + 1))],
         ] {
@@ -1340,6 +1359,7 @@ mod tests {
                 id: Some("c".into()),
                 name: Some("ok".into()),
                 arguments: Some("{\"n\":".into()),
+                extra_content: None,
             },
             Token::Finished("length".into()),
         ]));
@@ -1469,6 +1489,7 @@ mod tests {
                 id: format!("call-{i}"),
                 name: (*name).into(),
                 arguments: json!({"n": i}),
+                extra_content: None,
             })
             .collect();
         Ok(CompletionResponse {
@@ -1813,6 +1834,7 @@ mod tests {
                 id: "plan".into(),
                 name: UPDATE_SCRATCHPAD.into(),
                 arguments: json!({"plan": plan}),
+                extra_content: None,
             });
             Ok(response)
         };
@@ -1881,6 +1903,7 @@ mod tests {
                 id: "plan".into(),
                 name: UPDATE_SCRATCHPAD.into(),
                 arguments: json!({"plan": "try another approach"}),
+                extra_content: None,
             },
         );
         let provider = ScriptedProvider::new(vec![Ok(response)]);
