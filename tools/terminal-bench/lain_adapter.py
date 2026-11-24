@@ -1,5 +1,6 @@
 import json
 import os
+import tomllib
 from pathlib import Path
 from shlex import join
 from tempfile import TemporaryDirectory
@@ -14,6 +15,33 @@ class LainAgent(BaseAgent):
 
     def version(self):
         return os.environ["LAIN_BENCH_REVISION"]
+
+    def agent_wall_clock_ms(self):
+        # Harbor kills run() at the trial's agent timeout, so a Lain wall clock
+        # at or above it never fires and the run dies mid-work with no chance to
+        # wrap up. I read the same inputs harbor does — the task's [agent]
+        # timeout_sec plus the run's override and multiplier from the trial
+        # config.json that already exists beside this logs dir — and leave 60 s
+        # for the report and stderr writes to land before the kill.
+        try:
+            trial = json.loads(
+                (self.logs_dir.parent / "config.json").read_text(encoding="utf-8")
+            )
+            task = tomllib.loads(
+                (Path(trial["task"]["path"]) / "task.toml").read_text(encoding="utf-8")
+            )
+        except (OSError, KeyError, TypeError, json.JSONDecodeError, tomllib.TOMLDecodeError):
+            return None
+        agent = trial.get("agent") or {}
+        base = agent.get("override_timeout_sec") or (task.get("agent") or {}).get("timeout_sec")
+        if base is None:
+            return None
+        resolved = min(base, agent.get("max_timeout_sec") or float("inf"))
+        multiplier = trial.get("agent_timeout_multiplier")
+        if multiplier is None:
+            multiplier = trial.get("timeout_multiplier") or 1.0
+        wall_ms = int(resolved * multiplier * 1000) - 60_000
+        return wall_ms if wall_ms > 0 else None
 
     async def setup(self, environment):
         await environment.upload_file(os.environ["LAIN_BENCH_BINARY"], "/tmp/lain-agent")
@@ -34,11 +62,10 @@ class LainAgent(BaseAgent):
             "budget": {
                 "max_completion_tokens": 8192,
                 "max_tool_calls": 120,
-                # No wall clock: harbor already enforces the task's own agent
-                # timeout on run(), and Terminus-2 gets the same limit. A
-                # second cap here would lose a head to head on time alone.
             },
         }
+        if wall_ms := self.agent_wall_clock_ms():
+            config["budget"]["max_wall_time_ms"] = wall_ms
         with TemporaryDirectory() as folder:
             path = Path(folder) / "lain.json"
             path.write_text(json.dumps(config), encoding="utf-8")
