@@ -1,7 +1,8 @@
+import asyncio
 import json
 import os
 from pathlib import Path
-from shlex import join
+from shlex import join, quote
 from tempfile import TemporaryDirectory
 
 from harbor.agents.base import BaseAgent
@@ -48,21 +49,66 @@ class LainAgent(BaseAgent):
             raise RuntimeError(f"Lain setup failed: {result.stderr}")
 
     async def run(self, instruction, environment, context):
-        command = join(["/tmp/lain-agent", "run", "--json", instruction])
-        result = await environment.exec(
-            command,
+        # A harbor timeout kill never lets exec return, so anything the run
+        # only printed was lost. The agent flushes its report to
+        # /tmp/lain-report.json after every event (LAIN_REPORT_PATH) and this
+        # now runs detached: the poll loop snapshots that file plus the output
+        # logs so the artifacts exist however the trial ends.
+        inner = (
+            join(["/tmp/lain-agent", "run", "--json", instruction])
+            + " >/tmp/lain-stdout.log 2>/tmp/lain-stderr.log; echo $? >/tmp/lain-rc"
+        )
+        launcher = await environment.exec(
+            f"nohup bash -c {quote(inner)} >/dev/null 2>&1 & echo $!",
             env={
                 "LAIN_ALLOW_SHELL": "1",
                 "LAIN_CONFIG": "/tmp/lain-bench.json",
                 "LAIN_IPC_ENDPOINT": "/tmp/lain-bench.sock",
                 "LAIN_MEMORY_DB": "/tmp/lain-bench.db",
                 "LAIN_BENCH_ACCESS": os.environ["LAIN_BENCH_ACCESS"],
+                "LAIN_REPORT_PATH": "/tmp/lain-report.json",
             },
         )
-        (self.logs_dir / "lain-report.json").write_text(result.stdout or "", encoding="utf-8")
-        (self.logs_dir / "lain-stderr.txt").write_text(result.stderr or "", encoding="utf-8")
-        context.metadata = {"lain_exit_code": result.return_code}
-        if result.return_code == 1:
+        pid = (launcher.stdout or "").strip()
+        if not pid.isdigit():
+            raise RuntimeError(f"Lain launch failed: {launcher.stderr or launcher.stdout}")
+
+        async def snapshot():
+            for remote, local in (
+                ("/tmp/lain-report.json", "lain-report.json"),
+                ("/tmp/lain-stderr.log", "lain-stderr.txt"),
+            ):
+                result = await environment.exec(f"cat {remote} 2>/dev/null")
+                if result.return_code == 0 and result.stdout:
+                    (self.logs_dir / local).write_text(result.stdout, encoding="utf-8")
+
+        try:
+            while True:
+                alive = await environment.exec(f"kill -0 {pid} 2>/dev/null")
+                if alive.return_code != 0:
+                    break
+                await snapshot()
+                await asyncio.sleep(10)
+        finally:
+            for remote, local in (
+                ("/tmp/lain-report.json", "lain-report.json"),
+                ("/tmp/lain-stderr.log", "lain-stderr.txt"),
+                ("/tmp/lain-stdout.log", "lain-stdout.txt"),
+            ):
+                try:
+                    result = await environment.exec(f"cat {remote} 2>/dev/null")
+                except Exception:
+                    continue
+                if result.return_code == 0 and result.stdout:
+                    (self.logs_dir / local).write_text(result.stdout, encoding="utf-8")
+        context.metadata = {"lain_exit_code": None}
+        for _ in range(20):
+            done = await environment.exec("cat /tmp/lain-rc 2>/dev/null")
+            if done.return_code == 0 and done.stdout.strip().isdigit():
+                context.metadata["lain_exit_code"] = int(done.stdout.strip())
+                break
+            await asyncio.sleep(0.5)
+        if context.metadata["lain_exit_code"] == 1:
             script = """
 import json, sqlite3
 with sqlite3.connect('file:/tmp/lain-bench.db?mode=ro', uri=True) as db:
