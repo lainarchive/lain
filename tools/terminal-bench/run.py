@@ -53,9 +53,29 @@ class ModelProxy(BaseHTTPRequestHandler):
     key_env = DEFAULT_KEY_ENV
     model = DEFAULT_MODEL
     access = ""
+    # The pinned request is only half the contract: a free router may answer
+    # with a fallback model and silently void the head to head, so every 200 is
+    # checked against the promised name (the served-model parity rule in
+    # oh-my-hermes' paired-run provenance, MIT: github.com/rlaope/oh-my-hermes).
+    served_mismatch = 0
+    served_seen = set()
+    served_lock = threading.Lock()
 
     def log_message(self, *args):
         pass
+
+    def check_served_model(self, code, content_type, body):
+        if code != 200 or "json" not in content_type:
+            return
+        try:
+            served = json.loads(body).get("model")
+        except (json.JSONDecodeError, AttributeError):
+            return
+        if isinstance(served, str) and served != self.model:
+            with type(self).served_lock:
+                type(self).served_mismatch += 1
+                type(self).served_seen.add(served)
+            print(f"served model {served!r} != pinned {self.model}", flush=True)
 
     def do_POST(self):
         if self.path != "/v1/chat/completions" or not secrets.compare_digest(
@@ -119,6 +139,7 @@ class ModelProxy(BaseHTTPRequestHandler):
                 remaining = deadline - started
                 result = POOL.submit(fetch, upstream, remaining).result(timeout=remaining)
                 print(f"upstream {result[0]} {time.monotonic() - started:.3f}s", flush=True)
+                self.check_served_model(*result)
                 return result
             except urllib.error.HTTPError as error:
                 code, content_type, body = error.code, error.headers.get("Content-Type", "application/json"), error.read()
@@ -210,9 +231,14 @@ def status_cell(trial):
 
 def write_table(args, tasks, lain, terminus, out_path):
     agents = [("Lain", lain), ("Terminus-2", terminus)]
+    served = (
+        "ok" if not ModelProxy.served_mismatch
+        else f"{ModelProxy.served_mismatch} replies from {', '.join(sorted(ModelProxy.served_seen))}"
+    )
     lines = [
         f"<!-- {args.dataset_path or args.dataset} | model {ModelProxy.model} via {ModelProxy.upstream_url}",
-        f"     | lain revision {args.revision} | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} -->",
+        f"     | lain revision {args.revision} | served-model check {served}",
+        f"     | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} -->",
         "",
         "| Task | Lain | Terminus-2 |",
         "| --- | --- | --- |",
@@ -302,6 +328,12 @@ def main(argv=None):
                     failures.append(which)
         finally:
             proxy.shutdown()
+        if ModelProxy.served_mismatch:
+            print(
+                f"WARNING: upstream served {ModelProxy.served_mismatch} replies from "
+                f"{', '.join(sorted(ModelProxy.served_seen))} instead of {ModelProxy.model}; scores are suspect",
+                flush=True,
+            )
 
     lain = read_trials(args.jobs_dir, f"{args.job_name}-lain")
     terminus = read_trials(args.jobs_dir, f"{args.job_name}-terminus-2")
